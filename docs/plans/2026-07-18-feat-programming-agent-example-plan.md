@@ -277,7 +277,7 @@ Do not implement in the unborn `main` checkout or in the existing starter worktr
 
 ## Outcomes & Retrospective
 
-Implementation is complete through the opt-in acceptance scaffolds. The deterministic suite passes with 36 tests and four explicitly skipped live gates; strict TypeScript checking passes; the real Docker lifecycle passes and leaves no container; the host-directory mount blocks symlink escape. Real Pi publication remains unverified because no configured model account can currently complete a prompt, and live GitHub publication remains unverified because Warren has no reusable GitHub App configuration and no disposable issue URL was supplied. Record the final local implementation commit after the final verification gate.
+Implementation commit `6914a0e` completes the CLI, sandbox/Pi lifecycle, GitHub App adapter, guarded pipeline, host-only publication, tests, and operator documentation. Fresh final evidence: 36 deterministic tests passed with four explicitly skipped live gates; strict TypeScript checking passed; the real Docker lifecycle passed and left no container or temp workspace; secret/diff checks passed; and the host-directory mount blocked symlink escape. Code review found no remaining blocking issue after fixes for credential cleanup, signal cleanup, canonical allowlist redirects, publication TOCTOU, and temp-directory permissions. Real Pi publication remains unverified because no configured model account can currently complete a prompt, and live GitHub publication remains unverified because Warren has no reusable GitHub App configuration and no disposable issue URL was supplied.
 
 ## Revision History
 
