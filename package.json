@@ -1,0 +1,22 @@
+{
+  "name": "agentos-starter",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "server": "tsx server.ts",
+    "client": "tsx client.ts",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "node --import tsx --test test/e2e.test.ts"
+  },
+  "dependencies": {
+    "@agentos-software/pi": "0.2.7",
+    "@rivet-dev/agentos": "0.2.7"
+  },
+  "devDependencies": {
+    "@standard-schema/spec": "1.1.0",
+    "@types/node": "^24.0.0",
+    "tsx": "4.23.1",
+    "typescript": "^5.9.0"
+  }
+}
