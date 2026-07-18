@@ -12,7 +12,7 @@ Living document. Update Progress, Surprises & Discoveries, Decision Log, Outcome
 
 ## Purpose / Big Picture
 
-Extend the committed agentOS Pi starter into a runnable programming-agent example. An operator supplies a GitHub issue URL. The program reads the issue through a GitHub App, checks out the target repository in an isolated full-toolchain sandbox, asks Pi to implement the issue, runs an independent verification command, and—only with an explicit publish flag—pushes a new branch and opens a pull request.
+Extend the committed agentOS Pi starter into a runnable programming-agent example with both a CLI and a local operator console bootstrapped from Builder.io Agent Native. An operator supplies a GitHub issue URL. The program reads the issue through a GitHub App, checks out the target repository in an isolated full-toolchain sandbox, asks Pi to implement the issue, runs an independent verification command, and—only with explicit publication confirmation—pushes a new branch and opens a pull request.
 
 The finished example demonstrates the programming-agent claims directly: a native writable filesystem, git, shell commands, dependency installation, project tests, and GitHub pull-request delivery. GitHub credentials remain in host-controlled code. The agent sees the repository and sandbox tools but never receives an installation token.
 
@@ -26,6 +26,7 @@ The finished example demonstrates the programming-agent claims directly: a nativ
 - [x] (2026-07-18 17:45Z) U3: guarded issue-to-change pipeline, independent verifier, publication policy, signal handling, and atomic redacted receipts.
 - [x] (2026-07-18 17:45Z) U4: host-only commit/push, ephemeral askpass credentials, exact-diff recheck, and idempotent pull-request creation.
 - [ ] U5 proof: deterministic suite, typecheck, and real Docker lifecycle pass; real Pi edit/test is blocked by model-account state, and live GitHub proof awaits an explicitly configured disposable issue and App installation.
+- [ ] U6: bootstrap a local Agent Native operator console, connect it to the existing host pipeline, add UI/action tests, and prove both root and nested-app builds.
 
 ## Requirements
 
@@ -39,6 +40,7 @@ The finished example demonstrates the programming-agent claims directly: a nativ
 - R8. Emit a redacted machine-readable run receipt containing the issue, base SHA, branch, changed files, verification command/status, commit SHA, PR URL when published, and failure phase when unsuccessful.
 - R9. Clean up the agent session, VM, sandbox, temporary credential helper, and transient workspace on success, failure, signal, and timeout.
 - R10. Provide deterministic unit/integration tests, one real local Pi edit/test proof, and one opt-in live GitHub App proof against a disposable repository owned by `dallascrilley` or `dallascrilleymartech`.
+- R11. Provide a local Agent Native operator console that accepts the canonical issue URL and verification command, defaults to dry-run, requires explicit confirmation before publication, displays phase progress and the redacted run receipt, and never exposes GitHub App credentials or duplicates publication logic in the browser.
 
 ## Context and Orientation
 
@@ -88,6 +90,12 @@ Without `--publish`, the program completes the edit and verification pipeline, w
 
 Prompt instructions are guidance, not security controls. Host code rejects changes to `.git/**` and `.github/workflows/**` by default, rejects more than 100 changed files or 1 MiB of patch text, rejects an empty diff, and confirms the checked-out base SHA and generated branch immediately before commit/push. CLI flags may tighten these limits but cannot disable protected paths in this example.
 
+### Bootstrap the operator console as a nested Agent Native app
+
+Generate `ui/` from Builder.io Agent Native's `chat` template, then adapt its Actions and reusable interface components for issue intake, publication confirmation, run progress, changed-file summaries, verification results, failures, and the final PR link. The console is a local single-operator surface, not a second agent runtime or GitHub client. Server-only Agent Native Actions call the existing `runProgrammingAgent` pipeline through a thin adapter; browser code receives only validated request fields and redacted run state.
+
+Agent Native currently requires Node 22 or newer and pnpm 10 or newer, while the existing programming-agent root is intentionally Bun-based. Keep `ui/package.json` and `ui/pnpm-lock.yaml` nested and independent, pin the generated `@agent-native/core` version, and do not replace or rewrite the root `bun.lock`. The official bootstrap command is `npx @agent-native/core@latest create ui --template chat`; run generation in a temporary directory first so generated files can be reviewed before they are admitted to this repository.
+
 ## Interfaces and Dependencies
 
 Add direct dependencies through Bun and commit the resulting `bun.lock`:
@@ -96,6 +104,8 @@ Add direct dependencies through Bun and commit the resulting `bun.lock`:
 - `sandbox-agent` 0.4.x plus Docker peers for the isolated full-toolchain runtime; AgentOS Core's native host-directory mount projects the exact same per-run temp directory into Pi.
 - `@octokit/app` and `@octokit/rest` for GitHub App JWT/installation authentication and typed REST calls.
 - `zod` for environment, CLI input, GitHub payload, policy, and receipt schemas.
+
+The nested `ui/` app uses its own pnpm-managed dependencies. Bootstrap with the official Agent Native generator, then commit exact versions and its lockfile. The researched package version is `@agent-native/core` 0.109.4; recheck the generated manifest at execution time and pin the version actually verified. Reuse Agent Native Actions, agent panels/conversation components where useful, and its dialog, sheet, tooltip, popover, and dropdown primitives rather than introducing another component library.
 
 Required host environment:
 
@@ -147,6 +157,20 @@ interface RunReceipt {
 ```
 
 `GitHubClient`, `SandboxClient`, and `ProgrammingAgent` must be injected behind narrow interfaces so unit and integration tests never need live GitHub, Docker, or an LLM.
+
+The UI adapter adds a serializable run view without widening `RunReceipt` to include credentials:
+
+```ts
+interface OperatorRunView {
+  runId: string;
+  phase: RunReceipt["phase"];
+  status: "queued" | "running" | "succeeded" | "failed";
+  receipt?: RunReceipt;
+  message?: string;
+}
+```
+
+Agent Native Actions validate start/status requests on the server. They may store local job metadata in the template's SQLite/Drizzle layer, but the receipt remains the authoritative terminal record and private keys, JWTs, installation tokens, raw environment values, and credential-bearing command output are never Action results.
 
 ## Plan of Work
 
@@ -216,6 +240,22 @@ Document App registration permissions, selected-repository installation, environ
 
 **Verification:** `bun test`, `bun run typecheck`, the real local Pi proof, and one live publish proof. Then inspect the created PR through GitHub, confirm no secret appears in logs/receipt/diff, and record the PR URL and exact tested commit in Outcomes & Retrospective.
 
+### U6. Agent Native operator console and component bootstrap
+
+**Requirements:** R1, R5, R7, R8, R9, R11.
+
+**Files:** Create the generated and adapted `ui/` application, including `ui/package.json`, `ui/pnpm-lock.yaml`, server Actions, operator-console components, and their tests. Modify `src/pipeline/run.ts` only if a typed progress callback is needed, and modify `README.md` plus this plan. Keep the root `package.json` and `bun.lock` unchanged unless a shared host entrypoint genuinely requires a root script.
+
+First generate the official `chat` template in a disposable directory and inventory its scripts, runtime boundary, storage defaults, and generated dependencies. Recreate or move only the reviewed template into `ui/`, pin `@agent-native/core`, and retain the nested pnpm toolchain. Do not copy template secrets or configure a model provider merely to render the operator console.
+
+Extract a host composition function from the CLI only where necessary so both CLI and Agent Native server Actions invoke the same validation, GitHub App intake, sandbox, verification, policy, receipt, and publication path. Add Actions to start one run and read its status/receipt. Reject duplicate submission while a run is active, create a fresh run ID for a retry, and require a separate explicit confirmation interaction before setting `publish: true`.
+
+Build the console from Agent Native components with these states: issue URL and verification-command form; bounded timeout control; dry-run/publish choice; publication confirmation dialog; phase stepper for intake, workspace, agent, verify, policy, publish, and complete; changed-file summary; verification command/exit result; redacted error and recovery guidance; and final PR link. A dry run must never imply that a branch or PR was created. The layout must remain usable at desktop and phone widths.
+
+Add Arrange-Act-Assert tests for Action input validation, active-run deduplication, dry-run default, publication confirmation, phase transitions, failed verification, receipt rendering, and absence of secret-bearing fields in serialized responses. Use injected pipeline fakes for deterministic tests; no UI test may require GitHub, Docker, or a model. At execution time, use the in-app browser for one desktop and one phone-width smoke test, submit a fake/local dry run, observe the phase and receipt transition, and confirm that publication cannot occur without the separate confirmation.
+
+**Verification:** From the repository root, run `bun test` and `bun run typecheck`. From `ui/`, run `corepack enable`, `pnpm install --frozen-lockfile`, the template's focused test command, `pnpm typecheck`, and `pnpm build`. Start `pnpm dev`, complete the browser smoke at desktop and phone widths, then stop the server and confirm no UI dev server or programming-agent run remains active.
+
 ## Validation and Acceptance
 
 The implementation is accepted only when all of the following are observed on the final implementation commit:
@@ -229,12 +269,18 @@ The implementation is accepted only when all of the following are observed on th
 7. A deliberately protected `.github/workflows/` edit is blocked even if Pi says the work is complete.
 8. Searching captured logs, receipts, git config, process arguments, and diffs finds no private-key material, JWT, installation token, or credential-bearing URL.
 9. After success and injected failures, no agent session, AgentOS VM, Docker sandbox, temporary askpass helper, or test server remains running.
+10. The Agent Native console builds and starts from a fresh frozen-lockfile install without changing the root Bun dependency graph.
+11. The console accepts a valid issue URL and verification command, defaults to dry-run, blocks duplicate active submissions, and requires a separate confirmation before requesting publication.
+12. Desktop and phone-width browser smoke tests show truthful phase, changed-file, verification, failure, receipt, and PR-link states without rendering or serializing any credential-bearing field.
+13. A deterministic fake pipeline proves the UI and CLI reach the same host-owned policy/publication implementation; the browser contains no alternate GitHub API or git-push path.
 
 ## Idempotence and Recovery
 
 Dry runs are repeatable because they never publish. Published runs always use a unique branch derived from issue number plus run ID and never overwrite an existing ref. Each phase updates the receipt atomically. A rerun after a clone, agent, verification, or policy failure starts a fresh workspace. A rerun after push but before PR creation uses the preserved branch/commit receipt and reconciles an existing matching PR before attempting creation.
 
 Cleanup is best effort but must not erase evidence needed to recover a pushed branch. Local workspaces and credential helpers are disposable; the remote branch is not deleted automatically. If the process loses its terminal after dispatching a command, implementation must reconcile that command's process/result before retrying rather than launching a duplicate build, push, or PR request.
+
+The V1 console prevents a second start while its local run registry reports an active run. A browser refresh reads the latest persisted run view and authoritative receipt rather than starting again. After a host restart, an incomplete run is reported as interrupted and may be retried only as a fresh run ID; durable cross-restart job resumption remains deferred. A terminal published receipt always reconciles its recorded branch and PR before any retry can publish.
 
 Rollback for implementation changes is normal branch reversion. Rollback for a live proof means close the disposable PR and delete only its exact generated branch after verifying the PR number, repository, and head SHA; do not use wildcard branch cleanup.
 
@@ -252,7 +298,8 @@ Do not implement in the unborn `main` checkout or in the existing starter worktr
 
 - GitHub webhook ingestion, signature verification, label triggers, queues, scheduled runs, and durable retry across host restarts.
 - Issue comments, check runs, commit statuses, inline PR reviews, automatic merge, branch-protection bypass, deployment, and post-merge cleanup.
-- Multiple concurrent repositories or runs in one process, organization tenancy, user OAuth, billing, quotas, and a web UI.
+- Multiple concurrent repositories or runs in one process, organization tenancy, user OAuth, billing, and quotas.
+- Remote hosting, multi-user authentication, tenancy, collaboration, and durable cross-restart job resumption for the Agent Native console; V1 is a local single-operator UI.
 - Automatic verification-command discovery and arbitrary workflow-file edits.
 - Replacing Warren's control plane or implementing Warren's planned GitHub App roadmap.
 
@@ -265,6 +312,8 @@ Do not implement in the unborn `main` checkout or in the existing starter worktr
 - Observation: `sandbox-agent` 0.4.2 requires the optional `dockerode` and `get-port` peers, and its Docker provider does not auto-pull `rivetdev/sandbox-agent:0.5.0-rc.2-full`. Evidence: installed provider manifest/source and the real Docker smoke.
 - Observation: the AgentOS 0.2.7 native sandbox filesystem plugin returns `EIO` while resolving ordinary mounted paths against the current sandbox-agent image. A per-run host temp directory bind-mounted into both Docker and AgentOS avoids that incompatible bridge. Evidence: direct mount probes failed on `realpath`, while the host-directory bridge passed Pi session setup and rejected a container-created `/etc/passwd` symlink with `path escapes host directory`.
 - Observation: real Pi reached each configured provider, but OpenAI rejected the host key, both Anthropic entries reported insufficient credit, and OpenRouter rejected available endpoints under its privacy guardrail. No provider policy was weakened. Evidence: opt-in local Pi test attempts on 2026-07-18.
+- Observation: Builder.io Agent Native generates standalone applications with their own `package.json`, Drizzle schema, Actions, and UI, and its documented workflow uses Node 22+, pnpm 10+, `pnpm dev`, `pnpm typecheck`, and `pnpm build`. Evidence: official `BuilderIO/agent-native` README and development documentation inspected 2026-07-18.
+- Observation: `@agent-native/core` exposes a shared Action model plus reusable operator-facing components, including agent/conversation blocks and dialog, sheet, popover, tooltip, and dropdown primitives. Evidence: official package manifest and exports in `BuilderIO/agent-native` inspected 2026-07-18.
 
 ## Decision Log
 
@@ -274,6 +323,8 @@ Do not implement in the unborn `main` checkout or in the existing starter worktr
 - Decision: require `--verify` and default to dry-run. Rationale: the authoritative test command cannot be inferred safely for every repository, and external publication should be unmistakably intentional. Date/Author: 2026-07-18 / Codex.
 - Decision: use the existing Warren installation/configuration if available, but not Warren's shared-token implementation. Rationale: the user authorized that App surface; the codebase itself does not yet contain a reusable GitHub App client. Date/Author: 2026-07-18 / Codex.
 - Decision: bridge the repository with one lifecycle-owned host temp root mounted into Docker and AgentOS, instead of the incompatible sandbox filesystem plugin. Rationale: both runtimes operate on the same isolated bytes, the host mount blocks symlink escape, and cleanup has one exact target. Date/Author: 2026-07-18 / Codex.
+- Decision: bootstrap `ui/` from Agent Native's `chat` template and use server Actions as a thin adapter to the existing host pipeline. Rationale: it supplies agent-oriented UI primitives quickly without creating a second GitHub, verification, policy, or publication implementation. Date/Author: 2026-07-18 / Codex.
+- Decision: keep Agent Native's pnpm application nested under the Bun root. Rationale: the upstream template requires pnpm while the existing CLI is already verified with Bun; separate lockfiles preserve both toolchain contracts and make UI removal or upgrades bounded. Date/Author: 2026-07-18 / Codex.
 
 ## Outcomes & Retrospective
 
@@ -283,3 +334,4 @@ Implementation commit `6914a0e` completes the CLI, sandbox/Pi lifecycle, GitHub 
 
 - 2026-07-18: Initial evidence-backed implementation plan created from the committed AgentOS starter, current package contracts, official AgentOS/GitHub security guidance, and Warren's shipped GitHub patterns.
 - 2026-07-18: Updated implementation status, recorded the sandbox-filesystem incompatibility and host-directory bridge, and documented the external proof blockers.
+- 2026-07-18: Added R11 and U6 for a local Builder.io Agent Native operator console, including component scope, shared-pipeline boundary, nested pnpm strategy, security requirements, browser proof, and acceptance criteria.
