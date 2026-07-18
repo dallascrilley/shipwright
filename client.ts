@@ -1,61 +1,10 @@
 import { createClient } from "@rivet-dev/agentos/client";
 import type { registry } from "./server.js";
+import { resolveProvider } from "./src/config/provider.js";
 
 const endpoint = process.env.AGENTOS_ENDPOINT ?? "http://localhost:6420";
 
-interface Provider {
-  env: Record<string, string>;
-  name: string;
-  model: string;
-}
-
-function configuredProvider(
-  key: string | undefined,
-  envName: string,
-  name: string,
-  model: string,
-): Provider | undefined {
-  return key ? { env: { [envName]: key }, name, model } : undefined;
-}
-
-const providers: Record<string, Provider | undefined> = {
-  anthropic: configuredProvider(
-    process.env.ANTHROPIC_API_KEY,
-    "ANTHROPIC_API_KEY",
-    "anthropic",
-    "claude-opus-4-6",
-  ),
-  openrouter: configuredProvider(
-    process.env.OPENROUTER_API_KEY,
-    "OPENROUTER_API_KEY",
-    "openrouter",
-    "openai/gpt-5.1-codex",
-  ),
-  openai: configuredProvider(
-    process.env.OPENAI_API_KEY,
-    "OPENAI_API_KEY",
-    "openai",
-    "gpt-4.1-mini",
-  ),
-  google: configuredProvider(
-    process.env.GEMINI_API_KEY,
-    "GEMINI_API_KEY",
-    "google",
-    "gemini-2.5-flash",
-  ),
-};
-const requestedProvider = process.env.AGENTOS_PROVIDER;
-const provider = requestedProvider
-  ? providers[requestedProvider]
-  : providers.anthropic ?? providers.openrouter ?? providers.openai ?? providers.google;
-
-if (!provider) {
-  throw new Error(
-    requestedProvider
-      ? `AGENTOS_PROVIDER=${requestedProvider} is not configured with a matching API key`
-      : "ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY is required to create the Pi session",
-  );
-}
+const provider = resolveProvider();
 
 const client = createClient<typeof registry>({ endpoint });
 const vm = client.vm.getOrCreate(process.env.AGENTOS_VM_NAME ?? "getting-started-agent");

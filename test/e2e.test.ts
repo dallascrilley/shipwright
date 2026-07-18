@@ -56,14 +56,17 @@ async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<numb
   });
 }
 
-test("server and client return a real Pi response", { timeout: 300_000 }, async () => {
-  assert.ok(
-    process.env.ANTHROPIC_API_KEY ||
-      process.env.OPENROUTER_API_KEY ||
-      process.env.OPENAI_API_KEY ||
-      process.env.GEMINI_API_KEY,
-    "an Anthropic, OpenRouter, OpenAI, or Gemini API key is required for the E2E test",
-  );
+const hasModelKey = Boolean(
+  process.env.ANTHROPIC_API_KEY ||
+    process.env.OPENROUTER_API_KEY ||
+    process.env.OPENAI_API_KEY ||
+    process.env.GEMINI_API_KEY,
+);
+
+test("server and client return a real Pi response", {
+  timeout: 300_000,
+  skip: process.env.AGENTOS_E2E !== "1" || !hasModelKey,
+}, async () => {
 
   const server = spawn(process.execPath, ["--import", "tsx", "server.ts"], {
     cwd: projectRoot,

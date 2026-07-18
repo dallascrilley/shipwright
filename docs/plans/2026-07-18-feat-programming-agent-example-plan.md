@@ -21,11 +21,11 @@ The finished example demonstrates the programming-agent claims directly: a nativ
 - [x] (2026-07-18 18:30Z) Inspected the committed agentOS starter at `b5bd120` and confirmed `bun run typecheck` passes.
 - [x] (2026-07-18 18:30Z) Inspected the live AgentOS 0.2.7 package types, Pi package, sandbox integration, and current Warren GitHub patterns.
 - [x] (2026-07-18 18:30Z) Chose the host-controlled GitHub App and mounted-sandbox architecture.
-- [ ] U1: Prove the sandbox lifecycle, mounted workspace, and real Pi edit/test loop.
-- [ ] U2: Implement GitHub App issue intake and repository authorization.
-- [ ] U3: Implement the guarded issue-to-change pipeline and run receipt.
-- [ ] U4: Implement host-only branch push and pull-request creation.
-- [ ] U5: Complete mocked, local end-to-end, and opt-in live GitHub verification; update documentation.
+- [x] (2026-07-18 17:45Z) U1 implementation: Docker lifecycle, shared AgentOS workspace, bounded Pi session, command toolkit, cleanup, and opt-in real Pi fixture.
+- [x] (2026-07-18 17:45Z) U2: GitHub App issue intake, exact allowlist authorization, repository-scoped installation token, and canonical-repository validation.
+- [x] (2026-07-18 17:45Z) U3: guarded issue-to-change pipeline, independent verifier, publication policy, signal handling, and atomic redacted receipts.
+- [x] (2026-07-18 17:45Z) U4: host-only commit/push, ephemeral askpass credentials, exact-diff recheck, and idempotent pull-request creation.
+- [ ] U5 proof: deterministic suite, typecheck, and real Docker lifecycle pass; real Pi edit/test is blocked by model-account state, and live GitHub proof awaits an explicitly configured disposable issue and App installation.
 
 ## Requirements
 
@@ -93,7 +93,7 @@ Prompt instructions are guidance, not security controls. Host code rejects chang
 Add direct dependencies through Bun and commit the resulting `bun.lock`:
 
 - `@rivet-dev/agentos-core` 0.2.7 for per-run VM lifecycle and host-directory mounts.
-- `@rivet-dev/agentos-sandbox` 0.2.7 and `sandbox-agent` 0.4.x for the mounted Docker sandbox and process toolkit.
+- `sandbox-agent` 0.4.x plus Docker peers for the isolated full-toolchain runtime; AgentOS Core's native host-directory mount projects the exact same per-run temp directory into Pi.
 - `@octokit/app` and `@octokit/rest` for GitHub App JWT/installation authentication and typed REST calls.
 - `zod` for environment, CLI input, GitHub payload, policy, and receipt schemas.
 
@@ -262,6 +262,9 @@ Do not implement in the unborn `main` checkout or in the existing starter worktr
 - Observation: current AgentOS 0.2.7 package names differ from several public documentation examples; the installed starter uses `@rivet-dev/agentos` and `@agentos-software/pi`. Evidence: committed `package.json` and installed package exports.
 - Observation: the default AgentOS common bundle supplies POSIX text/file tools but not git or a generic project toolchain. Evidence: `@agentos-software/common` 0.2.7 dependency manifest.
 - Observation: Warren's current GitHub path is token-based and its installation-scoped App auth remains planned. Evidence: `README.md`, `SPEC.md`, `src/pr-work/github.ts`, and `src/supervisor/git-credentials.ts` in `warren-private`.
+- Observation: `sandbox-agent` 0.4.2 requires the optional `dockerode` and `get-port` peers, and its Docker provider does not auto-pull `rivetdev/sandbox-agent:0.5.0-rc.2-full`. Evidence: installed provider manifest/source and the real Docker smoke.
+- Observation: the AgentOS 0.2.7 native sandbox filesystem plugin returns `EIO` while resolving ordinary mounted paths against the current sandbox-agent image. A per-run host temp directory bind-mounted into both Docker and AgentOS avoids that incompatible bridge. Evidence: direct mount probes failed on `realpath`, while the host-directory bridge passed Pi session setup and rejected a container-created `/etc/passwd` symlink with `path escapes host directory`.
+- Observation: real Pi reached each configured provider, but OpenAI rejected the host key, both Anthropic entries reported insufficient credit, and OpenRouter rejected available endpoints under its privacy guardrail. No provider policy was weakened. Evidence: opt-in local Pi test attempts on 2026-07-18.
 
 ## Decision Log
 
@@ -270,11 +273,13 @@ Do not implement in the unborn `main` checkout or in the existing starter worktr
 - Decision: keep GitHub App tokens host-side and publish after verification. Rationale: issue/repository text and model output are untrusted; a write token in the agent session would make prompt injection a remote-write path. Date/Author: 2026-07-18 / Codex.
 - Decision: require `--verify` and default to dry-run. Rationale: the authoritative test command cannot be inferred safely for every repository, and external publication should be unmistakably intentional. Date/Author: 2026-07-18 / Codex.
 - Decision: use the existing Warren installation/configuration if available, but not Warren's shared-token implementation. Rationale: the user authorized that App surface; the codebase itself does not yet contain a reusable GitHub App client. Date/Author: 2026-07-18 / Codex.
+- Decision: bridge the repository with one lifecycle-owned host temp root mounted into Docker and AgentOS, instead of the incompatible sandbox filesystem plugin. Rationale: both runtimes operate on the same isolated bytes, the host mount blocks symlink escape, and cleanup has one exact target. Date/Author: 2026-07-18 / Codex.
 
 ## Outcomes & Retrospective
 
-Planning complete. Implementation and runtime proof have not started. At completion, record the final commit, commands and exit statuses, dry-run receipt path, live PR URL/head SHA, security scan result, and any deviations from the plan.
+Implementation is complete through the opt-in acceptance scaffolds. The deterministic suite passes with 36 tests and four explicitly skipped live gates; strict TypeScript checking passes; the real Docker lifecycle passes and leaves no container; the host-directory mount blocks symlink escape. Real Pi publication remains unverified because no configured model account can currently complete a prompt, and live GitHub publication remains unverified because Warren has no reusable GitHub App configuration and no disposable issue URL was supplied. Record the final local implementation commit after the final verification gate.
 
 ## Revision History
 
 - 2026-07-18: Initial evidence-backed implementation plan created from the committed AgentOS starter, current package contracts, official AgentOS/GitHub security guidance, and Warren's shipped GitHub patterns.
+- 2026-07-18: Updated implementation status, recorded the sandbox-filesystem incompatibility and host-directory bridge, and documented the external proof blockers.
