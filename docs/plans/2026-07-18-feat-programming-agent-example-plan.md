@@ -26,7 +26,7 @@ The finished example demonstrates the programming-agent claims directly: a nativ
 - [x] (2026-07-18 17:45Z) U3: guarded issue-to-change pipeline, independent verifier, publication policy, signal handling, and atomic redacted receipts.
 - [x] (2026-07-18 17:45Z) U4: host-only commit/push, ephemeral askpass credentials, exact-diff recheck, and idempotent pull-request creation.
 - [ ] U5 proof: deterministic suite, typecheck, and real Docker lifecycle pass; real Pi edit/test is blocked by model-account state, and live GitHub proof awaits an explicitly configured disposable issue and App installation.
-- [ ] U6: bootstrap a local Agent Native operator console, connect it to the existing host pipeline, add UI/action tests, and prove both root and nested-app builds.
+- [x] (2026-07-18 23:05Z) U6 bootstrapped Agent Native 0.109.4, connected server Actions to the shared host pipeline, added deterministic action/registry/progress tests, passed nested typecheck/build, and completed desktop plus 390 px browser smoke with a dry-run receipt and separate publish confirmation.
 
 ## Requirements
 
@@ -280,7 +280,7 @@ Dry runs are repeatable because they never publish. Published runs always use a 
 
 Cleanup is best effort but must not erase evidence needed to recover a pushed branch. Local workspaces and credential helpers are disposable; the remote branch is not deleted automatically. If the process loses its terminal after dispatching a command, implementation must reconcile that command's process/result before retrying rather than launching a duplicate build, push, or PR request.
 
-The V1 console prevents a second start while its local run registry reports an active run. A browser refresh reads the latest persisted run view and authoritative receipt rather than starting again. After a host restart, an incomplete run is reported as interrupted and may be retried only as a fresh run ID; durable cross-restart job resumption remains deferred. A terminal published receipt always reconciles its recorded branch and PR before any retry can publish.
+The V1 console prevents a second start while its process-local run registry reports an active run. A browser refresh in the same server process reads the latest run rather than starting again. After a host restart, the UI registry is empty and a retry receives a fresh run ID; the root pipeline's disk receipt remains the durable evidence. Durable cross-restart job resumption remains deferred. A terminal published receipt always reconciles its recorded branch and PR before any retry can publish.
 
 Rollback for implementation changes is normal branch reversion. Rollback for a live proof means close the disposable PR and delete only its exact generated branch after verifying the PR number, repository, and head SHA; do not use wildcard branch cleanup.
 
@@ -314,6 +314,9 @@ Do not implement in the unborn `main` checkout or in the existing starter worktr
 - Observation: real Pi reached each configured provider, but OpenAI rejected the host key, both Anthropic entries reported insufficient credit, and OpenRouter rejected available endpoints under its privacy guardrail. No provider policy was weakened. Evidence: opt-in local Pi test attempts on 2026-07-18.
 - Observation: Builder.io Agent Native generates standalone applications with their own `package.json`, Drizzle schema, Actions, and UI, and its documented workflow uses Node 22+, pnpm 10+, `pnpm dev`, `pnpm typecheck`, and `pnpm build`. Evidence: official `BuilderIO/agent-native` README and development documentation inspected 2026-07-18.
 - Observation: `@agent-native/core` exposes a shared Action model plus reusable operator-facing components, including agent/conversation blocks and dialog, sheet, popover, tooltip, and dropdown primitives. Evidence: official package manifest and exports in `BuilderIO/agent-native` inspected 2026-07-18.
+- Observation: the official standalone generator pulled a large dependency graph and initially exhausted the nearly full data volume. The exact disposable generator cache was removed, pnpm's shared store was pruned, and the second generation completed with 7.0 GiB free before the reviewed scaffold was copied. Evidence: generator/install terminal receipts and filesystem capacity checks on 2026-07-18.
+- Observation: the generated pnpm policy requires an explicit decision for `tesseract.js`; this console does not use OCR, so its install script is denied while the required `node-pty`, `esbuild`, and `better-sqlite3` builds remain allowed. Evidence: `pnpm ignored-builds` and the frozen install receipt.
+- Observation: controlled Pi/OMP route planning failed closed because the local VibeProxy identity/auth catalog was unavailable. A bounded read-only compatibility dispatch through the audited Hub wrapper completed and independently identified the pipeline, redaction, GitHub publication, Action bridge, and SSR boundaries as the highest-risk integration points. Evidence: dispatch cycle `programming-agent-ui-u6-recon-compat-2`.
 
 ## Decision Log
 
@@ -325,13 +328,17 @@ Do not implement in the unborn `main` checkout or in the existing starter worktr
 - Decision: bridge the repository with one lifecycle-owned host temp root mounted into Docker and AgentOS, instead of the incompatible sandbox filesystem plugin. Rationale: both runtimes operate on the same isolated bytes, the host mount blocks symlink escape, and cleanup has one exact target. Date/Author: 2026-07-18 / Codex.
 - Decision: bootstrap `ui/` from Agent Native's `chat` template and use server Actions as a thin adapter to the existing host pipeline. Rationale: it supplies agent-oriented UI primitives quickly without creating a second GitHub, verification, policy, or publication implementation. Date/Author: 2026-07-18 / Codex.
 - Decision: keep Agent Native's pnpm application nested under the Bun root. Rationale: the upstream template requires pnpm while the existing CLI is already verified with Bun; separate lockfiles preserve both toolchain contracts and make UI removal or upgrades bounded. Date/Author: 2026-07-18 / Codex.
+- Decision: use a process-local single-run registry and an `AGENT_`-prefixed dry-run demo switch for V1. Rationale: it gives the local UI immediate progress and deterministic browser proof without adding a queue, credentials, or a second publication implementation; cross-restart recovery remains explicitly deferred. Date/Author: 2026-07-18 / Codex.
 
 ## Outcomes & Retrospective
 
 Implementation commit `6914a0e` completes the CLI, sandbox/Pi lifecycle, GitHub App adapter, guarded pipeline, host-only publication, tests, and operator documentation. Fresh final evidence: 36 deterministic tests passed with four explicitly skipped live gates; strict TypeScript checking passed; the real Docker lifecycle passed and left no container or temp workspace; secret/diff checks passed; and the host-directory mount blocked symlink escape. Code review found no remaining blocking issue after fixes for credential cleanup, signal cleanup, canonical allowlist redirects, publication TOCTOU, and temp-directory permissions. Real Pi publication remains unverified because no configured model account can currently complete a prompt, and live GitHub publication remains unverified because Warren has no reusable GitHub App configuration and no disposable issue URL was supplied.
+
+U6 adds a nested Agent Native 0.109.4 console without changing the root Bun dependency graph. The CLI and UI now share `createPipelineDependencies` and `runProgrammingAgent`; the server registry exposes cloned, redacted phase receipts through Actions, rejects overlapping runs, restores the latest in-process view after refresh, and keeps publication behind both schema validation and a separate confirmation sheet. Six nested tests, strict nested typechecking, production build, and interactive desktop/390 px dry-run smoke passed. The browser observed all dry-run phases, two changed files, a passing verification receipt, zero horizontal overflow at 390 px, and the publication dialog without executing its final publish action.
 
 ## Revision History
 
 - 2026-07-18: Initial evidence-backed implementation plan created from the committed AgentOS starter, current package contracts, official AgentOS/GitHub security guidance, and Warren's shipped GitHub patterns.
 - 2026-07-18: Updated implementation status, recorded the sandbox-filesystem incompatibility and host-directory bridge, and documented the external proof blockers.
 - 2026-07-18: Added R11 and U6 for a local Builder.io Agent Native operator console, including component scope, shared-pipeline boundary, nested pnpm strategy, security requirements, browser proof, and acceptance criteria.
+- 2026-07-18: Completed U6 with the generated Agent Native scaffold, shared pipeline adapter, guarded run Actions, operator UI, deterministic tests, nested lockfile, and desktop/phone browser proof; recorded the dispatch, disk-capacity, and pnpm policy findings.

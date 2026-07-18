@@ -44,6 +44,30 @@ test("dry run verifies and applies policy without publishing", async () => {
   expect(events.at(-1)).toBe("destroy");
 });
 
+test("emits cloned progress snapshots in pipeline order", async () => {
+  const { deps } = fixture();
+  const snapshots: Array<{ phase: string; changedFiles: string[] }> = [];
+  deps.onProgress = (receipt) => {
+    snapshots.push({ phase: receipt.phase, changedFiles: receipt.changedFiles });
+  };
+
+  const receipt = await runProgrammingAgent({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: false, timeoutMinutes: 2 }, deps);
+
+  expect(snapshots.map((snapshot) => snapshot.phase)).toEqual([
+    "intake",
+    "workspace",
+    "agent",
+    "verify",
+    "verify",
+    "policy",
+    "policy",
+    "complete",
+  ]);
+  expect(snapshots.at(-2)?.changedFiles).toEqual(["src/a.ts"]);
+  expect(snapshots[0]?.changedFiles).toEqual([]);
+  expect(snapshots[0]?.changedFiles).not.toBe(receipt.changedFiles);
+});
+
 test("failed independent verification blocks policy and publication", async () => {
   const { deps, events } = fixture({ verifyExit: 1 });
   await expect(runProgrammingAgent({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "false", publish: true, timeoutMinutes: 2 }, deps)).rejects.toThrow("verification failed");

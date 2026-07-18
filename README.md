@@ -37,6 +37,20 @@ Receipts are written atomically to `.artifacts/programming-agent/<run-id>/receip
 
 This is a single-run example, not a webhook service, durable queue, autonomous merger, or deployment system.
 
+## Run the operator console
+
+The nested `ui/` app is an Agent Native 0.109.4 operator console over the same host-owned pipeline. It preserves the CLI's dry-run default, keeps GitHub credentials server-side, shows live phase and receipt evidence, and uses a separate confirmation sheet before publication.
+
+```sh
+cd ui
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+Open the local URL printed by Agent Native. The operator console is at `/`; the Agent Native chat workspace is at `/chat`.
+
+For a credential-free visual smoke, start the server with `AGENT_PROGRAMMING_UI_DEMO=1 pnpm dev`. Demo mode accepts dry runs only and returns deterministic local evidence; it never creates a branch or pull request. Real runs use the same GitHub App, model, Docker, and repository allowlist configuration as the CLI.
+
 ## Original round-trip starter
 
 Start the server and client in separate terminals:
@@ -53,6 +67,7 @@ The client creates a VM, starts Pi, requires the response marker `AGENTOS_ROUND_
 ```sh
 bun test
 bun run typecheck
+cd ui && pnpm test && pnpm typecheck && pnpm build
 ```
 
 Deterministic tests do not require GitHub, Docker, or a model. `bun run test:e2e` runs the original real Pi round trip when a model key is present. Docker and live GitHub acceptance tests are opt-in and must target a disposable allowlisted repository owned by `dallascrilley` or `dallascrilleymartech`; they never merge a PR.

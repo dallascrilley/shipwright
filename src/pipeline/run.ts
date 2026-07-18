@@ -30,6 +30,7 @@ export interface PipelineDependencies {
   artifactRoot?: string;
   runId?: string;
   signal?: AbortSignal;
+  onProgress?: (receipt: RunReceipt) => void | Promise<void>;
 }
 
 export interface RunRequest {
@@ -49,8 +50,12 @@ export async function runProgrammingAgent(request: RunRequest, deps: PipelineDep
     changedFiles: [],
     verification: { command: request.verifyCommand, exitCode: null, passed: false },
   };
+  const emitProgress = async () => {
+    await deps.onProgress?.(structuredClone(receipt));
+  };
   let workspace: WorkspacePort | undefined;
   try {
+    await emitProgress();
     const issueRef = parseIssueUrl(request.issueUrl);
     const branch = `agent/issue-${issueRef.number}-${runId}`;
     receipt.branch = branch;
@@ -58,6 +63,7 @@ export async function runProgrammingAgent(request: RunRequest, deps: PipelineDep
     deps.signal?.throwIfAborted();
     receipt.baseSha = authorized.issue.baseSha;
     receipt.phase = "workspace";
+    await emitProgress();
     workspace = await deps.createWorkspace();
     await authorized.withInstallationToken((token) => workspace!.clone({
       owner: authorized.issue.owner,
@@ -71,6 +77,7 @@ export async function runProgrammingAgent(request: RunRequest, deps: PipelineDep
     await workspace.prepareForAgent();
 
     receipt.phase = "agent";
+    await emitProgress();
     await abortable(deps.runAgent(workspace, buildProgrammingPrompt({
       title: authorized.issue.title,
       body: authorized.issue.body,
@@ -79,21 +86,26 @@ export async function runProgrammingAgent(request: RunRequest, deps: PipelineDep
     }), request.timeoutMinutes * 60_000), deps.signal);
 
     receipt.phase = "verify";
+    await emitProgress();
     const verification = await abortable(
       workspace.verify(request.verifyCommand, request.timeoutMinutes * 60_000),
       deps.signal,
     );
     receipt.verification.exitCode = verification.exitCode ?? null;
     receipt.verification.passed = verification.exitCode === 0;
+    await emitProgress();
     if (!receipt.verification.passed) throw new PipelineError("verify", "verification_failed", "independent verification failed");
 
     receipt.phase = "policy";
+    await emitProgress();
     const changes = await workspace.inspectChanges();
     receipt.changedFiles = changes.changedFiles;
     assertPublishableChange(changes);
+    await emitProgress();
 
     if (request.publish) {
       receipt.phase = "publish";
+      await emitProgress();
       const finalChanges = await workspace.inspectChanges();
       if (
         finalChanges.patch !== changes.patch ||
@@ -115,15 +127,18 @@ export async function runProgrammingAgent(request: RunRequest, deps: PipelineDep
         body: pullRequestBody({ issueNumber: authorized.issue.number, runId, verifyCommand: request.verifyCommand, changedFiles: changes.changedFiles }),
       });
       receipt.pullRequestUrl = pr.url;
+      await emitProgress();
     }
 
     receipt.phase = "complete";
+    await emitProgress();
     await deps.writeReceipt(receiptPath, receipt);
     return receipt;
   } catch (error) {
     const pipelineError = error instanceof PipelineError ? error : new PipelineError(receipt.phase, `${receipt.phase}_failed`, error instanceof Error ? error.message : String(error), { cause: error });
     receipt.phase = pipelineError.phase;
     receipt.errorCode = pipelineError.code;
+    await emitProgress();
     await deps.writeReceipt(receiptPath, receipt);
     throw pipelineError;
   } finally {
