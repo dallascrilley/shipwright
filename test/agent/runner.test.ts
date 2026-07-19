@@ -49,6 +49,9 @@ test("runPiAgent configures Pi's Kimi K3 catalog", async () => {
             input: ["text", "image"],
             maxTokens: 32768,
             reasoning: true,
+            compat: {
+              supportsDeveloperRole: false,
+            },
           },
         ],
       },

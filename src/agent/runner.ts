@@ -28,6 +28,9 @@ function piModelsConfig(provider: ProviderConfig): string | undefined {
             input: ["text", "image"],
             maxTokens: 32_768,
             reasoning: true,
+            compat: {
+              supportsDeveloperRole: false,
+            },
           },
         ],
       },
