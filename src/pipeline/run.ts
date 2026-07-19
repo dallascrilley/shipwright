@@ -8,7 +8,7 @@ import type { PullRequestResult } from "../github/types.js";
 import { buildProgrammingPrompt } from "../agent/prompt.js";
 import { PipelineError } from "./errors.js";
 import { assertPublishableChange } from "./policy.js";
-import { type RunReceipt, writeReceipt } from "./receipt.js";
+import { type AgentExecution, type RunReceipt, writeReceipt } from "./receipt.js";
 
 export interface WorkspacePort {
   clone(input: { owner: string; repo: string; defaultBranch: string; baseSha: string; branch: string; token: string }): Promise<void>;
@@ -22,6 +22,7 @@ export interface WorkspacePort {
 }
 
 export interface PipelineDependencies {
+  execution: AgentExecution;
   authorize(ref: ReturnType<typeof parseIssueUrl>): Promise<AuthorizedIssue>;
   createWorkspace(): Promise<WorkspacePort>;
   runAgent(workspace: WorkspacePort, prompt: string, timeoutMs: number): Promise<string>;
@@ -47,6 +48,7 @@ export async function runProgrammingAgent(request: RunRequest, deps: PipelineDep
     runId,
     phase: "intake",
     issueUrl: request.issueUrl,
+    execution: deps.execution,
     changedFiles: [],
     verification: { command: request.verifyCommand, exitCode: null, passed: false },
   };
@@ -126,7 +128,13 @@ export async function runProgrammingAgent(request: RunRequest, deps: PipelineDep
         branch,
         baseBranch: authorized.issue.defaultBranch,
         commitSha: receipt.commitSha,
-        body: pullRequestBody({ issueNumber: authorized.issue.number, runId, verifyCommand: request.verifyCommand, changedFiles: changes.changedFiles }),
+        body: pullRequestBody({
+          issueNumber: authorized.issue.number,
+          runId,
+          verifyCommand: request.verifyCommand,
+          changedFiles: changes.changedFiles,
+          execution: deps.execution,
+        }),
       });
       receipt.pullRequestUrl = pr.url;
       await emitProgress();

@@ -26,6 +26,7 @@ function fixture(options: { verifyExit?: number; protectedFile?: boolean; publis
     async withInstallationToken(action) { return action("secret"); },
   };
   const deps: PipelineDependencies = {
+    execution: { runtime: "agentos", software: "pi", provider: "kimi", model: "kimi-for-coding" },
     async authorize() { events.push("authorize"); return authorized; },
     async createWorkspace() { events.push("workspace"); return workspace; },
     async runAgent() { events.push("agent"); return "done"; },
@@ -39,6 +40,12 @@ test("dry run verifies and applies policy without publishing", async () => {
   const { deps, events } = fixture();
   const receipt = await runProgrammingAgent({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: false, timeoutMinutes: 2 }, deps);
   expect(receipt.phase).toBe("complete");
+  expect(receipt.execution).toEqual({
+    runtime: "agentos",
+    software: "pi",
+    provider: "kimi",
+    model: "kimi-for-coding",
+  });
   expect(receipt.commitSha).toBeUndefined();
   expect(events).not.toContain("push");
   expect(events.at(-1)).toBe("destroy");
@@ -46,9 +53,9 @@ test("dry run verifies and applies policy without publishing", async () => {
 
 test("emits cloned progress snapshots in pipeline order", async () => {
   const { deps } = fixture();
-  const snapshots: Array<{ phase: string; changedFiles: string[] }> = [];
+  const snapshots: Array<{ phase: string; changedFiles: string[]; execution: unknown }> = [];
   deps.onProgress = (receipt) => {
-    snapshots.push({ phase: receipt.phase, changedFiles: receipt.changedFiles });
+    snapshots.push({ phase: receipt.phase, changedFiles: receipt.changedFiles, execution: receipt.execution });
   };
 
   const receipt = await runProgrammingAgent({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: false, timeoutMinutes: 2 }, deps);
@@ -66,6 +73,8 @@ test("emits cloned progress snapshots in pipeline order", async () => {
   expect(snapshots.at(-2)?.changedFiles).toEqual(["src/a.ts"]);
   expect(snapshots[0]?.changedFiles).toEqual([]);
   expect(snapshots[0]?.changedFiles).not.toBe(receipt.changedFiles);
+  expect(snapshots[0]?.execution).toEqual(receipt.execution);
+  expect(snapshots[0]?.execution).not.toBe(receipt.execution);
 });
 
 test("failed independent verification blocks policy and publication", async () => {

@@ -139,6 +139,12 @@ async function executeDemo(
     runId,
     phase: "intake",
     issueUrl: request.issueUrl,
+    execution: {
+      runtime: "demo",
+      software: "demo",
+      provider: "demo",
+      model: "demo",
+    },
     branch: `agent/demo-${runId}`,
     baseSha: "0123456789abcdef0123456789abcdef01234567",
     changedFiles: [],
