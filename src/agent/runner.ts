@@ -25,10 +25,10 @@ function piModelsConfig(provider: ProviderConfig): string | undefined {
   return JSON.stringify({
     providers: {
       kimi: {
-        api: "openai-completions",
+        api: "anthropic-messages",
         apiKey: "KIMI_API_KEY",
         authHeader: true,
-        baseUrl: "https://api.kimi.com/coding/v1",
+        baseUrl: "https://api.kimi.com/coding",
         models: [
           {
             contextWindow: 1_048_576,
