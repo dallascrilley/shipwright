@@ -1,5 +1,6 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import type { ProviderConfig } from "../config/provider.js";
 
 export type RunPhase =
   | "intake"
@@ -10,10 +11,27 @@ export type RunPhase =
   | "publish"
   | "complete";
 
+export interface AgentExecution {
+  readonly runtime: "agentos";
+  readonly software: "pi";
+  readonly provider: ProviderConfig["name"];
+  readonly model: string;
+}
+
+export interface DemoExecution {
+  readonly runtime: "demo";
+  readonly software: "demo";
+  readonly provider: "demo";
+  readonly model: "demo";
+}
+
+export type RunExecution = AgentExecution | DemoExecution;
+
 export interface RunReceipt {
   runId: string;
   phase: RunPhase;
   issueUrl: string;
+  execution: RunExecution;
   baseSha?: string;
   branch?: string;
   changedFiles: string[];
