@@ -1,0 +1,68 @@
+diff --git a/dist/agent-os.d.ts b/dist/agent-os.d.ts
+index 72a8866bb357b8cc4def57dbfb9ed4d05e533d49..e270f47d893322b2bb2329a9389f05ad8ad9be09 100644
+--- a/dist/agent-os.d.ts
++++ b/dist/agent-os.d.ts
+@@ -62,6 +62,8 @@ export interface AgentOsSharedSidecarOptions {
+ }
+ export interface AgentOsCreateSidecarOptions {
+     sidecarId?: string;
++    /** Maximum wait for one host-to-sidecar protocol frame. */
++    frameTimeoutMs?: number;
+ }
+ export type AgentOsSidecarConfig = {
+     kind: "shared";
+@@ -682,7 +684,7 @@ export declare class AgentOs {
+ export declare function getAgentOsRuntimeAdmin(vm: AgentOs): AgentOsRuntimeAdmin;
+ export declare function getAgentOsKernel(vm: AgentOs): Kernel;
+ export declare class AgentOsSidecar {
+-    constructor(sidecarId: string, placement: AgentOsSidecarPlacement, sharedPool?: string);
++    constructor(sidecarId: string, placement: AgentOsSidecarPlacement, sharedPool?: string, frameTimeoutMs?: number);
+     describe(): AgentOsSidecarDescription;
+     dispose(): Promise<void>;
+ }
+diff --git a/dist/agent-os.js b/dist/agent-os.js
+index cf2326e9257beb82eff47263355c359bddb645b3..a06c759ab170d747735df9306bc2cb73214d284f 100644
+--- a/dist/agent-os.js
++++ b/dist/agent-os.js
+@@ -3621,7 +3621,7 @@ function ensureSharedSidecarNativeProcess(sidecar) {
+                 cwd: REPO_ROOT,
+                 command: ensureNativeSidecarBinary(),
+                 args: [],
+-                frameTimeoutMs: NATIVE_SIDECAR_FRAME_TIMEOUT_MS,
++                frameTimeoutMs: state.frameTimeoutMs ?? NATIVE_SIDECAR_FRAME_TIMEOUT_MS,
+             });
+             // Track the child immediately — BEFORE the handshake await — so a
+             // failed `authenticateAndOpenSession()` can still reap it (otherwise
+@@ -3684,7 +3684,7 @@ async function disposeSharedSidecarNativeProcess(state) {
+     }
+ }
+ export class AgentOsSidecar {
+-    constructor(sidecarId, placement, sharedPool) {
++    constructor(sidecarId, placement, sharedPool, frameTimeoutMs) {
+         sidecarStates.set(this, {
+             description: {
+                 sidecarId,
+@@ -3694,6 +3694,7 @@ export class AgentOsSidecar {
+             },
+             activeLeases: new Set(),
+             sharedPool,
++            frameTimeoutMs,
+         });
+     }
+     describe() {
+@@ -3730,10 +3731,14 @@ export class AgentOsSidecar {
+ }
+ function createAgentOsSidecarInternal(options = {}) {
+     const sidecarId = options.sidecarId ?? `agentos-sidecar-${randomUUID()}`;
++    if (options.frameTimeoutMs !== undefined &&
++        (!Number.isSafeInteger(options.frameTimeoutMs) || options.frameTimeoutMs <= 0)) {
++        throw new Error("frameTimeoutMs must be a positive safe integer");
++    }
+     return new AgentOsSidecar(sidecarId, {
+         kind: "explicit",
+         sidecarId,
+-    });
++    }, undefined, options.frameTimeoutMs);
+ }
+ /**
+  * Test-only escape hatch: dispose every cached shared sidecar so vitest

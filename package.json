@@ -32,5 +32,8 @@
     "@types/node": "^24.0.0",
     "tsx": "4.23.1",
     "typescript": "^5.9.0"
+  },
+  "patchedDependencies": {
+    "@rivet-dev/agentos-core@0.2.7": "patches/@rivet-dev%2Fagentos-core@0.2.7.patch"
   }
 }

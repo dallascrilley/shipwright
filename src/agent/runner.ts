@@ -1,5 +1,5 @@
 import pi from "@agentos-software/pi";
-import { AgentOs } from "@rivet-dev/agentos-core";
+import { AgentOs, type AgentOsSidecar } from "@rivet-dev/agentos-core";
 import type { ProviderConfig } from "../config/provider.js";
 import { AGENT_WORKSPACE, type SandboxWorkspace } from "../sandbox/runtime.js";
 
@@ -11,6 +11,14 @@ export interface AgentVm {
   closeSession(sessionId: string): void;
   dispose(): Promise<void>;
 }
+
+export interface AgentOsRuntime {
+  createSidecar(options: { frameTimeoutMs: number }): Promise<AgentOsSidecar>;
+  create(options: Parameters<typeof AgentOs.create>[0]): Promise<AgentVm>;
+}
+
+const DEFAULT_PI_TIMEOUT_MS = 30 * 60_000;
+const SIDECAR_FRAME_TIMEOUT_BUFFER_MS = 60_000;
 
 function piModelsConfig(provider: ProviderConfig): string | undefined {
   if (provider.name !== "kimi") return undefined;
@@ -42,7 +50,7 @@ export async function runPiAgent(
   vm: AgentVm,
   provider: ProviderConfig,
   prompt: string,
-  timeoutMs = 30 * 60_000,
+  timeoutMs = DEFAULT_PI_TIMEOUT_MS,
 ): Promise<string> {
   let sessionId: string | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -81,11 +89,21 @@ export async function createAndRunPiAgent(
   provider: ProviderConfig,
   prompt: string,
   timeoutMs?: number,
+  runtime: AgentOsRuntime = AgentOs,
 ): Promise<string> {
-  const vm = await AgentOs.create({
-    software: [pi],
-    mounts: [workspace.createMount()],
-    toolKits: [workspace.createToolkit()],
+  const effectiveTimeoutMs = timeoutMs ?? DEFAULT_PI_TIMEOUT_MS;
+  const sidecar = await runtime.createSidecar({
+    frameTimeoutMs: effectiveTimeoutMs + SIDECAR_FRAME_TIMEOUT_BUFFER_MS,
   });
-  return runPiAgent(vm, provider, prompt, timeoutMs);
+  try {
+    const vm = await runtime.create({
+      software: [pi],
+      mounts: [workspace.createMount()],
+      toolKits: [workspace.createToolkit()],
+      sidecar: { kind: "explicit", handle: sidecar },
+    });
+    return await runPiAgent(vm, provider, prompt, effectiveTimeoutMs);
+  } finally {
+    await sidecar.dispose();
+  }
 }

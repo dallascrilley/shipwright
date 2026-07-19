@@ -31,7 +31,7 @@ Publish after independent verification and policy checks pass:
 bun run programming-agent -- https://github.com/OWNER/REPO/issues/123 --verify "bun test" --publish
 ```
 
-`--timeout-minutes` accepts 1 through 120 and defaults to 30. Each run uses a unique `agent/issue-<number>-<run-id>` branch. The host blocks empty changes, more than 100 files, patches over 1 MiB, `.git/**`, and `.github/workflows/**`. It never force-pushes.
+`--timeout-minutes` accepts 1 through 120 and defaults to 30. Each run uses a unique `agent/issue-<number>-<run-id>` branch. The Pi sidecar frame deadline follows the selected agent timeout with a one-minute cleanup buffer, so a tool-using turn is not cut off by AgentOS's default two-minute frame limit. The host blocks empty changes, more than 100 files, patches over 1 MiB, `.git/**`, and `.github/workflows/**`. It never force-pushes.
 
 Receipts are written atomically to `.artifacts/programming-agent/<run-id>/receipt.json`. A receipt records the issue, base SHA, generated branch, changed files, observed verification exit status, commit SHA, PR URL, and failure phase/code. If a push succeeds but PR creation fails, retain the receipt and generated branch for reconciliation; do not rerun blindly or delete the branch.
 

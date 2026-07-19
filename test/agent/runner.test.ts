@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { runPiAgent, type AgentVm } from "../../src/agent/runner.js";
+import { createAndRunPiAgent, runPiAgent, type AgentVm, type AgentOsRuntime } from "../../src/agent/runner.js";
 
 test("runPiAgent configures Pi, prompts once, and always cleans up", async () => {
   const events: string[] = [];
@@ -86,4 +86,43 @@ test("runPiAgent bounds the prompt and still tears down", async () => {
   };
   await expect(runPiAgent(vm, { env: {}, name: "openai", model: "gpt-test" }, "fix it", 5)).rejects.toThrow("timed out");
   expect(events).toEqual(["close-session", "dispose"]);
+});
+
+test("createAndRunPiAgent gives its explicit sidecar a deadline beyond the Pi deadline", async () => {
+  const events: string[] = [];
+  const vm: AgentVm = {
+    async mkdir() {},
+    async writeFile() {},
+    async createSession() { return { sessionId: "s1" }; },
+    async prompt() { return { text: "done" }; },
+    closeSession() { events.push("close-session"); },
+    async dispose() { events.push("dispose-vm"); },
+  };
+  const sidecar = {
+    async dispose() { events.push("dispose-sidecar"); },
+  } as never;
+  const runtime: AgentOsRuntime = {
+    async createSidecar(options) {
+      expect(options).toEqual({ frameTimeoutMs: 65_000 });
+      return sidecar;
+    },
+    async create(options) {
+      expect(options?.sidecar).toEqual({ kind: "explicit", handle: sidecar });
+      return vm;
+    },
+  };
+  const workspace = {
+    createMount() { return {}; },
+    createToolkit() { return {}; },
+  };
+
+  await expect(createAndRunPiAgent(
+    workspace as never,
+    { env: {}, name: "openai", model: "gpt-test" },
+    "fix it",
+    5_000,
+    runtime,
+  )).resolves.toBe("done");
+
+  expect(events).toEqual(["close-session", "dispose-vm", "dispose-sidecar"]);
 });
