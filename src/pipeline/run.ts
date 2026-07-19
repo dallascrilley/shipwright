@@ -95,6 +95,7 @@ export async function runProgrammingAgent(request: RunRequest, deps: PipelineDep
     receipt.verification.passed = verification.exitCode === 0;
     await emitProgress();
     if (!receipt.verification.passed) throw new PipelineError("verify", "verification_failed", "independent verification failed");
+    deps.signal?.throwIfAborted();
 
     receipt.phase = "policy";
     await emitProgress();

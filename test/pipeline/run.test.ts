@@ -110,3 +110,22 @@ test("an abort during agent work writes a receipt and destroys the workspace", a
   expect(events).toContain("receipt:agent");
   expect(events.at(-1)).toBe("destroy");
 });
+
+test("an abort after verification blocks publication", async () => {
+  const { deps, events } = fixture();
+  const controller = new AbortController();
+  deps.signal = controller.signal;
+  deps.onProgress = (receipt) => {
+    if (receipt.phase === "verify" && receipt.verification.passed) {
+      controller.abort(new Error("stop"));
+    }
+  };
+
+  await expect(runProgrammingAgent({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 }, deps)).rejects.toThrow("stop");
+  expect(events).not.toContain("inspect");
+  expect(events).not.toContain("commit");
+  expect(events).not.toContain("push");
+  expect(events).not.toContain("pr");
+  expect(events).toContain("receipt:verify");
+  expect(events.at(-1)).toBe("destroy");
+});
