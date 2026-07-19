@@ -12,6 +12,29 @@ export interface AgentVm {
   dispose(): Promise<void>;
 }
 
+function piModelsConfig(provider: ProviderConfig): string | undefined {
+  if (provider.name !== "kimi") return undefined;
+  return JSON.stringify({
+    providers: {
+      kimi: {
+        api: "openai-completions",
+        apiKey: "KIMI_API_KEY",
+        authHeader: true,
+        baseUrl: "https://api.kimi.com/coding/v1",
+        models: [
+          {
+            contextWindow: 1_048_576,
+            id: provider.model,
+            input: ["text", "image"],
+            maxTokens: 32_768,
+            reasoning: true,
+          },
+        ],
+      },
+    },
+  });
+}
+
 export async function runPiAgent(
   vm: AgentVm,
   provider: ProviderConfig,
@@ -26,6 +49,8 @@ export async function runPiAgent(
       "/home/agentos/.pi/agent/settings.json",
       JSON.stringify({ defaultProvider: provider.name, defaultModel: provider.model }),
     );
+    const modelsConfig = piModelsConfig(provider);
+    if (modelsConfig) await vm.writeFile("/home/agentos/.pi/agent/models.json", modelsConfig);
     ({ sessionId } = await vm.createSession("pi", {
       cwd: AGENT_WORKSPACE,
       env: {

@@ -15,7 +15,7 @@ cp .env.example .env
 
 The GitHub App needs repository metadata read, issues read, contents write, and pull requests write. It does not need Actions, workflows, administration, secrets, or organization permissions. Configure exact `owner/repo` entries in `GITHUB_REPOSITORY_ALLOWLIST`; wildcards are rejected.
 
-Set `GITHUB_APP_ID`, exactly one of `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`, and optionally `GITHUB_APP_INSTALLATION_ID`. Configure one model key (`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`) and use `AGENTOS_PROVIDER` when more than one is present. `AGENTOS_MODEL` overrides that provider's default model when account policy or availability requires it.
+Set `GITHUB_APP_ID`, exactly one of `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`, and optionally `GITHUB_APP_INSTALLATION_ID`. Configure one model key (`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `KIMI_API_KEY`) and use `AGENTOS_PROVIDER` when more than one is present. `AGENTOS_MODEL` overrides that provider's default model when account policy or availability requires it. Kimi K3 uses `AGENTOS_PROVIDER=kimi` and `AGENTOS_MODEL=k3`; the runtime provisions Pi with Kimi's OpenAI-compatible coding endpoint.
 
 ## Run the programming agent
 

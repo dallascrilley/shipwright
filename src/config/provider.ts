@@ -1,6 +1,6 @@
 export interface ProviderConfig {
   env: Record<string, string>;
-  name: "anthropic" | "openrouter" | "openai" | "google";
+  name: "anthropic" | "openrouter" | "openai" | "google" | "kimi";
   model: string;
 }
 
@@ -31,6 +31,7 @@ export function resolveProvider(env: Environment = process.env): ProviderConfig 
     ),
     openai: configuredProvider(env.OPENAI_API_KEY, "OPENAI_API_KEY", "openai", "gpt-4.1-mini"),
     google: configuredProvider(env.GEMINI_API_KEY, "GEMINI_API_KEY", "google", "gemini-2.5-flash"),
+    kimi: configuredProvider(env.KIMI_API_KEY, "KIMI_API_KEY", "kimi", "k3"),
   };
 
   const requested = env.AGENTOS_PROVIDER;
@@ -41,7 +42,7 @@ export function resolveProvider(env: Environment = process.env): ProviderConfig 
     throw new Error(
       requested
         ? `AGENTOS_PROVIDER=${requested} is not configured with a matching API key`
-        : "ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY is required",
+        : "ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or KIMI_API_KEY is required",
     );
   }
   const model = env.AGENTOS_MODEL?.trim();
