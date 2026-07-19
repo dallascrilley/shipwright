@@ -38,10 +38,10 @@ test("runPiAgent configures Pi's Kimi K3 catalog", async () => {
   expect(JSON.parse(writes.get("/home/agentos/.pi/agent/models.json")!)).toEqual({
     providers: {
       kimi: {
-        api: "openai-completions",
+        api: "anthropic-messages",
         apiKey: "KIMI_API_KEY",
         authHeader: true,
-        baseUrl: "https://api.kimi.com/coding/v1",
+        baseUrl: "https://api.kimi.com/coding",
         models: [
           {
             contextWindow: 1048576,
