@@ -31,7 +31,7 @@ export function resolveProvider(env: Environment = process.env): ProviderConfig 
     ),
     openai: configuredProvider(env.OPENAI_API_KEY, "OPENAI_API_KEY", "openai", "gpt-4.1-mini"),
     google: configuredProvider(env.GEMINI_API_KEY, "GEMINI_API_KEY", "google", "gemini-2.5-flash"),
-    kimi: configuredProvider(env.KIMI_API_KEY, "KIMI_API_KEY", "kimi", "k3"),
+    kimi: configuredProvider(env.KIMI_API_KEY, "KIMI_API_KEY", "kimi", "kimi-for-coding"),
   };
 
   const requested = env.AGENTOS_PROVIDER;

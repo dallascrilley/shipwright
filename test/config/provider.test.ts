@@ -12,10 +12,10 @@ describe("resolveProvider", () => {
     expect(resolveProvider({ OPENAI_API_KEY: "key", AGENTOS_MODEL: "gpt-custom" }).model).toBe("gpt-custom");
   });
 
-  test("selects Kimi K3 through the Kimi coding provider", () => {
+  test("selects the Kimi Coding model through the Kimi provider", () => {
     expect(
       resolveProvider({ AGENTOS_PROVIDER: "kimi", KIMI_API_KEY: "test-key" }),
-    ).toMatchObject({ name: "kimi", model: "k3", env: { KIMI_API_KEY: "test-key" } });
+    ).toMatchObject({ name: "kimi", model: "kimi-for-coding", env: { KIMI_API_KEY: "test-key" } });
   });
 
   test("uses the established provider priority", () => {
