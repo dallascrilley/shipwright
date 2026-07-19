@@ -18,6 +18,44 @@ test("runPiAgent configures Pi, prompts once, and always cleans up", async () =>
   expect(events).toEqual(["mkdir", "settings", "session", "prompt", "close-session", "dispose"]);
 });
 
+test("runPiAgent configures Pi's Kimi K3 catalog", async () => {
+  const writes = new Map<string, string>();
+  const vm: AgentVm = {
+    async mkdir() {},
+    async writeFile(path, content) { writes.set(path, String(content)); },
+    async createSession() { return { sessionId: "s1" }; },
+    async prompt() { return { text: "done" }; },
+    closeSession() {},
+    async dispose() {},
+  };
+
+  await runPiAgent(vm, { env: { KIMI_API_KEY: "test-key" }, name: "kimi", model: "k3" }, "fix it");
+
+  expect(JSON.parse(writes.get("/home/agentos/.pi/agent/settings.json")!)).toEqual({
+    defaultProvider: "kimi",
+    defaultModel: "k3",
+  });
+  expect(JSON.parse(writes.get("/home/agentos/.pi/agent/models.json")!)).toEqual({
+    providers: {
+      kimi: {
+        api: "openai-completions",
+        apiKey: "KIMI_API_KEY",
+        authHeader: true,
+        baseUrl: "https://api.kimi.com/coding/v1",
+        models: [
+          {
+            contextWindow: 1048576,
+            id: "k3",
+            input: ["text", "image"],
+            maxTokens: 32768,
+            reasoning: true,
+          },
+        ],
+      },
+    },
+  });
+});
+
 test("runPiAgent disposes the VM when session creation fails", async () => {
   const events: string[] = [];
   const vm: AgentVm = {
