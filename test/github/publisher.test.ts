@@ -2,8 +2,20 @@ import { expect, test } from "bun:test";
 import { openOrReusePullRequest, pullRequestBody } from "../../src/github/publisher.js";
 
 test("pullRequestBody records issue and observed verification", () => {
-  expect(pullRequestBody({ issueNumber: 9, runId: "abcd", verifyCommand: "bun test", changedFiles: ["src/a.ts"] }))
-    .toContain("Fixes #9");
+  const body = pullRequestBody({
+    issueNumber: 9,
+    runId: "abcd",
+    verifyCommand: "bun test",
+    changedFiles: ["src/a.ts"],
+    execution: { runtime: "agentos", software: "pi", provider: "kimi", model: "kimi-for-coding" },
+  });
+
+  expect(body).toContain("Fixes #9");
+  expect(body).toContain("## Agent execution");
+  expect(body).toContain("- Runtime: `agentos`");
+  expect(body).toContain("- Software: `pi`");
+  expect(body).toContain("- Provider: `kimi`");
+  expect(body).toContain("- Model: `kimi-for-coding`");
 });
 
 test("openOrReusePullRequest returns a matching existing PR", async () => {

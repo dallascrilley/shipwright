@@ -15,6 +15,12 @@ const completeReceipt: RunReceipt = {
   runId: "run-1",
   phase: "complete",
   issueUrl: request.issueUrl,
+  execution: {
+    runtime: "agentos",
+    software: "pi",
+    provider: "kimi",
+    model: "kimi-for-coding",
+  },
   changedFiles: ["src/example.ts"],
   verification: { command: request.verifyCommand, exitCode: 0, passed: true },
 };

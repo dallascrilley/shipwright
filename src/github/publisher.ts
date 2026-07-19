@@ -1,4 +1,5 @@
 import type { PullRequestResult } from "./types.js";
+import type { AgentExecution } from "../pipeline/receipt.js";
 
 export interface PullRequestApi {
   listPullRequests(input: { owner: string; repo: string; head: string; base: string }): Promise<Array<PullRequestResult & { headSha: string }>>;
@@ -10,6 +11,7 @@ export function pullRequestBody(input: {
   runId: string;
   verifyCommand: string;
   changedFiles: string[];
+  execution: AgentExecution;
 }): string {
   const files = input.changedFiles.map((file) => `- \`${file}\``).join("\n");
   return [
@@ -20,6 +22,13 @@ export function pullRequestBody(input: {
     `- Command: \`${input.verifyCommand}\``,
     "- Result: passed",
     `- Run: \`${input.runId}\``,
+    "",
+    "## Agent execution",
+    "",
+    `- Runtime: \`${input.execution.runtime}\``,
+    `- Software: \`${input.execution.software}\``,
+    `- Provider: \`${input.execution.provider}\``,
+    `- Model: \`${input.execution.model}\``,
     "",
     "## Changed files",
     "",
