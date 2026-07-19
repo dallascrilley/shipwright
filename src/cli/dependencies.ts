@@ -21,6 +21,12 @@ export function createPipelineDependencies(
   const transport = createOctokitTransport(githubConfig);
 
   return {
+    execution: Object.freeze({
+      runtime: "agentos",
+      software: "pi",
+      provider: provider.name,
+      model: provider.model,
+    }),
     authorize: (ref) => authorizeIssue(ref, githubConfig, transport),
     createWorkspace: () => SandboxWorkspace.start(),
     runAgent: (workspace, prompt, timeoutMs) =>

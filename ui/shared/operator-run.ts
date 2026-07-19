@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { RunExecution } from "../../src/pipeline/receipt";
 
 export const RUN_PHASES = [
   "intake",
@@ -46,6 +47,7 @@ export interface OperatorRunReceipt {
   runId: string;
   phase: OperatorRunPhase;
   issueUrl: string;
+  execution: RunExecution;
   baseSha?: string;
   branch?: string;
   changedFiles: string[];
