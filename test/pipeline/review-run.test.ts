@@ -54,12 +54,14 @@ function fixture(options: {
   const workspace: ReviewWorkspacePort = {
     async clonePullRequest() { events.push("clone"); },
     async prepareForAgent() { events.push("prepare"); },
+    async prepareReviewArtifact() { events.push("reserve-artifact"); },
     async readAndRemoveArtifact() {
       events.push("artifact");
       return JSON.stringify({ threads: [{ threadId: "thread-1", outcome, summary: "Handled", evidence: "src/a.ts:4" }] });
     },
     async verify() { events.push("verify"); return { exitCode: options.verifyExit ?? 0 }; },
     async inspectChanges() { events.push("inspect"); return { changedFiles: changes, patch: changes.length ? "diff" : "", patchBytes: changes.length ? 4 : 0 }; },
+    async quiesce() { events.push("quiesce"); },
     async assertRunIdentity() { events.push("identity"); },
     async commit() { events.push("commit"); remoteHead = "commit1"; return "commit1"; },
     async push() { events.push("push"); },
@@ -83,7 +85,9 @@ test("verified changes push before replying and resolving", async () => {
   const { deps, events, getReplyBody } = fixture();
   const receipt = await runReviewAgent(request, deps);
   expect(receipt.commitSha).toBe("commit1");
+  expect(events.indexOf("reserve-artifact")).toBeLessThan(events.indexOf("agent"));
   expect(events.indexOf("push")).toBeLessThan(events.indexOf("reply"));
+  expect(events.indexOf("quiesce")).toBeLessThan(events.indexOf("commit"));
   expect(events.indexOf("reply")).toBeLessThan(events.indexOf("resolve"));
   expect(getReplyBody()).toContain("Please add a guard");
   expect(getReplyBody()).toContain("agentos-review-run:run-1");
@@ -97,6 +101,7 @@ test("valid no-code rejection replies without committing", async () => {
   expect(receipt.commitSha).toBeUndefined();
   expect(events).not.toContain("commit");
   expect(events).not.toContain("push");
+  expect(events.indexOf("quiesce")).toBeLessThan(events.indexOf("reply"));
   expect(events).toContain("reply");
   expect(events).toContain("resolve");
 });

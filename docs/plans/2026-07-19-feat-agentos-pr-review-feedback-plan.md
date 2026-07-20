@@ -40,10 +40,13 @@ The existing programming agent proves issue-to-new-PR publication. It cannot upd
 ## Surprises & Discoveries
 
 - Observation: The AgentOS Pi package deliberately uses `MinimalResourceLoader` when no extension is found, so writing a skill alone does not expose it to the model. A trusted no-op extension in Pi's private agent directory activates `DefaultResourceLoader`, which then discovers the projected skill through Pi's documented global skill path.
+- Observation: The initial implementation still performed the credentialed Git push inside the model-controlled Docker sandbox. Local review classified this as HIGH because an altered hook/config or lingering process could observe the installation token. The corrected design quiesces the sandbox, verifies the authorized local Git config, and performs hook-disabled commit/push from the trusted host with ambient Git config disabled.
+- Observation: GitHub review threads and review submissions can exceed one page. The client now paginates both sources instead of silently stopping at 100.
 
 ## Decision Log
 
 - Decision: Project the canonical skill at runtime instead of vendoring it. Rationale: the proof should use Hub's current canonical workflow while the receipt preserves an immutable digest. Date/Author: 2026-07-19 / Codex.
+- Decision: Move all post-agent Git publication to the trusted host and stop the sandbox before publication. Rationale: credentials must remain outside the model-controlled process boundary, and no background sandbox process may race the reviewed diff. Date/Author: 2026-07-19 / Codex.
 
 ## Key Technical Decisions
 
@@ -140,3 +143,4 @@ Implementation checkpoint: U1-U3 are complete. The original issue-to-PR command 
 - 2026-07-19: Initial plan created from live PR #1029 evidence and current runner architecture.
 - 2026-07-19: Marked U1 and U2 complete after focused tests and typecheck; recorded the Pi resource-loader constraint.
 - 2026-07-19: Marked U3 complete after 73 deterministic tests and typecheck; added a pre-publication live PR-state recheck.
+- 2026-07-19: Closed one HIGH token-boundary finding and one MEDIUM pagination finding from local review; fresh full tests, typecheck, and two Docker behavior tests passed.

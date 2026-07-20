@@ -16,9 +16,11 @@ import { type ReviewRunPhase, type ReviewRunReceipt, writeReviewReceipt } from "
 export interface ReviewWorkspacePort {
   clonePullRequest(input: { owner: string; repo: string; headBranch: string; headSha: string; token: string }): Promise<void>;
   prepareForAgent(): Promise<void>;
+  prepareReviewArtifact(path: string): Promise<void>;
   readAndRemoveArtifact(path: string): Promise<string>;
   verify(command: string, timeoutMs: number): Promise<Pick<ProcessRunResponse, "exitCode">>;
   inspectChanges(): Promise<ChangeInspection>;
+  quiesce(): Promise<void>;
   assertRunIdentity(headSha: string, branch: string): Promise<void>;
   commit(message: string): Promise<string>;
   push(branch: string, token: string): Promise<void>;
@@ -87,6 +89,7 @@ export async function runReviewAgent(
     }));
     deps.signal?.throwIfAborted();
     await workspace.prepareForAgent();
+    await workspace.prepareReviewArtifact(REVIEW_OUTCOME_PATH);
 
     phase = receipt.phase = "agent";
     await emitProgress();
@@ -149,12 +152,15 @@ export async function runReviewAgent(
     if (changes.changedFiles.length > 0) {
       const finalChanges = await workspace.inspectChanges();
       assertUnchangedInspection(changes, finalChanges);
+      await workspace.quiesce();
       await workspace.assertRunIdentity(authorized.pullRequest.headSha, authorized.pullRequest.headBranch);
       receipt.commitSha = await workspace.commit(`fix: address review feedback (#${authorized.pullRequest.number})`);
       await authorized.withInstallationToken((token) => workspace!.push(authorized.pullRequest.headBranch, token));
       const pushedHead = await authorized.repositoryClient.getBranchSha(authorized.pullRequest.headBranch);
       if (pushedHead !== receipt.commitSha) throw new Error("pushed pull request head does not match the generated commit");
       await emitProgress();
+    } else {
+      await workspace.quiesce();
     }
 
     deps.signal?.throwIfAborted();

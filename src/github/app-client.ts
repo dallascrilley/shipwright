@@ -236,46 +236,58 @@ export function createOctokitTransport(config: GitHubConfig): GitHubTransport {
           };
         },
         async listReviewThreads(number) {
-          const response = await octokit.graphql<{
-            repository: { pullRequest: { reviewThreads: { nodes: Array<{
-              id: string;
-              isResolved: boolean;
-              isOutdated: boolean;
-              path: string;
-              line: number | null;
-              comments: { nodes: Array<{
-                id: string;
-                body: string;
-                url: string;
-                author: { login: string } | null;
-              }> };
-            }> } } | null };
-          }>(`query($owner: String!, $repo: String!, $number: Int!) {
-            repository(owner: $owner, name: $repo) {
-              pullRequest(number: $number) {
-                reviewThreads(first: 100) {
-                  nodes {
-                    id isResolved isOutdated path line
-                    comments(first: 100) { nodes { id body url author { login } } }
+          const threads: ReviewThread[] = [];
+          let after: string | null = null;
+          let hasNextPage = true;
+          while (hasNextPage) {
+            const response: {
+              repository: { pullRequest: { reviewThreads: {
+                nodes: Array<{
+                  id: string;
+                  isResolved: boolean;
+                  isOutdated: boolean;
+                  path: string;
+                  line: number | null;
+                  comments: { nodes: Array<{
+                    id: string;
+                    body: string;
+                    url: string;
+                    author: { login: string } | null;
+                  }> };
+                }>;
+                pageInfo: { hasNextPage: boolean; endCursor: string | null };
+              } } | null };
+            } = await octokit.graphql(`query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) {
+                  reviewThreads(first: 100, after: $after) {
+                    nodes {
+                      id isResolved isOutdated path line
+                      comments(first: 100) { nodes { id body url author { login } } }
+                    }
+                    pageInfo { hasNextPage endCursor }
                   }
                 }
               }
-            }
-          }`, { owner: input.owner, repo: input.repo, number });
-          const pullRequest = response.repository.pullRequest;
-          if (!pullRequest) throw new Error("pull request was not found");
-          return pullRequest.reviewThreads.nodes.map((thread) => ({
-            ...thread,
-            comments: thread.comments.nodes.map((comment) => ({
-              id: comment.id,
-              body: comment.body,
-              url: comment.url,
-              author: comment.author?.login ?? "unknown",
-            })),
-          }));
+            }`, { owner: input.owner, repo: input.repo, number, after });
+            const pullRequest = response.repository.pullRequest;
+            if (!pullRequest) throw new Error("pull request was not found");
+            threads.push(...pullRequest.reviewThreads.nodes.map((thread) => ({
+              ...thread,
+              comments: thread.comments.nodes.map((comment) => ({
+                id: comment.id,
+                body: comment.body,
+                url: comment.url,
+                author: comment.author?.login ?? "unknown",
+              })),
+            })));
+            ({ hasNextPage, endCursor: after } = pullRequest.reviewThreads.pageInfo);
+            if (hasNextPage && !after) throw new Error("GitHub review thread pagination returned no cursor");
+          }
+          return threads;
         },
         async listReviews(number) {
-          const { data } = await octokit.pulls.listReviews({
+          const data = await octokit.paginate(octokit.pulls.listReviews, {
             owner: input.owner,
             repo: input.repo,
             pull_number: number,
