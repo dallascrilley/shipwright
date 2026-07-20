@@ -160,4 +160,42 @@ describe("OperatorRunRegistry", () => {
     });
     expect(store.load()[0]?.status).toBe("failed");
   });
+
+  test("reconciles a completed durable receipt after restart", () => {
+    const store = new MemoryOperatorRunStore([
+      {
+        runId: "run-1",
+        status: "running",
+        phase: "publish",
+        request: {
+          issueUrl: request.issueUrl,
+          verifyCommand: request.verifyCommand,
+          publish: true,
+          timeoutMinutes: request.timeoutMinutes,
+        },
+        startedAt: "2026-07-19T00:00:00.000Z",
+        updatedAt: "2026-07-19T00:01:00.000Z",
+      },
+    ]);
+
+    const registry = new OperatorRunRegistry(
+      () => new Promise(() => {}),
+      () => "run-2",
+      store,
+      () => "2026-07-19T00:02:00.000Z",
+      () => ({
+        ...completeReceipt,
+        commitSha: "1234567890abcdef1234567890abcdef12345678",
+        pullRequestUrl: "https://github.com/dallascrilley/example/pull/13",
+      }),
+    );
+
+    expect(registry.get("run-1")).toMatchObject({
+      status: "succeeded",
+      phase: "complete",
+      receipt: completeReceipt,
+      updatedAt: "2026-07-19T00:02:00.000Z",
+    });
+    expect(store.load()[0]?.status).toBe("succeeded");
+  });
 });

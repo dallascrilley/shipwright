@@ -9,6 +9,7 @@ import {
 import { dirname, join } from "node:path";
 
 import { createPipelineDependencies } from "../../src/cli/dependencies.js";
+import { resolveShipwrightStateDirectory } from "../../src/config/state.js";
 import { redactSecrets, type RunReceipt } from "../../src/pipeline/receipt.js";
 import {
   runShipwright,
@@ -31,6 +32,8 @@ export interface OperatorRunStore {
   load(): OperatorRunRecord[];
   save(records: readonly OperatorRunRecord[]): void;
 }
+
+export type RunReceiptLoader = (runId: string) => RunReceipt | undefined;
 
 export class MemoryOperatorRunStore implements OperatorRunStore {
   #records: OperatorRunRecord[];
@@ -94,13 +97,26 @@ export class OperatorRunRegistry {
       randomBytes(8).toString("hex"),
     private readonly store: OperatorRunStore = new MemoryOperatorRunStore(),
     private readonly now: () => string = () => new Date().toISOString(),
+    private readonly loadReceipt: RunReceiptLoader = () => undefined,
   ) {
     let reconciled = false;
     for (const stored of this.store.load()) {
       const record = structuredClone(stored);
       if (!isTerminalRun(record.status)) {
-        record.status = "failed";
-        record.message = "Run interrupted by service restart.";
+        const durableReceipt = this.loadReceipt(record.runId);
+        if (durableReceipt?.phase === "complete") {
+          record.status = "succeeded";
+          record.phase = "complete";
+          record.receipt = structuredClone(durableReceipt);
+          delete record.message;
+        } else {
+          record.status = "failed";
+          record.message = "Run interrupted by service restart.";
+          if (durableReceipt) {
+            record.phase = durableReceipt.phase;
+            record.receipt = structuredClone(durableReceipt);
+          }
+        }
         record.updatedAt = this.now();
         reconciled = true;
       }
@@ -270,12 +286,42 @@ async function executeDemo(
 let registry: OperatorRunRegistry | undefined;
 
 export function getOperatorRunRegistry(): OperatorRunRegistry {
-  const stateDirectory =
-    process.env.SHIPWRIGHT_STATE_DIR?.trim() || ".artifacts/shipwright"; // guard:allow-env-credential — deploy-level state path
+  const stateDirectory = resolveShipwrightStateDirectory(); // guard:allow-env-credential — deploy-level state path
   registry ??= new OperatorRunRegistry(
     executePipeline,
     () => randomBytes(8).toString("hex"),
     new JsonFileOperatorRunStore(join(stateDirectory, "operator-runs.json")),
+    () => new Date().toISOString(),
+    (runId) => loadDurableReceipt(stateDirectory, runId),
   );
   return registry;
+}
+
+function loadDurableReceipt(
+  stateDirectory: string,
+  runId: string,
+): RunReceipt | undefined {
+  if (!/^[0-9a-f]{16}$/.test(runId)) return undefined;
+  const path = join(stateDirectory, "receipts", runId, "receipt.json");
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !("runId" in parsed) ||
+      parsed.runId !== runId ||
+      !("phase" in parsed) ||
+      typeof parsed.phase !== "string"
+    ) {
+      return undefined;
+    }
+    return parsed as RunReceipt;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw new Error(`could not load durable receipt for run ${runId}`, {
+      cause: error,
+    });
+  }
 }

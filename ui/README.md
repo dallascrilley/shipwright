@@ -36,4 +36,4 @@ pnpm typecheck
 pnpm build
 ```
 
-The run registry is intentionally single-operator. It prevents concurrent starts and persists records atomically under `SHIPWRIGHT_STATE_DIR`. A service restart marks an unfinished run as interrupted; automatic resumption and multi-user tenancy remain out of scope.
+The run registry is intentionally single-operator. It prevents concurrent starts and persists records atomically under `SHIPWRIGHT_STATE_DIR`. On restart it reconciles a completed durable pipeline receipt before marking a genuinely unfinished run as interrupted; automatic resumption and multi-user tenancy remain out of scope.
