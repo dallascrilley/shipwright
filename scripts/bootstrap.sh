@@ -38,6 +38,12 @@ run_tool bun install --frozen-lockfile
   cd ui
   run_tool pnpm install --frozen-lockfile
 )
+sandbox_image="${SHIPWRIGHT_SANDBOX_IMAGE:-}"
+if [[ -z "$sandbox_image" && -f .env ]]; then
+  sandbox_image="$(sed -n 's/^SHIPWRIGHT_SANDBOX_IMAGE=//p' .env | tail -n 1)"
+fi
+sandbox_image="${sandbox_image:-rivetdev/sandbox-agent:0.5.0-rc.2-full}"
+docker pull "$sandbox_image" >/dev/null
 run_tool bun run doctor -- --runtime-only
 
 printf 'Shipwright bootstrap complete. Run bun run doctor after configuring .env.\n'

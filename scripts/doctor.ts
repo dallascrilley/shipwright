@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 
 import { parseGitHubConfig } from "../src/config/github.js";
 import { resolveProvider } from "../src/config/provider.js";
+import { resolveSandboxImage } from "../src/sandbox/runtime.js";
 
 interface Check {
   name: string;
@@ -37,6 +38,7 @@ const runtimeOnly = process.argv.includes("--runtime-only");
 const stateDirectory = resolve(
   process.env.SHIPWRIGHT_STATE_DIR?.trim() || ".artifacts/shipwright",
 );
+const sandboxImage = resolveSandboxImage(process.env.SHIPWRIGHT_SANDBOX_IMAGE);
 mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
 
 const checks: Check[] = [
@@ -50,6 +52,14 @@ const checks: Check[] = [
     name: "Docker daemon",
     detail: "reachable",
     passed: spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0,
+  },
+  {
+    name: "Sandbox image",
+    detail: sandboxImage,
+    passed:
+      spawnSync("docker", ["image", "inspect", sandboxImage], {
+        stdio: "ignore",
+      }).status === 0,
   },
   configurationCheck("State directory", () => {
     accessSync(stateDirectory, constants.R_OK | constants.W_OK | constants.X_OK);

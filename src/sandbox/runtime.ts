@@ -13,6 +13,8 @@ const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const SANDBOX_WORKSPACE = "/home/sandbox/workspace";
 export const AGENT_WORKSPACE = "/workspace";
+export const DEFAULT_SANDBOX_IMAGE =
+  "rivetdev/sandbox-agent:0.5.0-rc.2-full";
 const execFileAsync = promisify(execFile);
 
 export interface CloneInput {
@@ -42,6 +44,10 @@ export function parseNulList(output: string): string[] {
   return output.split("\0").filter(Boolean);
 }
 
+export function resolveSandboxImage(configured?: string): string {
+  return configured?.trim() || DEFAULT_SANDBOX_IMAGE;
+}
+
 export function requireSuccessfulCommand(label: string, result: ProcessRunResponse): ProcessRunResponse {
   if (result.timedOut) throw new Error(`${label} timed out`);
   if (result.stdoutTruncated || result.stderrTruncated) {
@@ -64,7 +70,10 @@ export class SandboxWorkspace {
     const hostWorkspace = await mkdtemp(join(tmpdir(), "shipwright-workspace-"));
     try {
       const client = await SandboxAgent.start({
-        sandbox: docker({ binds: [`${hostWorkspace}:${SANDBOX_WORKSPACE}`] }),
+        sandbox: docker({
+          image: resolveSandboxImage(process.env.SHIPWRIGHT_SANDBOX_IMAGE),
+          binds: [`${hostWorkspace}:${SANDBOX_WORKSPACE}`],
+        }),
       });
       return new SandboxWorkspace(client, hostWorkspace);
     } catch (error) {
