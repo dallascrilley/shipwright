@@ -96,10 +96,10 @@ export async function runShipwright(request: RunRequest, deps: PipelineDependenc
     receipt.verification.exitCode = verification.exitCode ?? null;
     receipt.verification.passed = verification.exitCode === 0;
     if (verification.stdout) {
-      receipt.verification.stdoutTail = truncateTail(verification.stdout);
+      receipt.verification.stdoutTail = redactSecrets(truncateTail(verification.stdout));
     }
     if (verification.stderr) {
-      receipt.verification.stderrTail = truncateTail(verification.stderr);
+      receipt.verification.stderrTail = redactSecrets(truncateTail(verification.stderr));
     }
     await emitProgress();
     if (!receipt.verification.passed) {
@@ -118,6 +118,7 @@ export async function runShipwright(request: RunRequest, deps: PipelineDependenc
     if (request.publish) {
       receipt.phase = "publish";
       await emitProgress();
+      deps.signal?.throwIfAborted();
       const finalChanges = await workspace.inspectChanges();
       if (
         finalChanges.patch !== changes.patch ||
@@ -125,10 +126,15 @@ export async function runShipwright(request: RunRequest, deps: PipelineDependenc
       ) {
         throw new PipelineError("publish", "changes_moved", "repository changes moved after policy inspection");
       }
+      deps.signal?.throwIfAborted();
       await workspace.quiesce();
+      deps.signal?.throwIfAborted();
       await workspace.assertRunIdentity(authorized.issue.baseSha, branch);
+      deps.signal?.throwIfAborted();
       receipt.commitSha = await workspace.commit(`fix: ${authorized.issue.title} (#${authorized.issue.number})`);
+      deps.signal?.throwIfAborted();
       await authorized.withInstallationToken((token) => workspace!.push(branch, token));
+      deps.signal?.throwIfAborted();
       const pr = await deps.openPullRequest(authorized, {
         owner: authorized.issue.owner,
         repo: authorized.issue.repo,

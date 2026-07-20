@@ -120,10 +120,10 @@ export async function runReviewAgent(
     receipt.verification.exitCode = verification.exitCode ?? null;
     receipt.verification.passed = verification.exitCode === 0;
     if (verification.stdout) {
-      receipt.verification.stdoutTail = truncateTail(verification.stdout);
+      receipt.verification.stdoutTail = redactSecrets(truncateTail(verification.stdout));
     }
     if (verification.stderr) {
-      receipt.verification.stderrTail = truncateTail(verification.stderr);
+      receipt.verification.stderrTail = redactSecrets(truncateTail(verification.stderr));
     }
     await emitProgress();
     if (!receipt.verification.passed) throw new Error("independent verification failed");
@@ -148,6 +148,7 @@ export async function runReviewAgent(
     deps.signal?.throwIfAborted();
     phase = receipt.phase = "publish";
     await emitProgress();
+    deps.signal?.throwIfAborted();
     const currentPullRequest = await authorized.repositoryClient.getPullRequest(ref.number);
     if (currentPullRequest.state !== "open") throw new Error("pull request is no longer open");
     if (
@@ -158,12 +159,17 @@ export async function runReviewAgent(
     }
     const remoteHead = await authorized.repositoryClient.getBranchSha(authorized.pullRequest.headBranch);
     if (remoteHead !== authorized.pullRequest.headSha) throw new Error("pull request head moved after authorization");
+    deps.signal?.throwIfAborted();
     if (changes.changedFiles.length > 0) {
       const finalChanges = await workspace.inspectChanges();
       assertUnchangedInspection(changes, finalChanges);
+      deps.signal?.throwIfAborted();
       await workspace.quiesce();
+      deps.signal?.throwIfAborted();
       await workspace.assertRunIdentity(authorized.pullRequest.headSha, authorized.pullRequest.headBranch);
+      deps.signal?.throwIfAborted();
       receipt.commitSha = await workspace.commit(`fix: address review feedback (#${authorized.pullRequest.number})`);
+      deps.signal?.throwIfAborted();
       await authorized.withInstallationToken((token) => workspace!.push(authorized.pullRequest.headBranch, token));
       const pushedHead = await authorized.repositoryClient.getBranchSha(authorized.pullRequest.headBranch);
       if (pushedHead !== receipt.commitSha) throw new Error("pushed pull request head does not match the generated commit");
