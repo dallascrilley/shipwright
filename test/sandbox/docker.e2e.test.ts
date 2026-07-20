@@ -9,12 +9,45 @@ liveTest("runs a command in a disposable Docker sandbox and cleans it up", async
     await workspace.initialize();
     const result = await workspace.run({
       command: "sh",
-      args: ["-lc", "printf SANDBOX_OK"],
+      args: ["-lc", "printf SANDBOX_OK > write-probe && cat write-probe"],
       cwd: "/home/sandbox/workspace",
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("SANDBOX_OK");
   } finally {
+    await workspace.destroy();
+  }
+}, 30_000);
+
+liveTest("rejects a nonempty sandbox workspace", async () => {
+  const workspace = await SandboxWorkspace.start();
+  try {
+    await workspace.runOrThrow("nonempty workspace fixture", {
+      command: "touch",
+      args: ["existing-file"],
+      cwd: "/home/sandbox/workspace",
+    });
+    await expect(workspace.initialize()).rejects.toThrow("workspace initialization failed");
+  } finally {
+    await workspace.destroy();
+  }
+}, 30_000);
+
+liveTest("rejects an inaccessible sandbox workspace", async () => {
+  const workspace = await SandboxWorkspace.start();
+  try {
+    await workspace.runOrThrow("inaccessible workspace fixture", {
+      command: "chmod",
+      args: ["000", "/home/sandbox/workspace"],
+      cwd: "/",
+    });
+    await expect(workspace.initialize()).rejects.toThrow("workspace initialization failed");
+  } finally {
+    await workspace.run({
+      command: "chmod",
+      args: ["700", "/home/sandbox/workspace"],
+      cwd: "/",
+    });
     await workspace.destroy();
   }
 }, 30_000);
