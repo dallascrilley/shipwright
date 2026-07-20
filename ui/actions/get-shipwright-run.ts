@@ -5,7 +5,7 @@ import { getOperatorRunRegistry } from "../server/operator-runs";
 
 export default defineAction({
   description:
-    "Read the latest known status and receipt for one programming-agent run.",
+    "Read the latest known status and receipt for one Shipwright run.",
   schema: z.object({ runId: z.string().trim().min(1).max(100).optional() }),
   http: { method: "GET" },
   readOnly: true,

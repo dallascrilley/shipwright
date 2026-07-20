@@ -1,6 +1,6 @@
 {
-  "name": "Programming Agent",
-  "short_name": "Programming Agent",
+  "name": "Shipwright",
+  "short_name": "Shipwright",
   "description": "Operator console for verified GitHub issue fixes.",
   "start_url": ".",
   "display": "standalone",

@@ -47,7 +47,7 @@ export class SandboxWorkspace {
   private constructor(readonly client: SandboxAgent, private readonly hostWorkspace: string) {}
 
   static async start(): Promise<SandboxWorkspace> {
-    const hostWorkspace = await mkdtemp(join(tmpdir(), "programming-agent-workspace-"));
+    const hostWorkspace = await mkdtemp(join(tmpdir(), "shipwright-workspace-"));
     try {
       const client = await SandboxAgent.start({
         sandbox: docker({ binds: [`${hostWorkspace}:${SANDBOX_WORKSPACE}`] }),
@@ -230,12 +230,12 @@ export class SandboxWorkspace {
   async commit(message: string): Promise<string> {
     await this.runOrThrow("git identity", {
       command: "git",
-      args: ["config", "user.name", "Programming Agent[bot]"],
+      args: ["config", "user.name", "Shipwright[bot]"],
       cwd: SANDBOX_WORKSPACE,
     });
     await this.runOrThrow("git email", {
       command: "git",
-      args: ["config", "user.email", "programming-agent[bot]@users.noreply.github.com"],
+      args: ["config", "user.email", "shipwright[bot]@users.noreply.github.com"],
       cwd: SANDBOX_WORKSPACE,
     });
     await this.runOrThrow("change staging", {
