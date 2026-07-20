@@ -54,9 +54,9 @@ export function OperatorConsole() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const startRun = useActionMutation("start-programming-run");
+  const startRun = useActionMutation("start-shipwright-run");
   const runQuery = useActionQuery(
-    "get-programming-run",
+    "get-shipwright-run",
     runId ? { runId } : {},
     {
       refetchInterval: (query) => {
@@ -119,7 +119,7 @@ export function OperatorConsole() {
         <div className="max-w-3xl">
           <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
             <IconTerminal2 className="size-4" />
-            Programming agent
+            Shipwright
           </div>
           <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
             Turn an issue into verified code.
@@ -132,7 +132,7 @@ export function OperatorConsole() {
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className="size-2 rounded-full bg-emerald-500" />
-          Local operator session
+          Private operator service
         </div>
       </header>
 

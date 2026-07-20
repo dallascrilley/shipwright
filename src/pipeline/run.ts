@@ -41,9 +41,9 @@ export interface RunRequest {
   timeoutMinutes: number;
 }
 
-export async function runProgrammingAgent(request: RunRequest, deps: PipelineDependencies): Promise<RunReceipt> {
+export async function runShipwright(request: RunRequest, deps: PipelineDependencies): Promise<RunReceipt> {
   const runId = deps.runId ?? randomBytes(8).toString("hex");
-  const receiptPath = join(deps.artifactRoot ?? ".artifacts/programming-agent", runId, "receipt.json");
+  const receiptPath = join(deps.artifactRoot ?? ".artifacts/shipwright/receipts", runId, "receipt.json");
   const receipt: RunReceipt = {
     runId,
     phase: "intake",

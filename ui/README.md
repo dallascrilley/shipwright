@@ -1,6 +1,6 @@
-# Programming Agent operator console
+# Shipwright operator console
 
-This nested Agent Native app turns the repository's GitHub issue programming-agent pipeline into a local operator console. The browser collects validated inputs and renders redacted run evidence; server Actions call the same host composition used by the CLI.
+This nested Agent Native app is Shipwright's operator console. The browser collects validated inputs and renders redacted run evidence; server Actions call the same host-owned pipeline used by the CLI.
 
 ## Local development
 
@@ -16,15 +16,15 @@ The operator is at `/`. Agent Native chat remains available at `/chat`.
 For deterministic UI work without GitHub, a model account, or Docker:
 
 ```sh
-AGENT_PROGRAMMING_UI_DEMO=1 pnpm dev
+SHIPWRIGHT_UI_DEMO=1 pnpm dev
 ```
 
 Demo mode is dry-run only. Real runs use the root project's GitHub App, provider, Docker sandbox, verification, policy, receipt, and publication configuration.
 
 ## Actions
 
-- `start-programming-run`: validates issue, verification, timeout, and publication confirmation inputs, then launches one background run.
-- `get-programming-run`: reads a named run or the latest run after a browser refresh.
+- `start-shipwright-run`: validates issue, verification, timeout, and publication confirmation inputs, then launches one background run.
+- `get-shipwright-run`: reads a named run or the latest run after a browser refresh or service restart.
 - `view-screen`: returns current navigation plus the latest redacted run state.
 - `navigate`: changes the visible application route.
 
@@ -36,4 +36,4 @@ pnpm typecheck
 pnpm build
 ```
 
-The run registry is intentionally local and single-operator. It prevents concurrent starts in one process; durable cross-restart resumption and multi-user tenancy are out of scope.
+The run registry is intentionally single-operator. It prevents concurrent starts and persists records atomically under `SHIPWRIGHT_STATE_DIR`. A service restart marks an unfinished run as interrupted; automatic resumption and multi-user tenancy remain out of scope.

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { runProgrammingAgent, type PipelineDependencies, type WorkspacePort } from "../../src/pipeline/run.js";
+import { runShipwright, type PipelineDependencies, type WorkspacePort } from "../../src/pipeline/run.js";
 import type { AuthorizedIssue } from "../../src/github/app-client.js";
 
 function fixture(options: { verifyExit?: number; protectedFile?: boolean; publish?: boolean } = {}) {
@@ -38,7 +38,7 @@ function fixture(options: { verifyExit?: number; protectedFile?: boolean; publis
 
 test("dry run verifies and applies policy without publishing", async () => {
   const { deps, events } = fixture();
-  const receipt = await runProgrammingAgent({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: false, timeoutMinutes: 2 }, deps);
+  const receipt = await runShipwright({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: false, timeoutMinutes: 2 }, deps);
   expect(receipt.phase).toBe("complete");
   expect(receipt.execution).toEqual({
     runtime: "agentos",
@@ -58,7 +58,7 @@ test("emits cloned progress snapshots in pipeline order", async () => {
     snapshots.push({ phase: receipt.phase, changedFiles: receipt.changedFiles, execution: receipt.execution });
   };
 
-  const receipt = await runProgrammingAgent({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: false, timeoutMinutes: 2 }, deps);
+  const receipt = await runShipwright({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: false, timeoutMinutes: 2 }, deps);
 
   expect(snapshots.map((snapshot) => snapshot.phase)).toEqual([
     "intake",
@@ -79,7 +79,7 @@ test("emits cloned progress snapshots in pipeline order", async () => {
 
 test("failed independent verification blocks policy and publication", async () => {
   const { deps, events } = fixture({ verifyExit: 1 });
-  await expect(runProgrammingAgent({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "false", publish: true, timeoutMinutes: 2 }, deps)).rejects.toThrow("verification failed");
+  await expect(runShipwright({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "false", publish: true, timeoutMinutes: 2 }, deps)).rejects.toThrow("verification failed");
   expect(events).not.toContain("inspect");
   expect(events).not.toContain("push");
   expect(events).toContain("receipt:verify");
@@ -88,14 +88,14 @@ test("failed independent verification blocks policy and publication", async () =
 
 test("protected changes block publication", async () => {
   const { deps, events } = fixture({ protectedFile: true });
-  await expect(runProgrammingAgent({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 }, deps)).rejects.toThrow("protected");
+  await expect(runShipwright({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 }, deps)).rejects.toThrow("protected");
   expect(events).not.toContain("commit");
   expect(events).toContain("receipt:policy");
 });
 
 test("publish commits, pushes, then opens the PR", async () => {
   const { deps, events } = fixture({ publish: true });
-  const receipt = await runProgrammingAgent({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 }, deps);
+  const receipt = await runShipwright({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 }, deps);
   expect(receipt.pullRequestUrl).toEndWith("/5");
   expect(events.indexOf("identity")).toBeLessThan(events.indexOf("commit"));
   expect(events.indexOf("commit")).toBeLessThan(events.indexOf("push"));
@@ -104,7 +104,7 @@ test("publish commits, pushes, then opens the PR", async () => {
 
 test("malformed issue input still writes an intake failure receipt", async () => {
   const { deps, events } = fixture();
-  await expect(runProgrammingAgent({ issueUrl: "not-a-url", verifyCommand: "bun test", publish: false, timeoutMinutes: 2 }, deps)).rejects.toThrow("canonical");
+  await expect(runShipwright({ issueUrl: "not-a-url", verifyCommand: "bun test", publish: false, timeoutMinutes: 2 }, deps)).rejects.toThrow("canonical");
   expect(events).toEqual(["receipt:intake"]);
 });
 
@@ -115,7 +115,7 @@ test("an abort during agent work writes a receipt and destroys the workspace", a
   deps.runAgent = async () => new Promise(() => undefined);
   setTimeout(() => controller.abort(new Error("stop")), 5);
 
-  await expect(runProgrammingAgent({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: false, timeoutMinutes: 2 }, deps)).rejects.toThrow("stop");
+  await expect(runShipwright({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: false, timeoutMinutes: 2 }, deps)).rejects.toThrow("stop");
   expect(events).toContain("receipt:agent");
   expect(events.at(-1)).toBe("destroy");
 });
@@ -130,7 +130,7 @@ test("abort after successful verification blocks policy and publication", async 
     }
   };
 
-  await expect(runProgrammingAgent({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 }, deps)).rejects.toThrow("stop after verify");
+  await expect(runShipwright({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 }, deps)).rejects.toThrow("stop after verify");
   expect(events).not.toContain("inspect");
   expect(events).not.toContain("commit");
   expect(events).not.toContain("push");

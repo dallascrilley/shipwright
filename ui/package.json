@@ -1,6 +1,6 @@
 {
-  "name": "programming-agent-ui",
-  "displayName": "Programming Agent",
+  "name": "shipwright-ui",
+  "displayName": "Shipwright",
   "private": true,
   "description": "Agent Native operator console for verified GitHub issue fixes.",
   "type": "module",
@@ -27,7 +27,8 @@
     "@react-router/dev": "8.1.0",
     "@react-router/fs-routes": "8.1.0",
     "react-router": "8.1.0",
-    "vite": "8.1.0"
+    "vite": "8.1.0",
+    "yjs": "13.6.31"
   },
   "devDependencies": {
     "@radix-ui/react-accordion": "^1.2.12",
@@ -89,5 +90,6 @@
   },
   "engines": {
     "node": ">=22.22.0"
-  }
+  },
+  "packageManager": "pnpm@11.5.2"
 }

@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { createAndRunPiAgent } from "../agent/runner.js";
 import { parseGitHubConfig } from "../config/github.js";
 import { resolveProvider } from "../config/provider.js";
@@ -39,6 +40,10 @@ export function createPipelineDependencies(
     openPullRequest: (authorized, input) =>
       openOrReusePullRequest(authorized.repositoryClient, input),
     writeReceipt: defaultReceiptWriter,
+    artifactRoot: join(
+      process.env.SHIPWRIGHT_STATE_DIR?.trim() || ".artifacts/shipwright",
+      "receipts",
+    ),
     ...options,
   };
 }

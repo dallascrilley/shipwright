@@ -6,7 +6,7 @@ export interface CliArgs {
 }
 
 const USAGE =
-  "Usage: bun run programming-agent -- <issue-url> --verify <command> [--publish] [--timeout-minutes <1-120>]";
+  "Usage: bun run shipwright -- <issue-url> --verify <command> [--publish] [--timeout-minutes <1-120>]";
 
 export function parseArgs(argv: string[]): CliArgs {
   const issueUrl = argv[0];

@@ -7,7 +7,7 @@ export function meta() {
     {
       name: "description",
       content:
-        "Run, verify, and publish GitHub issue fixes from a local agent-native console.",
+        "Run, verify, and publish GitHub issue fixes from the private Shipwright operator console.",
     },
   ];
 }

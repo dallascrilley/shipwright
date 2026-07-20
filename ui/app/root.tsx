@@ -37,7 +37,7 @@ import stylesheet from "./global.css?url";
 configureTracking({
   getDefaultProps: (_name, properties) => ({
     ...properties,
-    app: "programming-agent",
+    app: "shipwright",
     template: "operator-console",
   }),
 });

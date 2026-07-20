@@ -1,5 +1,5 @@
 {
-  "name": "programming-agent-fixture",
+  "name": "shipwright-fixture",
   "private": true,
   "scripts": {
     "test": "node --test --experimental-strip-types test/math.fixture.ts"
