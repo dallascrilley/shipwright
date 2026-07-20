@@ -152,6 +152,10 @@ test("createAndRunPiAgent gives its explicit sidecar a deadline beyond the Pi de
     },
     async create(options) {
       expect(options?.sidecar).toEqual({ kind: "explicit", handle: sidecar });
+      expect(options?.limits?.jsRuntime).toEqual({
+        cpuTimeLimitMs: 65_000,
+        wallClockLimitMs: 65_000,
+      });
       return vm;
     },
   };

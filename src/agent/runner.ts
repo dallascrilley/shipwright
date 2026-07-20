@@ -114,15 +114,20 @@ export async function createAndRunPiAgent(
   runtime: AgentOsRuntime = AgentOs,
 ): Promise<string> {
   const effectiveTimeoutMs = timeoutMs ?? DEFAULT_PI_TIMEOUT_MS;
-  const sidecar = await runtime.createSidecar({
-    frameTimeoutMs: effectiveTimeoutMs + SIDECAR_FRAME_TIMEOUT_BUFFER_MS,
-  });
+  const runtimeDeadlineMs = effectiveTimeoutMs + SIDECAR_FRAME_TIMEOUT_BUFFER_MS;
+  const sidecar = await runtime.createSidecar({ frameTimeoutMs: runtimeDeadlineMs });
   try {
     const vm = await runtime.create({
       software: [pi],
       mounts: [workspace.createMount()],
       toolKits: [workspace.createToolkit()],
       sidecar: { kind: "explicit", handle: sidecar },
+      limits: {
+        jsRuntime: {
+          cpuTimeLimitMs: runtimeDeadlineMs,
+          wallClockLimitMs: runtimeDeadlineMs,
+        },
+      },
     });
     return await runPiAgent(vm, provider, prompt, effectiveTimeoutMs, skills);
   } finally {
