@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { createHostDirBackend, type ToolKit } from "@rivet-dev/agentos-core";
 import { SandboxAgent, type ProcessRunRequest, type ProcessRunResponse } from "sandbox-agent";
 import { docker } from "sandbox-agent/docker";
@@ -11,6 +13,7 @@ const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const SANDBOX_WORKSPACE = "/home/sandbox/workspace";
 export const AGENT_WORKSPACE = "/workspace";
+const execFileAsync = promisify(execFile);
 
 export interface CloneInput {
   owner: string;
@@ -52,6 +55,9 @@ export function requireSuccessfulCommand(label: string, result: ProcessRunRespon
 }
 
 export class SandboxWorkspace {
+  private authorizedLocalConfig?: string;
+  private sandboxStopped = false;
+
   private constructor(readonly client: SandboxAgent, private readonly hostWorkspace: string) {}
 
   static async start(): Promise<SandboxWorkspace> {
@@ -174,6 +180,7 @@ export class SandboxWorkspace {
       args: ["switch", "-c", input.branch],
       cwd: SANDBOX_WORKSPACE,
     });
+    await this.captureLocalConfig();
   }
 
   async clonePullRequest(input: PullRequestCloneInput): Promise<void> {
@@ -201,12 +208,22 @@ export class SandboxWorkspace {
     if (head.stdout.trim() !== input.headSha) {
       throw new Error(`pull request head moved: expected ${input.headSha}, received ${head.stdout.trim()}`);
     }
+    await this.captureLocalConfig();
+  }
+
+  async prepareReviewArtifact(path: string): Promise<void> {
+    this.assertSafeArtifactPath(path);
+    const tracked = await this.run({
+      command: "git",
+      args: ["ls-files", "--error-unmatch", "--", path],
+      cwd: SANDBOX_WORKSPACE,
+    });
+    if (tracked.exitCode === 0) throw new Error("reserved review artifact path is already tracked");
+    if (tracked.exitCode !== 1) requireSuccessfulCommand("review artifact reservation", tracked);
   }
 
   async readAndRemoveArtifact(path: string): Promise<string> {
-    if (path.startsWith("/") || path.split("/").includes("..")) {
-      throw new Error("artifact path must remain inside the repository root");
-    }
+    this.assertSafeArtifactPath(path);
     try {
       return (await this.runOrThrow("review outcome artifact", {
         command: "cat",
@@ -215,6 +232,11 @@ export class SandboxWorkspace {
         maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
       })).stdout;
     } finally {
+      await this.runOrThrow("review artifact unstaging", {
+        command: "git",
+        args: ["reset", "--quiet", "HEAD", "--", path],
+        cwd: SANDBOX_WORKSPACE,
+      });
       await this.run({
         command: "rm",
         args: ["-f", "--", path],
@@ -236,7 +258,7 @@ export class SandboxWorkspace {
   async inspectChanges(): Promise<ChangeInspection> {
     const tracked = await this.runOrThrow("tracked change listing", {
       command: "git",
-      args: ["diff", "--name-only", "-z"],
+      args: ["diff", "--name-only", "-z", "HEAD"],
       cwd: SANDBOX_WORKSPACE,
     });
     const untracked = await this.runOrThrow("untracked change listing", {
@@ -255,7 +277,7 @@ export class SandboxWorkspace {
     }
     const diff = await this.runOrThrow("change diff", {
       command: "git",
-      args: ["diff", "--binary", "--no-ext-diff"],
+      args: ["diff", "--binary", "--no-ext-diff", "HEAD"],
       cwd: SANDBOX_WORKSPACE,
       maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES + 1,
     });
@@ -267,65 +289,60 @@ export class SandboxWorkspace {
   }
 
   async assertRunIdentity(baseSha: string, branch: string): Promise<void> {
-    const actualBranch = await this.runOrThrow("branch identity check", {
-      command: "git",
-      args: ["branch", "--show-current"],
-      cwd: SANDBOX_WORKSPACE,
-    });
-    const actualHead = await this.runOrThrow("pre-commit base check", {
-      command: "git",
-      args: ["rev-parse", "HEAD"],
-      cwd: SANDBOX_WORKSPACE,
-    });
-    if (actualBranch.stdout.trim() !== branch || actualHead.stdout.trim() !== baseSha) {
+    const [actualBranch, actualHead, localConfig] = await Promise.all([
+      this.hostGit(["branch", "--show-current"]),
+      this.hostGit(["rev-parse", "HEAD"]),
+      this.hostGit(["config", "--local", "--null", "--list"]),
+    ]);
+    if (actualBranch.trim() !== branch || actualHead.trim() !== baseSha) {
       throw new Error("repository identity changed after authorization");
+    }
+    if (!this.authorizedLocalConfig || localConfig !== this.authorizedLocalConfig) {
+      throw new Error("repository Git configuration changed after authorization");
     }
   }
 
   async commit(message: string): Promise<string> {
-    await this.runOrThrow("git identity", {
-      command: "git",
-      args: ["config", "user.name", "Programming Agent[bot]"],
-      cwd: SANDBOX_WORKSPACE,
-    });
-    await this.runOrThrow("git email", {
-      command: "git",
-      args: ["config", "user.email", "programming-agent[bot]@users.noreply.github.com"],
-      cwd: SANDBOX_WORKSPACE,
-    });
-    await this.runOrThrow("change staging", {
-      command: "git",
-      args: ["add", "--all"],
-      cwd: SANDBOX_WORKSPACE,
-    });
-    await this.runOrThrow("change commit", {
-      command: "git",
-      args: ["commit", "-m", message],
-      cwd: SANDBOX_WORKSPACE,
-    });
-    return (
-      await this.runOrThrow("commit SHA", {
-        command: "git",
-        args: ["rev-parse", "HEAD"],
-        cwd: SANDBOX_WORKSPACE,
-      })
-    ).stdout.trim();
+    await this.hostGit(["-c", "core.hooksPath=/dev/null", "add", "--all"]);
+    await this.hostGit([
+      "-c", "core.hooksPath=/dev/null",
+      "-c", "user.name=Programming Agent[bot]",
+      "-c", "user.email=programming-agent[bot]@users.noreply.github.com",
+      "commit", "-m", message,
+    ]);
+    return (await this.hostGit(["rev-parse", "HEAD"])).trim();
   }
 
   async push(branch: string, token: string): Promise<void> {
-    await this.withGitCredentials(token, async (env) => {
-      await this.runOrThrow("branch push", {
-        command: "git",
-        args: ["push", "--set-upstream", "origin", branch],
-        cwd: SANDBOX_WORKSPACE,
-        env,
-      });
-    });
+    const credentialDirectory = await mkdtemp(join(tmpdir(), "programming-agent-credential-"));
+    const helperPath = join(credentialDirectory, "askpass.sh");
+    const tokenPath = join(credentialDirectory, "token");
+    const helper = [
+      "#!/bin/sh",
+      'case "$1" in',
+      '  *Username*) printf "%s\\n" "x-access-token" ;;',
+      '  *) cat "$GIT_TOKEN_FILE" ;;',
+      "esac",
+      "",
+    ].join("\n");
+    try {
+      await Promise.all([
+        writeFile(helperPath, helper, { mode: 0o700 }),
+        writeFile(tokenPath, token, { mode: 0o600 }),
+      ]);
+      await chmod(credentialDirectory, 0o700);
+      await this.hostGit(
+        ["-c", "core.hooksPath=/dev/null", "-c", "credential.helper=", "push", "--set-upstream", "origin", branch],
+        { GIT_ASKPASS: helperPath, GIT_TOKEN_FILE: tokenPath, GIT_TERMINAL_PROMPT: "0" },
+      );
+    } finally {
+      await rm(credentialDirectory, { recursive: true, force: true });
+    }
   }
 
   async destroy(): Promise<void> {
     try {
-      await this.client.destroySandbox();
+      if (!this.sandboxStopped) await this.client.destroySandbox();
     } finally {
       try {
         await this.client.dispose();
@@ -333,6 +350,12 @@ export class SandboxWorkspace {
         await rm(this.hostWorkspace, { recursive: true });
       }
     }
+  }
+
+  async quiesce(): Promise<void> {
+    if (this.sandboxStopped) return;
+    await this.client.destroySandbox();
+    this.sandboxStopped = true;
   }
 
   private async withGitCredentials<T>(
@@ -370,5 +393,30 @@ export class SandboxWorkspace {
         this.client.deleteFsEntry({ path: tokenPath }),
       ]);
     }
+  }
+
+  private assertSafeArtifactPath(path: string): void {
+    if (!path || path.startsWith("/") || path.split("/").includes("..")) {
+      throw new Error("artifact path must remain inside the repository root");
+    }
+  }
+
+  private async captureLocalConfig(): Promise<void> {
+    this.authorizedLocalConfig = await this.hostGit(["config", "--local", "--null", "--list"]);
+  }
+
+  private async hostGit(args: string[], extraEnv: Record<string, string> = {}): Promise<string> {
+    const { stdout } = await execFileAsync("git", args, {
+      cwd: this.hostWorkspace,
+      env: {
+        ...process.env,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        ...extraEnv,
+      },
+      maxBuffer: DEFAULT_MAX_OUTPUT_BYTES,
+      encoding: "utf8",
+    });
+    return stdout;
   }
 }
