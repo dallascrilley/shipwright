@@ -58,6 +58,12 @@ export interface OperatorRunStore {
 
 export type RunReceiptLoader = (runId: string) => OperatorRunReceipt | undefined;
 
+/** Deploy-level non-secret mode flag used by operator actions and execution. */
+export function isOperatorDemoMode(): boolean {
+  // guard:allow-env-credential — deploy-level non-secret mode flag
+  return process.env.SHIPWRIGHT_UI_DEMO === "1";
+}
+
 export class MemoryOperatorRunStore implements OperatorRunStore {
   #records: OperatorRunRecord[];
 
@@ -259,7 +265,7 @@ export class OperatorRunRegistry {
         publish: input.publish,
         timeoutMinutes: input.timeoutMinutes || prior.request.timeoutMinutes,
       };
-      if (input.presetId) base.presetId = input.presetId;
+      if (input.presetId !== undefined) base.presetId = input.presetId;
       if (input.verifyCommand) base.verifyCommand = input.verifyCommand;
       if (input.skillId) base.skillId = input.skillId;
       // publishConfirmed enforced by schema when publish true
@@ -494,8 +500,7 @@ async function executePipeline(
   onProgress: (receipt: OperatorRunReceipt) => void,
   signal?: AbortSignal,
 ): Promise<OperatorRunReceipt> {
-  if (process.env.SHIPWRIGHT_UI_DEMO === "1") {
-    // guard:allow-env-credential — deploy-level non-secret mode flag
+  if (isOperatorDemoMode()) {
     return executeDemo(request, runId, onProgress, signal);
   }
   if (request.mode === "review") {

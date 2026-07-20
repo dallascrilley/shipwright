@@ -11,6 +11,7 @@ import {
   OperatorRunRegistry,
 } from "./operator-runs";
 import * as resolveTargetModule from "./resolve-target";
+import { operatorRunRequestSchema } from "../shared/operator-run";
 
 const request = {
   mode: "issue" as const,
@@ -390,6 +391,46 @@ describe("OperatorRunRegistry", () => {
     expect(cloned?.request.issueUrl).toBe(request.issueUrl);
     expect(cloned?.request.verifyCommand).toBe("bun test && bun run typecheck");
     expect(cloned?.request).not.toHaveProperty("skillPath");
+  });
+
+  test("fromRunId can clear a preset for a raw verify override", async () => {
+    const registry = new OperatorRunRegistry(
+      async (input) => ({
+        ...completeReceipt,
+        verification: {
+          command: input.verifyCommand,
+          exitCode: 0,
+          passed: true,
+        },
+      }),
+      (() => {
+        let n = 0;
+        return () => `run-${++n}`;
+      })(),
+    );
+    await registry.start({
+      ...request,
+      presetId: "bun-test-typecheck",
+      verifyCommand: "ignored-by-preset",
+    });
+    await flushMicrotasks();
+
+    await registry.start(
+      operatorRunRequestSchema.parse({
+        fromRunId: "run-1",
+        presetId: "",
+        verifyCommand: "bun run verify",
+        publish: false,
+        publishConfirmed: false,
+        timeoutMinutes: 30,
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(registry.get("run-2")?.request).toMatchObject({
+      presetId: "",
+      verifyCommand: "bun run verify",
+    });
   });
 
   test("fromRunId publish requires confirmation at schema layer", async () => {

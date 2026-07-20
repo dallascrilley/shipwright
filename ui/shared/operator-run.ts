@@ -26,9 +26,8 @@ export const operatorRunRequestSchema = z
     mode: z.enum(["issue", "review"]).default("issue"),
     issueUrl: z.string().trim().max(500).optional().default(""),
     pullRequestUrl: z.string().trim().max(500).optional().default(""),
-    skillPath: z.string().trim().max(1000).optional(),
     skillId: z.string().trim().max(200).optional().default(""),
-    presetId: z.string().trim().max(200).optional().default(""),
+    presetId: z.string().trim().max(200).optional(),
     verifyCommand: z.string().trim().min(1).max(500),
     publish: z.boolean().default(false),
     publishConfirmed: z.boolean().default(false),
@@ -62,7 +61,7 @@ export const operatorRunRequestSchema = z
           message: "Enter a canonical GitHub pull request URL.",
         });
       }
-      if (!value.skillId && !value.skillPath) {
+      if (!value.skillId) {
         context.addIssue({
           code: "custom",
           path: ["skillId"],
@@ -131,7 +130,7 @@ export interface OperatorRunReceipt {
 
 export type OperatorStoredRequest = Omit<
   OperatorRunRequest,
-  "publishConfirmed" | "fromRunId" | "skillPath"
+  "publishConfirmed" | "fromRunId"
 >;
 
 export interface OperatorRunRecord {
