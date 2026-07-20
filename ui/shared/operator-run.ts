@@ -83,6 +83,24 @@ export interface OperatorRunTarget {
   title?: string;
 }
 
+export interface OperatorTargetPinned {
+  headSha?: string;
+  openThreadCount?: number;
+}
+
+/** Thin preflight snapshot (R7); not a broad GitHub mirror. */
+export interface ResolveTargetResult {
+  kind: "issue" | "pull";
+  owner: string;
+  repo: string;
+  number: number;
+  url: string;
+  allowed: boolean;
+  title?: string;
+  denyReason?: string;
+  pinned?: OperatorTargetPinned;
+}
+
 export interface OperatorRunReceipt {
   runId: string;
   phase: OperatorRunPhase;
