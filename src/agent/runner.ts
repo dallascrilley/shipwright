@@ -17,6 +17,11 @@ export interface AgentOsRuntime {
   create(options: Parameters<typeof AgentOs.create>[0]): Promise<AgentVm>;
 }
 
+export interface AgentSkillProjection {
+  name: string;
+  content: string;
+}
+
 const DEFAULT_PI_TIMEOUT_MS = 30 * 60_000;
 const SIDECAR_FRAME_TIMEOUT_BUFFER_MS = 60_000;
 
@@ -51,6 +56,7 @@ export async function runPiAgent(
   provider: ProviderConfig,
   prompt: string,
   timeoutMs = DEFAULT_PI_TIMEOUT_MS,
+  skills: AgentSkillProjection[] = [],
 ): Promise<string> {
   let sessionId: string | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -62,6 +68,21 @@ export async function runPiAgent(
     );
     const modelsConfig = piModelsConfig(provider);
     if (modelsConfig) await vm.writeFile("/home/agentos/.pi/agent/models.json", modelsConfig);
+    if (skills.length > 0) {
+      await vm.mkdir("/home/agentos/.pi/agent/extensions", { recursive: true });
+      await vm.writeFile(
+        "/home/agentos/.pi/agent/extensions/enable-resources.cjs",
+        "module.exports = function enableResources() {};\n",
+      );
+      for (const skill of skills) {
+        if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(skill.name)) {
+          throw new Error(`invalid skill name: ${skill.name}`);
+        }
+        const directory = `/home/agentos/.pi/agent/skills/${skill.name}`;
+        await vm.mkdir(directory, { recursive: true });
+        await vm.writeFile(`${directory}/SKILL.md`, skill.content);
+      }
+    }
     ({ sessionId } = await vm.createSession("pi", {
       cwd: AGENT_WORKSPACE,
       env: {
@@ -89,6 +110,7 @@ export async function createAndRunPiAgent(
   provider: ProviderConfig,
   prompt: string,
   timeoutMs?: number,
+  skills: AgentSkillProjection[] = [],
   runtime: AgentOsRuntime = AgentOs,
 ): Promise<string> {
   const effectiveTimeoutMs = timeoutMs ?? DEFAULT_PI_TIMEOUT_MS;
@@ -102,7 +124,7 @@ export async function createAndRunPiAgent(
       toolKits: [workspace.createToolkit()],
       sidecar: { kind: "explicit", handle: sidecar },
     });
-    return await runPiAgent(vm, provider, prompt, effectiveTimeoutMs);
+    return await runPiAgent(vm, provider, prompt, effectiveTimeoutMs, skills);
   } finally {
     await sidecar.dispose();
   }

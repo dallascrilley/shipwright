@@ -9,6 +9,7 @@ function fixture(options: { verifyExit?: number; protectedFile?: boolean; publis
     async prepareForAgent() { events.push("prepare"); },
     async verify() { events.push("verify"); return { exitCode: options.verifyExit ?? 0 }; },
     async inspectChanges() { events.push("inspect"); return { changedFiles: [options.protectedFile ? ".github/workflows/x.yml" : "src/a.ts"], patch: "diff", patchBytes: 4 }; },
+    async quiesce() { events.push("quiesce"); },
     async assertRunIdentity() { events.push("identity"); },
     async commit() { events.push("commit"); return "commit1"; },
     async push() { events.push("push"); },
@@ -98,6 +99,7 @@ test("publish commits, pushes, then opens the PR", async () => {
   const receipt = await runShipwright({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 }, deps);
   expect(receipt.pullRequestUrl).toEndWith("/5");
   expect(events.indexOf("identity")).toBeLessThan(events.indexOf("commit"));
+  expect(events.indexOf("quiesce")).toBeLessThan(events.indexOf("identity"));
   expect(events.indexOf("commit")).toBeLessThan(events.indexOf("push"));
   expect(events.indexOf("push")).toBeLessThan(events.indexOf("pr"));
 });
