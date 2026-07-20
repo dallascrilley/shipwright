@@ -10,7 +10,7 @@ import {
   IconPlayerStop,
   IconTerminal2,
 } from "@tabler/icons-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -26,11 +26,15 @@ import {
 } from "@/components/ui/sheet";
 
 import {
+  detectRunModeFromUrl,
   isTerminalRun,
   operatorRunRequestSchema,
   phaseIndex,
+  resolveOperatorNextAction,
   RUN_PHASES,
   targetUrl,
+  type OperatorNextAction,
+  type OperatorNextActionView,
   type OperatorRunRecord,
   type OperatorRunRequest,
 } from "../../../shared/operator-run";
@@ -46,20 +50,57 @@ const PHASE_LABELS = {
   complete: "Complete",
 } as const;
 
-const DEFAULT_ISSUE_URL = "";
 const DEFAULT_VERIFY_COMMAND = "bun test";
+const DEFAULT_SKILL_ID = "fix-review-findings";
+
+interface VerifyPreset {
+  id: string;
+  label: string;
+  command: string;
+}
+
+function formatDuration(ms: number | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return "";
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return sec ? `${min}m ${sec}s` : `${min}m`;
+}
+
+function historyTitle(item: OperatorRunRecord): string {
+  if (item.target?.title) return item.target.title;
+  if (item.target) {
+    return `${item.target.owner}/${item.target.repo} #${item.target.number}`;
+  }
+  return targetUrl(item.request) || item.runId;
+}
+
+function historyMeta(item: OperatorRunRecord): string {
+  const bits: string[] = [];
+  if (item.target) {
+    bits.push(`${item.target.owner}/${item.target.repo} #${item.target.number}`);
+  }
+  const duration = formatDuration(item.durationMs);
+  if (duration) bits.push(duration);
+  if (item.summary) bits.push(item.summary);
+  return bits.join(" · ");
+}
 
 export function OperatorConsole() {
+  const [targetInput, setTargetInput] = useState("");
   const [mode, setMode] = useState<"issue" | "review">("issue");
-  const [issueUrl, setIssueUrl] = useState(DEFAULT_ISSUE_URL);
-  const [pullRequestUrl, setPullRequestUrl] = useState("");
-  const [skillPath, setSkillPath] = useState("");
+  const [skillId, setSkillId] = useState(DEFAULT_SKILL_ID);
+  const [presetId, setPresetId] = useState("bun-test");
   const [verifyCommand, setVerifyCommand] = useState(DEFAULT_VERIFY_COMMAND);
   const [timeoutMinutes, setTimeoutMinutes] = useState(30);
-  const [publish, setPublish] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [useRawVerify, setUseRawVerify] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingPublish, setPendingPublish] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+
   const startRun = useActionMutation("start-shipwright-run");
   const cancelRun = useActionMutation("cancel-shipwright-run");
   const historyQuery = useActionQuery(
@@ -72,6 +113,7 @@ export function OperatorConsole() {
       },
     },
   );
+  const presetsQuery = useActionQuery("list-verify-presets", {});
   const runQuery = useActionQuery(
     "get-shipwright-run",
     runId ? { runId } : {},
@@ -82,43 +124,58 @@ export function OperatorConsole() {
       },
     },
   );
+
   const record = runQuery.data as OperatorRunRecord | undefined;
   const history = (historyQuery.data as OperatorRunRecord[] | undefined) ?? [];
+  const demoMode = Boolean(
+    record?.receipt?.execution.runtime === "demo" ||
+      history.some((item) => item.receipt?.execution.runtime === "demo"),
+  );
+  const presets = (presetsQuery.data as VerifyPreset[] | undefined) ?? [];
   const active = Boolean(record && !isTerminalRun(record.status));
   const busy = startRun.isPending || active;
+  const nextActions = useMemo(
+    () => (record ? resolveOperatorNextAction(record) : null),
+    [record],
+  );
 
-  const candidate = useMemo(
-    () => ({
+  useEffect(() => {
+    const detected = detectRunModeFromUrl(targetInput);
+    if (detected) setMode(detected);
+  }, [targetInput]);
+
+  useEffect(() => {
+    if (!useRawVerify && presetId) {
+      const preset = presets.find((entry) => entry.id === presetId);
+      if (preset) setVerifyCommand(preset.command);
+    }
+  }, [presetId, presets, useRawVerify]);
+
+  function buildRequest(publish: boolean): OperatorRunRequest | null {
+    const issueUrl =
+      mode === "issue" ? targetInput.trim() : "";
+    const pullRequestUrl =
+      mode === "review" ? targetInput.trim() : "";
+    const candidate = {
       mode,
       issueUrl,
       pullRequestUrl,
-      skillPath,
+      skillId: mode === "review" ? skillId : "",
+      skillPath: "",
+      presetId: useRawVerify ? "" : presetId,
       verifyCommand,
       timeoutMinutes,
       publish,
-      publishConfirmed: false,
-    }),
-    [issueUrl, mode, publish, pullRequestUrl, skillPath, timeoutMinutes, verifyCommand],
-  );
-
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setFormError(null);
-    const validation = operatorRunRequestSchema.safeParse({
-      ...candidate,
       publishConfirmed: publish,
-    });
+    };
+    const validation = operatorRunRequestSchema.safeParse(candidate);
     if (!validation.success) {
       setFormError(
         validation.error.issues[0]?.message ?? "Check the run inputs.",
       );
-      return;
+      return null;
     }
-    if (publish) {
-      setConfirmOpen(true);
-      return;
-    }
-    void launch({ ...validation.data, publishConfirmed: false });
+    return validation.data;
   }
 
   async function launch(input: OperatorRunRequest) {
@@ -127,12 +184,29 @@ export function OperatorConsole() {
       const started = (await startRun.mutateAsync(input)) as OperatorRunRecord;
       setRunId(started.runId);
       setConfirmOpen(false);
+      setPendingPublish(false);
       void historyQuery.refetch();
     } catch (error) {
       setFormError(
         error instanceof Error ? error.message : "The run could not start.",
       );
     }
+  }
+
+  function handleDryRun(event?: FormEvent) {
+    event?.preventDefault();
+    setFormError(null);
+    const request = buildRequest(false);
+    if (!request) return;
+    void launch({ ...request, publish: false, publishConfirmed: false });
+  }
+
+  function handlePublishClick() {
+    setFormError(null);
+    const request = buildRequest(true);
+    if (!request) return;
+    setPendingPublish(true);
+    setConfirmOpen(true);
   }
 
   async function handleCancel() {
@@ -144,10 +218,104 @@ export function OperatorConsole() {
       void historyQuery.refetch();
     } catch (error) {
       setFormError(
-        error instanceof Error ? error.message : "The run could not be cancelled.",
+        error instanceof Error
+          ? error.message
+          : "The run could not be cancelled.",
       );
     }
   }
+
+  async function handleNextAction(action: OperatorNextAction) {
+    setFormError(null);
+    if (action.type === "cancel") {
+      await handleCancel();
+      return;
+    }
+    if (action.type === "open_url" && action.url) {
+      window.open(action.url, "_blank", "noreferrer");
+      return;
+    }
+    if (action.type === "fix_target") {
+      setFormError("Update the GitHub URL (and allowlist) then start again.");
+      return;
+    }
+    if (
+      action.type === "retry_dry_run" ||
+      action.type === "edit_verify_retry" ||
+      action.type === "start_publish_run"
+    ) {
+      if (!action.runId) return;
+      if (action.type === "edit_verify_retry") {
+        setAdvancedOpen(true);
+        setUseRawVerify(true);
+      }
+      if (action.type === "start_publish_run") {
+        setPendingPublish(true);
+        setConfirmOpen(true);
+        // stash fromRunId via runId already selected
+        return;
+      }
+      try {
+        const started = (await startRun.mutateAsync({
+          fromRunId: action.runId,
+          verifyCommand: record?.request.verifyCommand ?? verifyCommand,
+          publish: false,
+          publishConfirmed: false,
+          timeoutMinutes: record?.request.timeoutMinutes ?? timeoutMinutes,
+        })) as OperatorRunRecord;
+        setRunId(started.runId);
+        void historyQuery.refetch();
+      } catch (error) {
+        setFormError(
+          error instanceof Error ? error.message : "Could not retry run.",
+        );
+      }
+    }
+  }
+
+  async function confirmPublish() {
+    setFormError(null);
+    try {
+      if (record && isTerminalRun(record.status) && !record.request.publish) {
+        const started = (await startRun.mutateAsync({
+          fromRunId: record.runId,
+          verifyCommand: record.request.verifyCommand,
+          presetId: record.request.presetId,
+          skillId: record.request.skillId,
+          publish: true,
+          publishConfirmed: true,
+          timeoutMinutes: record.request.timeoutMinutes,
+        })) as OperatorRunRecord;
+        setRunId(started.runId);
+        setConfirmOpen(false);
+        setPendingPublish(false);
+        void historyQuery.refetch();
+        return;
+      }
+      const request = buildRequest(true);
+      if (!request) return;
+      await launch({ ...request, publish: true, publishConfirmed: true });
+    } catch (error) {
+      setFormError(
+        error instanceof Error ? error.message : "Publish run could not start.",
+      );
+    }
+  }
+
+  const confirmTarget =
+    pendingPublish && record && !record.request.publish
+      ? targetUrl(record.request)
+      : targetInput;
+
+  const confirmVerify =
+    pendingPublish && record && !record.request.publish
+      ? record.request.verifyCommand
+      : verifyCommand;
+
+  const pinnedSha =
+    pendingPublish && record?.receipt?.baseSha
+      ? record.receipt.baseSha.slice(0, 7)
+      : null;
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-6 lg:px-8 lg:py-10">
@@ -161,18 +329,22 @@ export function OperatorConsole() {
             Operator console
           </h1>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
-            Run issue-to-PR or review-agent workflows in an isolated sandbox.
-            Verification stays independent, credentials stay on the host, and
-            publish still requires a second confirmation.
+            Paste a GitHub issue or PR, dry-run first, then start a separate
+            publish run when ready. Credentials stay on the host.
           </p>
         </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="size-2 rounded-full bg-emerald-500" />
-          Private operator service
+        <div className="flex flex-col items-end gap-2 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-2 rounded-full border border-border px-2.5 py-1 font-medium">
+            <span
+              className={`size-2 rounded-full ${demoMode ? "bg-amber-500" : "bg-emerald-500"}`}
+            />
+            {demoMode ? "Demo mode" : "Live"}
+          </span>
+          <span>Private operator service</span>
         </div>
       </header>
 
-      <div className="grid gap-8 xl:grid-cols-[220px_minmax(0,0.92fr)_minmax(420px,1.08fr)] lg:grid-cols-[minmax(0,0.92fr)_minmax(420px,1.08fr)]">
+      <div className="grid gap-8 xl:grid-cols-[240px_minmax(0,0.92fr)_minmax(420px,1.08fr)] lg:grid-cols-[minmax(0,0.92fr)_minmax(420px,1.08fr)]">
         <aside className="space-y-3 lg:order-first xl:order-none">
           <div>
             <h2 className="text-sm font-semibold">Run history</h2>
@@ -199,10 +371,10 @@ export function OperatorConsole() {
                           : "border-border hover:bg-muted/40"
                       }`}
                     >
-                      <span className="block font-mono text-[11px] text-muted-foreground">
-                        {item.runId.slice(0, 10)}
+                      <span className="block text-xs font-medium leading-snug">
+                        {historyTitle(item)}
                       </span>
-                      <span className="mt-1 block text-xs font-medium">
+                      <span className="mt-1 block text-[11px] text-muted-foreground">
                         {item.status === "succeeded"
                           ? "Succeeded"
                           : item.status === "failed"
@@ -212,7 +384,10 @@ export function OperatorConsole() {
                               : PHASE_LABELS[item.phase]}
                       </span>
                       <span className="mt-1 block truncate text-[11px] text-muted-foreground">
-                        {targetUrl(item.request)}
+                        {historyMeta(item)}
+                      </span>
+                      <span className="mt-1 block font-mono text-[10px] text-muted-foreground/80">
+                        {item.runId.slice(0, 10)}
                       </span>
                     </button>
                   </li>
@@ -222,7 +397,10 @@ export function OperatorConsole() {
           </ul>
         </aside>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form
+          onSubmit={handleDryRun}
+          className="space-y-6"
+        >
           <section className="space-y-5">
             <div>
               <h2 className="text-lg font-semibold">Run specification</h2>
@@ -232,117 +410,123 @@ export function OperatorConsole() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="run-mode">Workflow</Label>
-              <select
-                id="run-mode"
-                value={mode}
-                disabled={busy}
-                onChange={(event) =>
-                  setMode(event.target.value === "review" ? "review" : "issue")
-                }
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none"
-              >
-                <option value="issue">Issue to pull request</option>
-                <option value="review">Review existing pull request</option>
-              </select>
-            </div>
-
-            {mode === "issue" ? (
-              <div className="space-y-2">
-                <Label htmlFor="issue-url">GitHub issue URL</Label>
-                <Input
-                  id="issue-url"
-                  type="url"
-                  value={issueUrl}
-                  onChange={(event) => setIssueUrl(event.target.value)}
-                  placeholder="https://github.com/owner/repo/issues/123"
-                  autoComplete="off"
-                  required
-                  disabled={busy}
-                />
-              </div>
-            ) : (
-              <>
-                <div className="space-y-2">
-                  <Label htmlFor="pull-request-url">GitHub pull request URL</Label>
-                  <Input
-                    id="pull-request-url"
-                    type="url"
-                    value={pullRequestUrl}
-                    onChange={(event) => setPullRequestUrl(event.target.value)}
-                    placeholder="https://github.com/owner/repo/pull/123"
-                    autoComplete="off"
-                    required
-                    disabled={busy}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="skill-path">fix-review-findings skill path</Label>
-                  <Input
-                    id="skill-path"
-                    value={skillPath}
-                    onChange={(event) => setSkillPath(event.target.value)}
-                    placeholder="/absolute/path/to/fix-review-findings/SKILL.md"
-                    autoComplete="off"
-                    required
-                    disabled={busy}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Server-side absolute path only. The skill body is never sent to the browser.
-                  </p>
-                </div>
-              </>
-            )}
-
-            <div className="space-y-2">
-              <Label htmlFor="verify-command">Verification command</Label>
+              <Label htmlFor="target-url">GitHub issue or pull request URL</Label>
               <Input
-                id="verify-command"
-                value={verifyCommand}
-                onChange={(event) => setVerifyCommand(event.target.value)}
-                placeholder="bun test"
+                id="target-url"
+                type="url"
+                value={targetInput}
+                onChange={(event) => setTargetInput(event.target.value)}
+                placeholder="https://github.com/owner/repo/issues/123"
                 autoComplete="off"
                 required
                 disabled={busy}
               />
               <p className="text-xs text-muted-foreground">
-                Runs independently after the coding agent finishes.
+                Detected workflow:{" "}
+                <span className="font-medium text-foreground">
+                  {mode === "review"
+                    ? "Review existing pull request"
+                    : "Issue to pull request"}
+                </span>
               </p>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            {mode === "review" && (
               <div className="space-y-2">
-                <Label htmlFor="timeout">Timeout in minutes</Label>
-                <Input
-                  id="timeout"
-                  type="number"
-                  min={1}
-                  max={60}
-                  value={timeoutMinutes}
-                  onChange={(event) =>
-                    setTimeoutMinutes(Number(event.target.value))
-                  }
+                <Label htmlFor="skill-id">Review skill</Label>
+                <select
+                  id="skill-id"
+                  value={skillId}
                   disabled={busy}
-                />
+                  onChange={(event) => setSkillId(event.target.value)}
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none"
+                >
+                  <option value="fix-review-findings">
+                    fix-review-findings
+                  </option>
+                </select>
               </div>
-              <label className="flex cursor-pointer items-center justify-between gap-4 rounded-md border border-border px-4 py-3">
-                <span>
-                  <span className="block text-sm font-medium">
-                    Publish pull request
-                  </span>
-                  <span className="block text-xs text-muted-foreground">
-                    Requires confirmation
-                  </span>
-                </span>
-                <input
-                  type="checkbox"
-                  checked={publish}
-                  onChange={(event) => setPublish(event.target.checked)}
-                  disabled={busy}
-                  className="size-4 accent-primary"
-                />
-              </label>
+            )}
+
+            <div className="space-y-2">
+              <Label htmlFor="verify-preset">Verification preset</Label>
+              <select
+                id="verify-preset"
+                value={useRawVerify ? "" : presetId}
+                disabled={busy || useRawVerify}
+                onChange={(event) => {
+                  setUseRawVerify(false);
+                  setPresetId(event.target.value);
+                }}
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none"
+              >
+                {(presets.length
+                  ? presets
+                  : [
+                      {
+                        id: "bun-test",
+                        label: "bun test",
+                        command: "bun test",
+                      },
+                    ]
+                ).map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+              <p className="font-mono text-xs text-muted-foreground">
+                {verifyCommand}
+              </p>
             </div>
+
+            <details
+              open={advancedOpen}
+              onToggle={(event) =>
+                setAdvancedOpen((event.target as HTMLDetailsElement).open)
+              }
+              className="rounded-md border border-border px-3 py-2"
+            >
+              <summary className="cursor-pointer text-sm font-medium">
+                Advanced
+              </summary>
+              <div className="mt-4 space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="timeout">Timeout in minutes</Label>
+                  <Input
+                    id="timeout"
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={timeoutMinutes}
+                    onChange={(event) =>
+                      setTimeoutMinutes(Number(event.target.value))
+                    }
+                    disabled={busy}
+                  />
+                </div>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={useRawVerify}
+                    disabled={busy}
+                    onChange={(event) => setUseRawVerify(event.target.checked)}
+                  />
+                  Use raw verification command
+                </label>
+                {useRawVerify && (
+                  <div className="space-y-2">
+                    <Label htmlFor="verify-command">Verification command</Label>
+                    <Input
+                      id="verify-command"
+                      value={verifyCommand}
+                      onChange={(event) => setVerifyCommand(event.target.value)}
+                      disabled={busy}
+                    />
+                  </div>
+                )}
+              </div>
+            </details>
           </section>
 
           {formError && (
@@ -364,7 +548,17 @@ export function OperatorConsole() {
               ) : (
                 <IconPlayerPlay />
               )}
-              {publish ? "Review and publish" : "Start dry run"}
+              Dry run
+            </Button>
+            <Button
+              type="button"
+              size="lg"
+              variant="outline"
+              disabled={busy}
+              onClick={handlePublishClick}
+              className="w-full sm:w-auto"
+            >
+              Publish…
             </Button>
             {active && (
               <Button
@@ -386,47 +580,53 @@ export function OperatorConsole() {
           </div>
         </form>
 
-        <RunProgress record={record} loading={runQuery.isLoading} />
+        <RunProgress
+          record={record}
+          loading={runQuery.isLoading}
+          nextActions={nextActions}
+          onAction={(action) => void handleNextAction(action)}
+          actionPending={startRun.isPending || cancelRun.isPending}
+        />
       </div>
 
       <Sheet open={confirmOpen} onOpenChange={setConfirmOpen}>
         <SheetContent className="sm:max-w-lg">
           <SheetHeader>
-            <SheetTitle>Confirm publication</SheetTitle>
+            <SheetTitle>Confirm publication run</SheetTitle>
             <SheetDescription>
-              A successful run will commit the verified changes, push a new
-              branch, and open or reuse a pull request in the issue repository.
+              This starts a <strong>new</strong> publish run with the same
+              inputs. The agent reruns and may produce a different diff. It does
+              not promote a prior dry-run workspace. The run re-authorizes and
+              re-verifies before any push.
+              {pinnedSha ? ` Prior pinned head: ${pinnedSha}.` : ""}
             </SheetDescription>
           </SheetHeader>
           <div className="my-6 space-y-3 rounded-md border border-border bg-muted/30 p-4 text-sm">
-            <p className="font-medium break-all">
-              {mode === "review" ? pullRequestUrl : issueUrl}
-            </p>
+            <p className="font-medium break-all">{confirmTarget}</p>
             {mode === "review" && (
               <p className="font-mono text-xs text-muted-foreground break-all">
-                skill: {skillPath}
+                skill: {skillId}
               </p>
             )}
             <p className="font-mono text-xs text-muted-foreground break-all">
-              {verifyCommand}
+              {confirmVerify}
             </p>
+            {demoMode && (
+              <p className="text-xs text-amber-700 dark:text-amber-300">
+                Demo mode will refuse real publish after confirm.
+              </p>
+            )}
           </div>
           <SheetFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>
               Keep as draft
             </Button>
             <Button
-              onClick={() =>
-                void launch({
-                  ...candidate,
-                  publish: true,
-                  publishConfirmed: true,
-                })
-              }
+              onClick={() => void confirmPublish()}
               disabled={startRun.isPending}
             >
               {startRun.isPending && <IconLoader2 className="animate-spin" />}
-              Publish after verification
+              Start publish run
             </Button>
           </SheetFooter>
         </SheetContent>
@@ -438,13 +638,20 @@ export function OperatorConsole() {
 function RunProgress({
   record,
   loading,
+  nextActions,
+  onAction,
+  actionPending,
 }: {
   record?: OperatorRunRecord;
   loading: boolean;
+  nextActions: OperatorNextActionView | null;
+  onAction: (action: OperatorNextAction) => void;
+  actionPending: boolean;
 }) {
   const visiblePhases = RUN_PHASES.filter((phase) => {
     if (phase === "publish") return Boolean(record?.request.publish);
-    if (phase === "threads") return record?.kind === "review" || record?.request.mode === "review";
+    if (phase === "threads")
+      return record?.kind === "review" || record?.request.mode === "review";
     return true;
   });
   const currentIndex = record ? phaseIndex(record.phase) : -1;
@@ -466,12 +673,58 @@ function RunProgress({
             <IconGitPullRequest className="mb-4 size-8 text-muted-foreground" />
             <p className="font-medium">No run selected</p>
             <p className="mt-1 max-w-xs text-sm text-muted-foreground">
-              Start with a dry run. Phase updates, changed files, and
-              verification results will appear here.
+              Paste a GitHub URL and start a dry run. History, phase updates, and
+              the next action will appear here.
             </p>
           </div>
         ) : (
           <>
+            {nextActions && (
+              <div className="space-y-3 rounded-md border border-border bg-muted/20 p-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Status
+                  </p>
+                  <p className="mt-1 text-base font-semibold">
+                    {nextActions.headline}
+                  </p>
+                  {record?.operatorHint && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {record.operatorHint}
+                    </p>
+                  )}
+                  {nextActions.primary.caveat && (
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                      {nextActions.primary.caveat}
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    disabled={actionPending || nextActions.primary.type === "none"}
+                    onClick={() => onAction(nextActions.primary)}
+                  >
+                    {actionPending ? (
+                      <IconLoader2 className="animate-spin" />
+                    ) : null}
+                    {nextActions.primary.label}
+                  </Button>
+                  {nextActions.secondary.map((action) => (
+                    <Button
+                      key={`${action.type}-${action.label}`}
+                      type="button"
+                      variant="outline"
+                      disabled={actionPending}
+                      onClick={() => onAction(action)}
+                    >
+                      {action.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <ol className="grid gap-2 sm:grid-cols-2">
               {visiblePhases.map((phase) => {
                 const index = phaseIndex(phase);
@@ -500,7 +753,8 @@ function RunProgress({
             {record?.receipt && (
               <div className="grid gap-4 border-t border-border pt-5 sm:grid-cols-2">
                 <Evidence label="Provider">
-                  {record.receipt.execution.provider}/{record.receipt.execution.model}
+                  {record.receipt.execution.provider}/
+                  {record.receipt.execution.model}
                 </Evidence>
                 <Evidence label="Verification">
                   <span
@@ -520,12 +774,22 @@ function RunProgress({
                 <Evidence label="Changed files">
                   {record.receipt.changedFiles.length || "Pending"}
                 </Evidence>
+                {record.durationMs != null && (
+                  <Evidence label="Duration">
+                    {formatDuration(record.durationMs)}
+                  </Evidence>
+                )}
                 {record.receipt.branch && (
                   <Evidence label="Branch">{record.receipt.branch}</Evidence>
                 )}
                 {record.receipt.commitSha && (
                   <Evidence label="Commit">
                     {record.receipt.commitSha.slice(0, 10)}
+                  </Evidence>
+                )}
+                {record.receipt.baseSha && (
+                  <Evidence label="Pinned head">
+                    {record.receipt.baseSha.slice(0, 10)}
                   </Evidence>
                 )}
               </div>
