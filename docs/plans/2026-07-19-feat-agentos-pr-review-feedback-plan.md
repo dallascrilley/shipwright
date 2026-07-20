@@ -23,7 +23,10 @@ The existing programming agent proves issue-to-new-PR publication. It cannot upd
 - [x] (2026-07-20 00:56Z) U3. Added the host-owned review pipeline, atomic receipt, CLI, docs, exact-head recheck, idempotent reply/resolve loop, and no-code outcomes; all 73 deterministic tests and typecheck passed.
 - [x] (2026-07-20 01:00Z) U4. Independently reviewed the runner, fixed credential-boundary and pagination findings, merged PR #9 at reviewed head `c4870ed7926cd779dca6659f3c7e6c85434fd336`, and pinned the proof worktree to merge `ea5beb1d6cda66230eda514c4bf916a676d0864c`.
 - [x] (2026-07-20 01:29Z) Registered the private organization-owned Shipwright DCM App, restricted installation `147693967` to `.hub`, stored its key in 1Password, and repaired the runner's dot-prefixed-repository token path with a red-green regression test and live App-authenticated probe.
-- [ ] U5. Run one bounded Kimi request against `.hub#1029`, reconcile receipt/head/threads, verify the exact remote head, audit secrets, and prove cleanup.
+- [ ] U5. Run one bounded Kimi request against a PR with unresolved current threads, reconcile receipt/head/threads, verify the exact remote head, audit secrets, and prove cleanup.
+  - 2026-07-20: Retargeted from `.hub#1029` (0 unresolved current threads) to `.hub#1028` (2 unresolved current threads at head `91e7c16fc3754a3f89b2fe53686bd528084a3a02`).
+  - 2026-07-20: Unblocked AgentOS Pi `session/new` on macOS/OrbStack via home-local workspaces + `enable-resources.ts` (see fix/agentos-host-realpath).
+  - 2026-07-20: Two dry-runs with Kimi progressed past session creation but failed at agent phase: missing `.agentos-review-resolution.json` outcome artifact. No publish attempted. Receipts under `.artifacts/shipwright-u5-proof4` and `proof5`.
 
 ## Requirements
 
@@ -150,3 +153,4 @@ Implementation and integration are complete, including the live GitHub App autho
 - 2026-07-19: Marked U3 complete after 73 deterministic tests and typecheck; added a pre-publication live PR-state recheck.
 - 2026-07-19: Closed one HIGH token-boundary finding and one MEDIUM pagination finding from local review; fresh full tests, typecheck, and two Docker behavior tests passed.
 - 2026-07-20: Recorded PR #9 integration, Shipwright DCM credentials and installation, the dot-prefixed repository token fix, and the live-target race that left no unresolved findings before the Kimi request.
+- 2026-07-20: Live-proof lane unblocked AgentOS session creation on OrbStack; U5 still open because Kimi dry-runs did not write the required outcome artifact on `.hub#1028`.
