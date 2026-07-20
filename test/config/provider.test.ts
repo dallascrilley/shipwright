@@ -24,6 +24,12 @@ describe("resolveProvider", () => {
     ).toMatchObject({ name: "openrouter" });
   });
 
+  test("selects Kimi automatically when it is the only configured provider", () => {
+    expect(
+      resolveProvider({ KIMI_API_KEY: "test-key" }),
+    ).toMatchObject({ name: "kimi", model: "kimi-for-coding", env: { KIMI_API_KEY: "test-key" } });
+  });
+
   test("fails clearly when no configured provider exists", () => {
     expect(() => resolveProvider({})).toThrow("API_KEY");
     expect(() => resolveProvider({ AGENTOS_PROVIDER: "openai" })).toThrow("AGENTOS_PROVIDER");
