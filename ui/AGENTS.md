@@ -1,6 +1,6 @@
 # ui — Agent Guide
 
-This app adapts the Agent Native chat template into a local programming-agent
+This app adapts the Agent Native chat template into the Shipwright
 operator console. Keep `/` as the receipt-first operator surface and `/chat` as
 the shared agent conversation surface.
 
@@ -45,14 +45,15 @@ the shared agent conversation surface.
 
 ## Operator actions
 
-- `start-programming-run` is the only start boundary. Dry-run is the default,
+- `start-shipwright-run` is the only start boundary. Dry-run is the default,
   publishing requires explicit confirmation, and only one run may be active.
-- `get-programming-run` returns a named run or the latest in-process run for
+- `get-shipwright-run` returns a named run or the latest durable run for
   browser-refresh recovery.
 - Keep GitHub App credentials, git publication, verification, and policy in the
   root host pipeline. Never add browser-side GitHub or push logic.
-- The V1 registry is local and single-operator; cross-restart resumption and
-  multi-user tenancy are intentionally deferred.
+- The registry is durable and single-operator. A restart reconciles an active
+  record to an interrupted failure; automatic run resumption and multi-user
+  tenancy are intentionally deferred.
 
 ## Framework Docs Lookup
 

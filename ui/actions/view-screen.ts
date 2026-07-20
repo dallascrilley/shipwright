@@ -15,7 +15,7 @@ import { getOperatorRunRegistry } from "../server/operator-runs";
 
 export default defineAction({
   description:
-    "See what the user is currently looking at, including navigation and the latest programming-agent run. Always call this first before taking another action.",
+    "See what the user is currently looking at, including navigation and the latest Shipwright run. Always call this first before taking another action.",
   schema: z.object({}),
   http: false,
   readOnly: true,
