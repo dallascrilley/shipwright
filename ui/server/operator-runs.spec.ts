@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { RunReceipt } from "../../src/pipeline/receipt";
 import {
@@ -10,6 +10,7 @@ import {
   MemoryOperatorRunStore,
   OperatorRunRegistry,
 } from "./operator-runs";
+import * as resolveTargetModule from "./resolve-target";
 
 const request = {
   mode: "issue" as const,
@@ -411,4 +412,22 @@ describe("OperatorRunRegistry", () => {
     await flushMicrotasks();
   });
 
+  test("rejects start when resolve-target denies the URL", async () => {
+    const spy = vi.spyOn(resolveTargetModule, "resolveTarget").mockResolvedValue({
+      kind: "issue",
+      owner: "dallascrilley",
+      repo: "example",
+      number: 12,
+      url: request.issueUrl,
+      allowed: false,
+      denyReason: "repository is not in the GitHub repository allowlist",
+    });
+    const registry = new OperatorRunRegistry(
+      async () => completeReceipt,
+      () => "run-1",
+    );
+
+    await expect(registry.start(request)).rejects.toThrow(/allowlist/i);
+    spy.mockRestore();
+  });
 });
