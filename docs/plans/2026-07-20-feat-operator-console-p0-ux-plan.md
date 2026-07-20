@@ -301,11 +301,11 @@ Actions:
 ## Progress
 
 - [x] (2026-07-20) Plan authored from live console + pipeline review.
-- [ ] U1 shared view model
-- [ ] U2 skillId normalization
-- [ ] U3 verify presets
-- [ ] U4 fromRunId
-- [ ] U5 OperatorConsole UI
+- [x] U1 shared view model
+- [x] U2 skillId normalization
+- [x] U3 verify presets
+- [x] U4 fromRunId
+- [x] U5 OperatorConsole UI
 - [ ] U6 resolve-target (optional same epic)
 - [ ] Validation checklist green
 
