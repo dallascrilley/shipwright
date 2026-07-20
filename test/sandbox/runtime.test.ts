@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   parseNulList,
   requireSuccessfulCommand,
+  resolveSandboxContainerUser,
   resolveSandboxImage,
 } from "../../src/sandbox/runtime.js";
 
@@ -49,5 +50,11 @@ describe("sandbox command helpers", () => {
     expect(() => resolveSandboxImage("registry.example.com/shipwright:latest")).toThrow(
       "immutable sha256 digest",
     );
+  });
+
+  test("matches the sandbox container user to the Linux host workspace owner", () => {
+    expect(resolveSandboxContainerUser("linux", 996, 988)).toBe("996:988");
+    expect(resolveSandboxContainerUser("darwin", 501, 20)).toBeUndefined();
+    expect(resolveSandboxContainerUser("linux", undefined, undefined)).toBeUndefined();
   });
 });

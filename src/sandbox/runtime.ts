@@ -52,6 +52,14 @@ export function resolveSandboxImage(configured?: string): string {
   return image;
 }
 
+export function resolveSandboxContainerUser(
+  platform: NodeJS.Platform,
+  uid: number | undefined,
+  gid: number | undefined,
+): string | undefined {
+  return platform === "linux" && uid !== undefined && gid !== undefined ? `${uid}:${gid}` : undefined;
+}
+
 export function requireSuccessfulCommand(label: string, result: ProcessRunResponse): ProcessRunResponse {
   if (result.timedOut) throw new Error(`${label} timed out`);
   if (result.stdoutTruncated || result.stderrTruncated) {
@@ -73,10 +81,16 @@ export class SandboxWorkspace {
   static async start(): Promise<SandboxWorkspace> {
     const hostWorkspace = await mkdtemp(join(tmpdir(), "shipwright-workspace-"));
     try {
+      const containerUser = resolveSandboxContainerUser(
+        process.platform,
+        typeof process.getuid === "function" ? process.getuid() : undefined,
+        typeof process.getgid === "function" ? process.getgid() : undefined,
+      );
       const client = await SandboxAgent.start({
         sandbox: docker({
           image: resolveSandboxImage(process.env.SHIPWRIGHT_SANDBOX_IMAGE),
           binds: [`${hostWorkspace}:${SANDBOX_WORKSPACE}`],
+          createContainerOptions: containerUser ? { User: containerUser } : undefined,
         }),
       });
       return new SandboxWorkspace(client, hostWorkspace);
@@ -101,7 +115,7 @@ export class SandboxWorkspace {
   async initialize(): Promise<void> {
     await this.runOrThrow("workspace initialization", {
       command: "sh",
-      args: ["-lc", `mkdir -p ${SANDBOX_WORKSPACE} && test -z "$(find ${SANDBOX_WORKSPACE} -mindepth 1 -maxdepth 1 -print -quit)"`],
+      args: ["-lc", `mkdir -p ${SANDBOX_WORKSPACE} && test -r ${SANDBOX_WORKSPACE} && test -w ${SANDBOX_WORKSPACE} && test -x ${SANDBOX_WORKSPACE} && test -z "$(find ${SANDBOX_WORKSPACE} -mindepth 1 -maxdepth 1 -print -quit)"`],
       cwd: "/",
     });
   }
