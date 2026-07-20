@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import type { ProcessRunResponse } from "sandbox-agent";
 import type { AuthorizedIssue } from "../github/app-client.js";
 import { parseIssueUrl } from "../github/issue-ref.js";
 import { openOrReusePullRequest, pullRequestBody } from "../github/publisher.js";
@@ -8,12 +7,12 @@ import type { PullRequestResult } from "../github/types.js";
 import { buildProgrammingPrompt } from "../agent/prompt.js";
 import { PipelineError } from "./errors.js";
 import { assertPublishableChange } from "./policy.js";
-import { type AgentExecution, type RunReceipt, writeReceipt } from "./receipt.js";
+import { redactSecrets, truncateTail, type AgentExecution, type RunReceipt, writeReceipt } from "./receipt.js";
 
 export interface WorkspacePort {
   clone(input: { owner: string; repo: string; defaultBranch: string; baseSha: string; branch: string; token: string }): Promise<void>;
   prepareForAgent(): Promise<void>;
-  verify(command: string, timeoutMs: number): Promise<Pick<ProcessRunResponse, "exitCode">>;
+  verify(command: string, timeoutMs: number): Promise<{ exitCode?: number | null; stdout?: string; stderr?: string }>;
   inspectChanges(): Promise<{ changedFiles: string[]; patch: string; patchBytes: number }>;
   quiesce(): Promise<void>;
   assertRunIdentity(baseSha: string, branch: string): Promise<void>;
@@ -96,8 +95,16 @@ export async function runShipwright(request: RunRequest, deps: PipelineDependenc
     );
     receipt.verification.exitCode = verification.exitCode ?? null;
     receipt.verification.passed = verification.exitCode === 0;
+    if (verification.stdout) {
+      receipt.verification.stdoutTail = redactSecrets(truncateTail(verification.stdout));
+    }
+    if (verification.stderr) {
+      receipt.verification.stderrTail = redactSecrets(truncateTail(verification.stderr));
+    }
     await emitProgress();
-    if (!receipt.verification.passed) throw new PipelineError("verify", "verification_failed", "independent verification failed");
+    if (!receipt.verification.passed) {
+      throw new PipelineError("verify", "verification_failed", "independent verification failed");
+    }
 
     deps.signal?.throwIfAborted();
     receipt.phase = "policy";
@@ -111,6 +118,7 @@ export async function runShipwright(request: RunRequest, deps: PipelineDependenc
     if (request.publish) {
       receipt.phase = "publish";
       await emitProgress();
+      deps.signal?.throwIfAborted();
       const finalChanges = await workspace.inspectChanges();
       if (
         finalChanges.patch !== changes.patch ||
@@ -118,10 +126,15 @@ export async function runShipwright(request: RunRequest, deps: PipelineDependenc
       ) {
         throw new PipelineError("publish", "changes_moved", "repository changes moved after policy inspection");
       }
+      deps.signal?.throwIfAborted();
       await workspace.quiesce();
+      deps.signal?.throwIfAborted();
       await workspace.assertRunIdentity(authorized.issue.baseSha, branch);
+      deps.signal?.throwIfAborted();
       receipt.commitSha = await workspace.commit(`fix: ${authorized.issue.title} (#${authorized.issue.number})`);
+      deps.signal?.throwIfAborted();
       await authorized.withInstallationToken((token) => workspace!.push(branch, token));
+      deps.signal?.throwIfAborted();
       const pr = await deps.openPullRequest(authorized, {
         owner: authorized.issue.owner,
         repo: authorized.issue.repo,
@@ -147,9 +160,18 @@ export async function runShipwright(request: RunRequest, deps: PipelineDependenc
     await deps.writeReceipt(receiptPath, receipt);
     return receipt;
   } catch (error) {
-    const pipelineError = error instanceof PipelineError ? error : new PipelineError(receipt.phase, `${receipt.phase}_failed`, error instanceof Error ? error.message : String(error), { cause: error });
+    const pipelineError =
+      error instanceof PipelineError
+        ? error
+        : new PipelineError(
+            receipt.phase,
+            `${receipt.phase}_failed`,
+            error instanceof Error ? error.message : String(error),
+            { cause: error },
+          );
     receipt.phase = pipelineError.phase;
     receipt.errorCode = pipelineError.code;
+    receipt.errorMessage = redactSecrets(pipelineError.message);
     await emitProgress();
     await deps.writeReceipt(receiptPath, receipt);
     throw pipelineError;

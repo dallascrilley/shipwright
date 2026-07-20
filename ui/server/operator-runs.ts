@@ -8,32 +8,38 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { createPipelineDependencies } from "../../src/cli/dependencies.js";
+import {
+  createPipelineDependencies,
+  createReviewPipelineDependencies,
+} from "../../src/cli/dependencies.js";
 import { resolveShipwrightStateDirectory } from "../../src/config/state.js";
 import { redactSecrets, type RunReceipt } from "../../src/pipeline/receipt.js";
-import {
-  runShipwright,
-  type RunRequest,
-} from "../../src/pipeline/run.js";
+import type { ReviewRunReceipt } from "../../src/pipeline/review-receipt.js";
+import { runReviewAgent } from "../../src/pipeline/review-run.js";
+import { runShipwright } from "../../src/pipeline/run.js";
 import type {
   OperatorRunPhase,
+  OperatorRunReceipt,
   OperatorRunRecord,
   OperatorRunRequest,
 } from "../shared/operator-run";
 import { isTerminalRun } from "../shared/operator-run";
 
+type StoredRequest = Omit<OperatorRunRequest, "publishConfirmed">;
+
 export type RunExecutor = (
-  request: RunRequest,
+  request: StoredRequest,
   runId: string,
-  onProgress: (receipt: RunReceipt) => void,
-) => Promise<RunReceipt>;
+  onProgress: (receipt: OperatorRunReceipt) => void,
+  signal?: AbortSignal,
+) => Promise<OperatorRunReceipt>;
 
 export interface OperatorRunStore {
   load(): OperatorRunRecord[];
   save(records: readonly OperatorRunRecord[]): void;
 }
 
-export type RunReceiptLoader = (runId: string) => RunReceipt | undefined;
+export type RunReceiptLoader = (runId: string) => OperatorRunReceipt | undefined;
 
 export class MemoryOperatorRunStore implements OperatorRunStore {
   #records: OperatorRunRecord[];
@@ -88,8 +94,27 @@ export class JsonFileOperatorRunStore implements OperatorRunStore {
   }
 }
 
+function normalizeRecord(stored: OperatorRunRecord): OperatorRunRecord {
+  const mode = stored.request?.mode ?? stored.kind ?? "issue";
+  const kind = stored.kind ?? (mode === "review" ? "review" : "issue");
+  return {
+    ...stored,
+    kind,
+    request: {
+      mode,
+      issueUrl: stored.request?.issueUrl ?? "",
+      pullRequestUrl: stored.request?.pullRequestUrl ?? "",
+      skillPath: stored.request?.skillPath ?? "",
+      verifyCommand: stored.request?.verifyCommand ?? "",
+      publish: Boolean(stored.request?.publish),
+      timeoutMinutes: stored.request?.timeoutMinutes ?? 30,
+    },
+  };
+}
+
 export class OperatorRunRegistry {
   readonly #records = new Map<string, OperatorRunRecord>();
+  readonly #controllers = new Map<string, AbortController>();
 
   constructor(
     private readonly execute: RunExecutor = executePipeline,
@@ -101,7 +126,7 @@ export class OperatorRunRegistry {
   ) {
     let reconciled = false;
     for (const stored of this.store.load()) {
-      const record = structuredClone(stored);
+      const record = normalizeRecord(structuredClone(stored));
       if (!isTerminalRun(record.status)) {
         const durableReceipt = this.loadReceipt(record.runId);
         if (durableReceipt?.phase === "complete") {
@@ -133,12 +158,18 @@ export class OperatorRunRegistry {
 
     const now = this.now();
     const runId = this.createRunId();
+    const controller = new AbortController();
+    const mode = input.mode ?? "issue";
     const record: OperatorRunRecord = {
       runId,
       status: "queued",
       phase: "intake",
+      kind: mode === "review" ? "review" : "issue",
       request: {
-        issueUrl: input.issueUrl,
+        mode,
+        issueUrl: input.issueUrl ?? "",
+        pullRequestUrl: input.pullRequestUrl ?? "",
+        skillPath: input.skillPath ?? "",
         verifyCommand: input.verifyCommand,
         publish: input.publish,
         timeoutMinutes: input.timeoutMinutes,
@@ -147,8 +178,9 @@ export class OperatorRunRegistry {
       updatedAt: now,
     };
     this.#records.set(runId, record);
+    this.#controllers.set(runId, controller);
     this.#persist();
-    queueMicrotask(() => void this.#run(record));
+    queueMicrotask(() => void this.#run(record, controller));
     return structuredClone(record);
   }
 
@@ -163,7 +195,34 @@ export class OperatorRunRegistry {
     return record ? structuredClone(record) : undefined;
   }
 
-  async #run(initial: OperatorRunRecord): Promise<void> {
+  list(limit = 50): OperatorRunRecord[] {
+    const bounded = Math.max(1, Math.min(limit, 200));
+    return [...this.#records.values()]
+      .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
+      .slice(0, bounded)
+      .map((record) => structuredClone(record));
+  }
+
+  cancel(runId: string): OperatorRunRecord {
+    const record = this.#records.get(runId);
+    if (!record) {
+      throw new Error(`Unknown run ${runId}.`);
+    }
+    if (isTerminalRun(record.status)) {
+      return structuredClone(record);
+    }
+    const controller = this.#controllers.get(runId);
+    if (!controller) {
+      throw new Error(`Run ${runId} is not cancellable.`);
+    }
+    controller.abort(new Error("Run cancelled by operator."));
+    return structuredClone(this.#records.get(runId) ?? record);
+  }
+
+  async #run(
+    initial: OperatorRunRecord,
+    controller: AbortController,
+  ): Promise<void> {
     this.#replace(initial.runId, { status: "running" });
     try {
       const receipt = await this.execute(
@@ -176,6 +235,7 @@ export class OperatorRunRegistry {
             receipt: progress,
           });
         },
+        controller.signal,
       );
       this.#replace(initial.runId, {
         status: "succeeded",
@@ -184,13 +244,26 @@ export class OperatorRunRegistry {
       });
     } catch (error) {
       const current = this.#records.get(initial.runId);
+      const message = redactSecrets(
+        error instanceof Error ? error.message : String(error),
+      );
+      const receipt = current?.receipt
+        ? {
+            ...structuredClone(current.receipt),
+            errorMessage: current.receipt.errorMessage ?? message,
+            errorCode:
+              current.receipt.errorCode ??
+              (controller.signal.aborted ? "cancelled" : undefined),
+          }
+        : current?.receipt;
       this.#replace(initial.runId, {
         status: "failed",
         phase: current?.phase ?? "intake",
-        message: redactSecrets(
-          error instanceof Error ? error.message : String(error),
-        ),
+        message,
+        ...(receipt ? { receipt } : {}),
       });
+    } finally {
+      this.#controllers.delete(initial.runId);
     }
   }
 
@@ -216,39 +289,107 @@ export class OperatorRunRegistry {
   }
 }
 
+function toOperatorIssueReceipt(receipt: RunReceipt): OperatorRunReceipt {
+  return {
+    runId: receipt.runId,
+    phase: receipt.phase,
+    issueUrl: receipt.issueUrl,
+    execution: receipt.execution,
+    baseSha: receipt.baseSha,
+    branch: receipt.branch,
+    changedFiles: receipt.changedFiles,
+    verification: receipt.verification,
+    commitSha: receipt.commitSha,
+    pullRequestUrl: receipt.pullRequestUrl,
+    errorCode: receipt.errorCode,
+    errorMessage: receipt.errorMessage,
+  };
+}
+
+function toOperatorReviewReceipt(receipt: ReviewRunReceipt): OperatorRunReceipt {
+  return {
+    runId: receipt.runId,
+    phase: receipt.phase,
+    issueUrl: receipt.pullRequestUrl,
+    execution: receipt.execution,
+    baseSha: receipt.authorizedHeadSha,
+    branch: receipt.headBranch,
+    changedFiles: receipt.changedFiles,
+    verification: receipt.verification,
+    commitSha: receipt.commitSha,
+    pullRequestUrl: receipt.pullRequestUrl,
+    errorCode: receipt.errorCode,
+    errorMessage: receipt.errorMessage,
+    skillSha256: receipt.skill.sha256,
+    threadResults: receipt.threadResults,
+  };
+}
+
 async function executePipeline(
-  request: RunRequest,
+  request: StoredRequest,
   runId: string,
-  onProgress: (receipt: RunReceipt) => void,
-): Promise<RunReceipt> {
-  if (process.env.SHIPWRIGHT_UI_DEMO === "1") { // guard:allow-env-credential — deploy-level non-secret mode flag
-    return executeDemo(request, runId, onProgress);
+  onProgress: (receipt: OperatorRunReceipt) => void,
+  signal?: AbortSignal,
+): Promise<OperatorRunReceipt> {
+  if (process.env.SHIPWRIGHT_UI_DEMO === "1") {
+    // guard:allow-env-credential — deploy-level non-secret mode flag
+    return executeDemo(request, runId, onProgress, signal);
   }
-  return runShipwright(
-    request,
-    createPipelineDependencies({ runId, onProgress }),
+  if (request.mode === "review") {
+    const receipt = await runReviewAgent(
+      {
+        pullRequestUrl: request.pullRequestUrl,
+        verifyCommand: request.verifyCommand,
+        publish: request.publish,
+        timeoutMinutes: request.timeoutMinutes,
+      },
+      createReviewPipelineDependencies(request.skillPath, {
+        runId,
+        signal,
+        onProgress: (progress) => onProgress(toOperatorReviewReceipt(progress)),
+      }),
+    );
+    return toOperatorReviewReceipt(receipt);
+  }
+  const receipt = await runShipwright(
+    {
+      issueUrl: request.issueUrl,
+      verifyCommand: request.verifyCommand,
+      publish: request.publish,
+      timeoutMinutes: request.timeoutMinutes,
+    },
+    createPipelineDependencies({
+      runId,
+      signal,
+      onProgress: (progress) => onProgress(toOperatorIssueReceipt(progress)),
+    }),
   );
+  return toOperatorIssueReceipt(receipt);
 }
 
 async function executeDemo(
-  request: RunRequest,
+  request: StoredRequest,
   runId: string,
-  onProgress: (receipt: RunReceipt) => void,
-): Promise<RunReceipt> {
+  onProgress: (receipt: OperatorRunReceipt) => void,
+  signal?: AbortSignal,
+): Promise<OperatorRunReceipt> {
   if (request.publish) {
     throw new Error("Demo mode supports dry runs only.");
   }
-  const receipt: RunReceipt = {
+  const target =
+    request.mode === "review" ? request.pullRequestUrl : request.issueUrl;
+  const receipt: OperatorRunReceipt = {
     runId,
     phase: "intake",
-    issueUrl: request.issueUrl,
+    issueUrl: target,
     execution: {
       runtime: "demo",
       software: "demo",
       provider: "demo",
       model: "demo",
     },
-    branch: `agent/demo-${runId}`,
+    branch:
+      request.mode === "review" ? `review/demo-${runId}` : `agent/demo-${runId}`,
     baseSha: "0123456789abcdef0123456789abcdef01234567",
     changedFiles: [],
     verification: {
@@ -256,16 +397,38 @@ async function executeDemo(
       exitCode: null,
       passed: false,
     },
+    pullRequestUrl:
+      request.mode === "review" ? request.pullRequestUrl : undefined,
+    skillSha256:
+      request.mode === "review"
+        ? "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        : undefined,
+    threadResults:
+      request.mode === "review"
+        ? [
+            {
+              threadId: "demo-thread",
+              outcome: "fixed",
+              replyUrl: "https://example.invalid/review_comment/1",
+              resolved: true,
+            },
+          ]
+        : undefined,
   };
-  const phases: OperatorRunPhase[] = [
-    "intake",
-    "workspace",
-    "agent",
-    "verify",
-    "policy",
-    "complete",
-  ];
+  const phases: OperatorRunPhase[] =
+    request.mode === "review"
+      ? [
+          "intake",
+          "workspace",
+          "agent",
+          "verify",
+          "policy",
+          "threads",
+          "complete",
+        ]
+      : ["intake", "workspace", "agent", "verify", "policy", "complete"];
   for (const phase of phases) {
+    signal?.throwIfAborted();
     receipt.phase = phase;
     if (phase === "verify") {
       receipt.verification = {
@@ -278,7 +441,28 @@ async function executeDemo(
       receipt.changedFiles = ["src/example.ts", "test/example.test.ts"];
     }
     onProgress(structuredClone(receipt));
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, 120);
+      const onAbort = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        reject(
+          signal?.reason instanceof Error
+            ? signal.reason
+            : new Error("Run cancelled by operator."),
+        );
+      };
+      if (signal) {
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+    });
   }
   return receipt;
 }
@@ -300,28 +484,34 @@ export function getOperatorRunRegistry(): OperatorRunRegistry {
 function loadDurableReceipt(
   stateDirectory: string,
   runId: string,
-): RunReceipt | undefined {
+): OperatorRunReceipt | undefined {
   if (!/^[0-9a-f]{16}$/.test(runId)) return undefined;
-  const path = join(stateDirectory, "receipts", runId, "receipt.json");
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      !("runId" in parsed) ||
-      parsed.runId !== runId ||
-      !("phase" in parsed) ||
-      typeof parsed.phase !== "string"
-    ) {
-      return undefined;
+  for (const root of ["receipts", "review-receipts"] as const) {
+    const path = join(stateDirectory, root, runId, "receipt.json");
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        !("runId" in parsed) ||
+        parsed.runId !== runId ||
+        !("phase" in parsed) ||
+        typeof parsed.phase !== "string"
+      ) {
+        continue;
+      }
+      if (root === "review-receipts") {
+        return toOperatorReviewReceipt(parsed as ReviewRunReceipt);
+      }
+      return toOperatorIssueReceipt(parsed as RunReceipt);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+        continue;
+      }
+      throw new Error(`could not load durable receipt for run ${runId}`, {
+        cause: error,
+      });
     }
-    return parsed as RunReceipt;
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return undefined;
-    }
-    throw new Error(`could not load durable receipt for run ${runId}`, {
-      cause: error,
-    });
   }
+  return undefined;
 }
