@@ -2,13 +2,38 @@ import { expect, test } from "bun:test";
 import { runShipwright, type PipelineDependencies, type WorkspacePort } from "../../src/pipeline/run.js";
 import type { AuthorizedIssue } from "../../src/github/app-client.js";
 
-function fixture(options: { verifyExit?: number; protectedFile?: boolean; publish?: boolean } = {}) {
+function fixture(options: {
+  verifyExit?: number;
+  protectedFile?: boolean;
+  publish?: boolean;
+  verifyStdout?: string;
+  verifyStderr?: string;
+  secretPatch?: boolean;
+} = {}) {
   const events: string[] = [];
+  const receipts: Array<Record<string, unknown>> = [];
   const workspace: WorkspacePort = {
     async clone() { events.push("clone"); },
     async prepareForAgent() { events.push("prepare"); },
-    async verify() { events.push("verify"); return { exitCode: options.verifyExit ?? 0 }; },
-    async inspectChanges() { events.push("inspect"); return { changedFiles: [options.protectedFile ? ".github/workflows/x.yml" : "src/a.ts"], patch: "diff", patchBytes: 4 }; },
+    async verify() {
+      events.push("verify");
+      return {
+        exitCode: options.verifyExit ?? 0,
+        stdout: options.verifyStdout,
+        stderr: options.verifyStderr,
+      };
+    },
+    async inspectChanges() {
+      events.push("inspect");
+      const patch = options.secretPatch
+        ? "const token = \"ghs_123456789012345678901234567890123456\";"
+        : "diff";
+      return {
+        changedFiles: [options.protectedFile ? ".github/workflows/x.yml" : "src/a.ts"],
+        patch,
+        patchBytes: patch.length,
+      };
+    },
     async quiesce() { events.push("quiesce"); },
     async assertRunIdentity() { events.push("identity"); },
     async commit() { events.push("commit"); return "commit1"; },
@@ -32,9 +57,12 @@ function fixture(options: { verifyExit?: number; protectedFile?: boolean; publis
     async createWorkspace() { events.push("workspace"); return workspace; },
     async runAgent() { events.push("agent"); return "done"; },
     async openPullRequest() { events.push("pr"); return { number: 5, url: "https://example/pr/5" }; },
-    async writeReceipt(_path, receipt) { events.push(`receipt:${receipt.phase}`); },
+    async writeReceipt(_path, receipt) {
+      events.push(`receipt:${receipt.phase}`);
+      receipts.push(structuredClone(receipt) as unknown as Record<string, unknown>);
+    },
   };
-  return { deps, events };
+  return { deps, events, receipts };
 }
 
 test("dry run verifies and applies policy without publishing", async () => {
@@ -48,6 +76,7 @@ test("dry run verifies and applies policy without publishing", async () => {
     model: "kimi-for-coding",
   });
   expect(receipt.commitSha).toBeUndefined();
+  expect(receipt.errorMessage).toBeUndefined();
   expect(events).not.toContain("push");
   expect(events.at(-1)).toBe("destroy");
 });
@@ -79,19 +108,44 @@ test("emits cloned progress snapshots in pipeline order", async () => {
 });
 
 test("failed independent verification blocks policy and publication", async () => {
-  const { deps, events } = fixture({ verifyExit: 1 });
+  const { deps, events, receipts } = fixture({
+    verifyExit: 1,
+    verifyStderr: "AssertionError: expected true",
+    verifyStdout: "1 fail",
+  });
   await expect(runShipwright({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "false", publish: true, timeoutMinutes: 2 }, deps)).rejects.toThrow("verification failed");
   expect(events).not.toContain("inspect");
   expect(events).not.toContain("push");
   expect(events).toContain("receipt:verify");
   expect(events.at(-1)).toBe("destroy");
+  const failed = receipts.at(-1) as {
+    errorCode?: string;
+    errorMessage?: string;
+    verification: { stderrTail?: string; stdoutTail?: string };
+  };
+  expect(failed.errorCode).toBe("verification_failed");
+  expect(failed.errorMessage).toBe("independent verification failed");
+  expect(failed.verification.stderrTail).toBe("AssertionError: expected true");
+  expect(failed.verification.stdoutTail).toBe("1 fail");
 });
 
 test("protected changes block publication", async () => {
-  const { deps, events } = fixture({ protectedFile: true });
+  const { deps, events, receipts } = fixture({ protectedFile: true });
   await expect(runShipwright({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 }, deps)).rejects.toThrow("protected");
   expect(events).not.toContain("commit");
   expect(events).toContain("receipt:policy");
+  const failed = receipts.at(-1) as { errorCode?: string; errorMessage?: string };
+  expect(failed.errorCode).toBe("policy_failed");
+  expect(failed.errorMessage).toContain("protected path");
+});
+
+test("secret-looking patch content blocks publication", async () => {
+  const { deps, events, receipts } = fixture({ secretPatch: true });
+  await expect(runShipwright({ issueUrl: "https://github.com/acme/widget/issues/2", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 }, deps)).rejects.toThrow("secret");
+  expect(events).not.toContain("commit");
+  expect(events).toContain("receipt:policy");
+  const failed = receipts.at(-1) as { errorMessage?: string };
+  expect(failed.errorMessage).toContain("patch appears to contain a secret");
 });
 
 test("publish commits, pushes, then opens the PR", async () => {

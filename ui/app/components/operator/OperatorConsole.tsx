@@ -7,6 +7,7 @@ import {
   IconGitPullRequest,
   IconLoader2,
   IconPlayerPlay,
+  IconPlayerStop,
   IconTerminal2,
 } from "@tabler/icons-react";
 import { useMemo, useState, type FormEvent } from "react";
@@ -29,6 +30,7 @@ import {
   operatorRunRequestSchema,
   phaseIndex,
   RUN_PHASES,
+  targetUrl,
   type OperatorRunRecord,
   type OperatorRunRequest,
 } from "../../../shared/operator-run";
@@ -40,6 +42,7 @@ const PHASE_LABELS = {
   verify: "Verify",
   policy: "Policy",
   publish: "Publish",
+  threads: "Threads",
   complete: "Complete",
 } as const;
 
@@ -47,14 +50,28 @@ const DEFAULT_ISSUE_URL = "";
 const DEFAULT_VERIFY_COMMAND = "bun test";
 
 export function OperatorConsole() {
+  const [mode, setMode] = useState<"issue" | "review">("issue");
   const [issueUrl, setIssueUrl] = useState(DEFAULT_ISSUE_URL);
+  const [pullRequestUrl, setPullRequestUrl] = useState("");
+  const [skillPath, setSkillPath] = useState("");
   const [verifyCommand, setVerifyCommand] = useState(DEFAULT_VERIFY_COMMAND);
-  const [timeoutMinutes, setTimeoutMinutes] = useState(20);
+  const [timeoutMinutes, setTimeoutMinutes] = useState(30);
   const [publish, setPublish] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const startRun = useActionMutation("start-shipwright-run");
+  const cancelRun = useActionMutation("cancel-shipwright-run");
+  const historyQuery = useActionQuery(
+    "list-shipwright-runs",
+    { limit: 50 },
+    {
+      refetchInterval: (query) => {
+        const records = query.state.data as OperatorRunRecord[] | undefined;
+        return records?.some((item) => !isTerminalRun(item.status)) ? 1000 : 5000;
+      },
+    },
+  );
   const runQuery = useActionQuery(
     "get-shipwright-run",
     runId ? { runId } : {},
@@ -66,18 +83,22 @@ export function OperatorConsole() {
     },
   );
   const record = runQuery.data as OperatorRunRecord | undefined;
+  const history = (historyQuery.data as OperatorRunRecord[] | undefined) ?? [];
   const active = Boolean(record && !isTerminalRun(record.status));
   const busy = startRun.isPending || active;
 
   const candidate = useMemo(
     () => ({
+      mode,
       issueUrl,
+      pullRequestUrl,
+      skillPath,
       verifyCommand,
       timeoutMinutes,
       publish,
       publishConfirmed: false,
     }),
-    [issueUrl, publish, timeoutMinutes, verifyCommand],
+    [issueUrl, mode, publish, pullRequestUrl, skillPath, timeoutMinutes, verifyCommand],
   );
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -106,9 +127,24 @@ export function OperatorConsole() {
       const started = (await startRun.mutateAsync(input)) as OperatorRunRecord;
       setRunId(started.runId);
       setConfirmOpen(false);
+      void historyQuery.refetch();
     } catch (error) {
       setFormError(
         error instanceof Error ? error.message : "The run could not start.",
+      );
+    }
+  }
+
+  async function handleCancel() {
+    if (!runId) return;
+    setFormError(null);
+    try {
+      await cancelRun.mutateAsync({ runId });
+      void runQuery.refetch();
+      void historyQuery.refetch();
+    } catch (error) {
+      setFormError(
+        error instanceof Error ? error.message : "The run could not be cancelled.",
       );
     }
   }
@@ -122,12 +158,12 @@ export function OperatorConsole() {
             Shipwright
           </div>
           <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-            Turn an issue into verified code.
+            Operator console
           </h1>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
-            The agent clones an authorized repository, writes the fix in an
-            isolated sandbox, runs your verification command, and publishes only
-            after explicit confirmation.
+            Run issue-to-PR or review-agent workflows in an isolated sandbox.
+            Verification stays independent, credentials stay on the host, and
+            publish still requires a second confirmation.
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -136,7 +172,56 @@ export function OperatorConsole() {
         </div>
       </header>
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,0.92fr)_minmax(420px,1.08fr)]">
+      <div className="grid gap-8 xl:grid-cols-[220px_minmax(0,0.92fr)_minmax(420px,1.08fr)] lg:grid-cols-[minmax(0,0.92fr)_minmax(420px,1.08fr)]">
+        <aside className="space-y-3 lg:order-first xl:order-none">
+          <div>
+            <h2 className="text-sm font-semibold">Run history</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Durable records survive refresh.
+            </p>
+          </div>
+          <ul className="max-h-[32rem] space-y-2 overflow-auto">
+            {history.length === 0 ? (
+              <li className="rounded-md border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">
+                No runs yet.
+              </li>
+            ) : (
+              history.map((item) => {
+                const selected = item.runId === runId;
+                return (
+                  <li key={item.runId}>
+                    <button
+                      type="button"
+                      onClick={() => setRunId(item.runId)}
+                      className={`w-full rounded-md border px-3 py-2 text-left transition ${
+                        selected
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:bg-muted/40"
+                      }`}
+                    >
+                      <span className="block font-mono text-[11px] text-muted-foreground">
+                        {item.runId.slice(0, 10)}
+                      </span>
+                      <span className="mt-1 block text-xs font-medium">
+                        {item.status === "succeeded"
+                          ? "Succeeded"
+                          : item.status === "failed"
+                            ? "Failed"
+                            : item.status === "queued"
+                              ? "Queued"
+                              : PHASE_LABELS[item.phase]}
+                      </span>
+                      <span className="mt-1 block truncate text-[11px] text-muted-foreground">
+                        {targetUrl(item.request)}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })
+            )}
+          </ul>
+        </aside>
+
         <form onSubmit={handleSubmit} className="space-y-6">
           <section className="space-y-5">
             <div>
@@ -147,18 +232,67 @@ export function OperatorConsole() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="issue-url">GitHub issue URL</Label>
-              <Input
-                id="issue-url"
-                type="url"
-                value={issueUrl}
-                onChange={(event) => setIssueUrl(event.target.value)}
-                placeholder="https://github.com/owner/repo/issues/123"
-                autoComplete="off"
-                required
+              <Label htmlFor="run-mode">Workflow</Label>
+              <select
+                id="run-mode"
+                value={mode}
                 disabled={busy}
-              />
+                onChange={(event) =>
+                  setMode(event.target.value === "review" ? "review" : "issue")
+                }
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none"
+              >
+                <option value="issue">Issue to pull request</option>
+                <option value="review">Review existing pull request</option>
+              </select>
             </div>
+
+            {mode === "issue" ? (
+              <div className="space-y-2">
+                <Label htmlFor="issue-url">GitHub issue URL</Label>
+                <Input
+                  id="issue-url"
+                  type="url"
+                  value={issueUrl}
+                  onChange={(event) => setIssueUrl(event.target.value)}
+                  placeholder="https://github.com/owner/repo/issues/123"
+                  autoComplete="off"
+                  required
+                  disabled={busy}
+                />
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="pull-request-url">GitHub pull request URL</Label>
+                  <Input
+                    id="pull-request-url"
+                    type="url"
+                    value={pullRequestUrl}
+                    onChange={(event) => setPullRequestUrl(event.target.value)}
+                    placeholder="https://github.com/owner/repo/pull/123"
+                    autoComplete="off"
+                    required
+                    disabled={busy}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="skill-path">fix-review-findings skill path</Label>
+                  <Input
+                    id="skill-path"
+                    value={skillPath}
+                    onChange={(event) => setSkillPath(event.target.value)}
+                    placeholder="/absolute/path/to/fix-review-findings/SKILL.md"
+                    autoComplete="off"
+                    required
+                    disabled={busy}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Server-side absolute path only. The skill body is never sent to the browser.
+                  </p>
+                </div>
+              </>
+            )}
 
             <div className="space-y-2">
               <Label htmlFor="verify-command">Verification command</Label>
@@ -218,19 +352,38 @@ export function OperatorConsole() {
             </div>
           )}
 
-          <Button
-            type="submit"
-            size="lg"
-            disabled={busy}
-            className="w-full sm:w-auto"
-          >
-            {busy ? (
-              <IconLoader2 className="animate-spin" />
-            ) : (
-              <IconPlayerPlay />
+          <div className="flex flex-wrap gap-3">
+            <Button
+              type="submit"
+              size="lg"
+              disabled={busy}
+              className="w-full sm:w-auto"
+            >
+              {busy ? (
+                <IconLoader2 className="animate-spin" />
+              ) : (
+                <IconPlayerPlay />
+              )}
+              {publish ? "Review and publish" : "Start dry run"}
+            </Button>
+            {active && (
+              <Button
+                type="button"
+                size="lg"
+                variant="outline"
+                disabled={cancelRun.isPending}
+                onClick={() => void handleCancel()}
+                className="w-full sm:w-auto"
+              >
+                {cancelRun.isPending ? (
+                  <IconLoader2 className="animate-spin" />
+                ) : (
+                  <IconPlayerStop />
+                )}
+                Cancel run
+              </Button>
             )}
-            {publish ? "Review and publish" : "Start dry run"}
-          </Button>
+          </div>
         </form>
 
         <RunProgress record={record} loading={runQuery.isLoading} />
@@ -246,7 +399,14 @@ export function OperatorConsole() {
             </SheetDescription>
           </SheetHeader>
           <div className="my-6 space-y-3 rounded-md border border-border bg-muted/30 p-4 text-sm">
-            <p className="font-medium break-all">{issueUrl}</p>
+            <p className="font-medium break-all">
+              {mode === "review" ? pullRequestUrl : issueUrl}
+            </p>
+            {mode === "review" && (
+              <p className="font-mono text-xs text-muted-foreground break-all">
+                skill: {skillPath}
+              </p>
+            )}
             <p className="font-mono text-xs text-muted-foreground break-all">
               {verifyCommand}
             </p>
@@ -282,9 +442,11 @@ function RunProgress({
   record?: OperatorRunRecord;
   loading: boolean;
 }) {
-  const visiblePhases = RUN_PHASES.filter(
-    (phase) => phase !== "publish" || record?.request.publish,
-  );
+  const visiblePhases = RUN_PHASES.filter((phase) => {
+    if (phase === "publish") return Boolean(record?.request.publish);
+    if (phase === "threads") return record?.kind === "review" || record?.request.mode === "review";
+    return true;
+  });
   const currentIndex = record ? phaseIndex(record.phase) : -1;
 
   return (
@@ -337,6 +499,9 @@ function RunProgress({
 
             {record?.receipt && (
               <div className="grid gap-4 border-t border-border pt-5 sm:grid-cols-2">
+                <Evidence label="Provider">
+                  {record.receipt.execution.provider}/{record.receipt.execution.model}
+                </Evidence>
                 <Evidence label="Verification">
                   <span
                     className={
@@ -381,9 +546,37 @@ function RunProgress({
               </div>
             ) : null}
 
-            {record?.message && (
+            {record?.receipt &&
+              !record.receipt.verification.passed &&
+              (record.receipt.verification.stderrTail ||
+                record.receipt.verification.stdoutTail) && (
+                <div className="space-y-3 border-t border-border pt-5">
+                  {record.receipt.verification.stderrTail && (
+                    <div>
+                      <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Verification stderr
+                      </p>
+                      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-muted/30 p-3 font-mono text-xs">
+                        {record.receipt.verification.stderrTail}
+                      </pre>
+                    </div>
+                  )}
+                  {record.receipt.verification.stdoutTail && (
+                    <div>
+                      <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Verification stdout
+                      </p>
+                      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-muted/30 p-3 font-mono text-xs">
+                        {record.receipt.verification.stdoutTail}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              )}
+
+            {(record?.receipt?.errorMessage ?? record?.message) && (
               <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-                {record.message}
+                {record.receipt?.errorMessage ?? record.message}
               </div>
             )}
 

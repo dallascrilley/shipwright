@@ -12,11 +12,14 @@ import {
 } from "./operator-runs";
 
 const request = {
+  mode: "issue" as const,
   issueUrl: "https://github.com/dallascrilley/example/issues/12",
+  pullRequestUrl: "",
+  skillPath: "",
   verifyCommand: "bun test",
   publish: false,
   publishConfirmed: false,
-  timeoutMinutes: 20,
+  timeoutMinutes: 30,
 };
 
 const completeReceipt: RunReceipt = {
@@ -134,8 +137,12 @@ describe("OperatorRunRegistry", () => {
         runId: "run-1",
         status: "running",
         phase: "agent",
+        kind: "issue",
         request: {
+          mode: "issue",
           issueUrl: request.issueUrl,
+          pullRequestUrl: "",
+          skillPath: "",
           verifyCommand: request.verifyCommand,
           publish: request.publish,
           timeoutMinutes: request.timeoutMinutes,
@@ -167,8 +174,12 @@ describe("OperatorRunRegistry", () => {
         runId: "run-1",
         status: "running",
         phase: "publish",
+        kind: "issue",
         request: {
+          mode: "issue",
           issueUrl: request.issueUrl,
+          pullRequestUrl: "",
+          skillPath: "",
           verifyCommand: request.verifyCommand,
           publish: true,
           timeoutMinutes: request.timeoutMinutes,
@@ -198,4 +209,80 @@ describe("OperatorRunRegistry", () => {
     });
     expect(store.load()[0]?.status).toBe("succeeded");
   });
+
+  test("cancels an in-flight run and allows a subsequent start", async () => {
+    let sawSignal = false;
+    const registry = new OperatorRunRegistry(
+      (_request, _runId, progress, signal) =>
+        new Promise((_resolve, reject) => {
+          progress({
+            ...completeReceipt,
+            phase: "agent",
+            verification: {
+              command: request.verifyCommand,
+              exitCode: null,
+              passed: false,
+            },
+          });
+          const onAbort = () => {
+            sawSignal = true;
+            reject(signal?.reason instanceof Error ? signal.reason : new Error("aborted"));
+          };
+          if (signal?.aborted) {
+            onAbort();
+            return;
+          }
+          signal?.addEventListener("abort", onAbort, { once: true });
+        }),
+      (() => {
+        let n = 0;
+        return () => `run-${++n}`;
+      })(),
+    );
+
+    registry.start(request);
+    await flushMicrotasks();
+    const cancelled = registry.cancel("run-1");
+    expect(cancelled.status === "running" || cancelled.status === "failed").toBe(true);
+    await flushMicrotasks();
+    await flushMicrotasks();
+    const failed = registry.get("run-1");
+    expect(failed?.status).toBe("failed");
+    expect(failed?.message).toMatch(/cancelled|aborted/i);
+    expect(sawSignal).toBe(true);
+    expect(() => registry.start(request)).not.toThrow();
+  });
+
+  test("lists durable runs newest first within the bound", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "shipwright-runs-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "operator-runs.json");
+    const store = new JsonFileOperatorRunStore(path);
+    let n = 0;
+    const first = new OperatorRunRegistry(
+      async (_request, runId) => ({ ...completeReceipt, runId }),
+      () => `run-${++n}`,
+      store,
+      (() => {
+        let tick = 0;
+        return () => new Date(Date.UTC(2026, 0, 1, 0, 0, ++tick)).toISOString();
+      })(),
+    );
+    first.start(request);
+    await flushMicrotasks();
+    first.start(request);
+    await flushMicrotasks();
+
+    const second = new OperatorRunRegistry(
+      () => new Promise(() => {}),
+      () => "run-x",
+      new JsonFileOperatorRunStore(path),
+    );
+    const listed = second.list(1);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.runId).toBe("run-2");
+    expect(second.list(50).map((item) => item.runId)).toEqual(["run-2", "run-1"]);
+  });
+
+
 });

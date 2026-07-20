@@ -13,7 +13,6 @@
     "server": "tsx server.ts",
     "client": "tsx client.ts",
     "shipwright": "tsx shipwright.ts",
-    "programming-agent": "tsx shipwright.ts",
     "review-agent": "tsx review-agent.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
