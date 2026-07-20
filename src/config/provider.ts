@@ -37,7 +37,11 @@ export function resolveProvider(env: Environment = process.env): ProviderConfig 
   const requested = env.AGENTOS_PROVIDER;
   const provider = requested
     ? providers[requested]
-    : providers.anthropic ?? providers.openrouter ?? providers.openai ?? providers.google;
+    : providers.anthropic ??
+      providers.openrouter ??
+      providers.openai ??
+      providers.google ??
+      providers.kimi;
   if (!provider) {
     throw new Error(
       requested
