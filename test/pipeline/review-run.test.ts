@@ -67,6 +67,7 @@ function fixture(options: {
     async push() { events.push("push"); },
     async destroy() { events.push("destroy"); },
   };
+  const receipts: Array<Record<string, unknown>> = [];
   const deps: ReviewPipelineDependencies = {
     execution: { runtime: "agentos", software: "pi", provider: "kimi", model: "kimi-for-coding" },
     skill: { name: "fix-review-findings", content: "skill", sha256: "abc123" },
@@ -74,9 +75,12 @@ function fixture(options: {
     async authorize() { events.push("authorize"); return authorized; },
     async createWorkspace() { events.push("workspace"); return workspace; },
     async runAgent() { events.push("agent"); return "done"; },
-    async writeReceipt(_path, receipt) { events.push(`receipt:${receipt.phase}`); },
+    async writeReceipt(_path, receipt) {
+      events.push(`receipt:${receipt.phase}`);
+      receipts.push(structuredClone(receipt) as unknown as Record<string, unknown>);
+    },
   };
-  return { deps, events, getReplyBody: () => replyBody };
+  return { deps, events, receipts, getReplyBody: () => replyBody };
 }
 
 const request = { pullRequestUrl: "https://github.com/acme/widget/pull/4", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 };
@@ -114,13 +118,16 @@ test("needs-human replies and remains unresolved", async () => {
 });
 
 test("verification failure blocks all remote writes", async () => {
-  const { deps, events } = fixture({ verifyExit: 1 });
+  const { deps, events, receipts } = fixture({ verifyExit: 1 });
   await expect(runReviewAgent(request, deps)).rejects.toThrow("verification failed");
   expect(events).not.toContain("commit");
   expect(events).not.toContain("push");
   expect(events).not.toContain("reply");
   expect(events).not.toContain("resolve");
   expect(events.at(-1)).toBe("destroy");
+  const failed = receipts.at(-1) as { errorCode?: string; errorMessage?: string };
+  expect(failed.errorCode).toBe("verify_failed");
+  expect(failed.errorMessage).toBe("independent verification failed");
 });
 
 test("remote head movement blocks commit, push, and thread writes", async () => {

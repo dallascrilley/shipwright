@@ -37,8 +37,6 @@ Publish only after independent verification and policy checks pass:
 bun run shipwright -- https://github.com/OWNER/REPO/issues/123 --verify "bun test" --publish
 ```
 
-`bun run programming-agent` remains as a temporary compatibility alias. New automation should use `bun run shipwright`.
-
 `--timeout-minutes` accepts 1 through 120 and defaults to 30. Each run uses a unique `agent/issue-<number>-<run-id>` branch. Shipwright blocks empty changes, more than 100 files, patches over 1 MiB, `.git/**`, and `.github/workflows/**`. It never force-pushes.
 
 Receipts are written atomically under `${SHIPWRIGHT_STATE_DIR:-.artifacts/shipwright}/receipts/<run-id>/receipt.json`. They record non-secret execution provenance, issue and base identity, changed files, verification result, commit SHA, pull-request URL, and failure phase. If a push succeeds but pull-request creation fails, retain the receipt and generated branch for reconciliation; do not rerun blindly.

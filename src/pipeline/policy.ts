@@ -1,6 +1,9 @@
+import { containsSecretLikeContent } from "./receipt.js";
+
 interface ChangeSummary {
   changedFiles: string[];
   patchBytes: number;
+  patch?: string;
 }
 
 const MAX_CHANGED_FILES = 100;
@@ -22,5 +25,9 @@ export function assertPublishableChange(summary: ChangeSummary): void {
   );
   if (protectedPath) {
     throw new Error(`publication blocked: protected path changed: ${protectedPath}`);
+  }
+
+  if (summary.patch && containsSecretLikeContent(summary.patch)) {
+    throw new Error("publication blocked: patch appears to contain a secret");
   }
 }
