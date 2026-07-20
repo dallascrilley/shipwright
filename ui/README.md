@@ -23,10 +23,13 @@ Demo mode is dry-run only. Real runs use the root project's GitHub App, provider
 
 ## Actions
 
-- `start-shipwright-run`: validates issue, verification, timeout, and publication confirmation inputs, then launches one background run.
-- `get-shipwright-run`: reads a named run or the latest run after a browser refresh or service restart.
+- `start-shipwright-run`: validates issue/PR URL (or `fromRunId`), verify preset/`verifyCommand`, timeout, and publication confirmation; launches one background run. Review mode uses server-resolved `skillId` (default `fix-review-findings`); absolute skill paths are not stored on durable records.
+- `list-verify-presets`: server-owned verification command presets.
+- `list-shipwright-runs` / `get-shipwright-run` / `cancel-shipwright-run`: history, detail, cancel.
 - `view-screen`: returns current navigation plus the latest redacted run state.
 - `navigate`: changes the visible application route.
+
+Dry-run success offers **Start publish run (same inputs)** — a new publish run that reruns the agent (not an in-place promote). Demo mode refuses publish with a friendly error after confirm.
 
 ## Verification
 
