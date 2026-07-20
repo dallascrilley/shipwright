@@ -194,3 +194,63 @@ test("abort after successful verification blocks policy and publication", async 
   expect(events).toContain("receipt:verify");
   expect(events.at(-1)).toBe("destroy");
 });
+
+test("redacts secrets in verification tails before progress emission", async () => {
+  const token = "ghs_" + "1".repeat(36);
+  const { deps } = fixture({
+    verifyExit: 1,
+    verifyStderr: `failed with ${token}`,
+  });
+  const snapshots: Array<{ stderrTail?: string }> = [];
+  deps.onProgress = (receipt) => {
+    if (receipt.verification.stderrTail) {
+      snapshots.push({ stderrTail: receipt.verification.stderrTail });
+    }
+  };
+
+  await expect(
+    runShipwright(
+      {
+        issueUrl: "https://github.com/acme/widget/issues/2",
+        verifyCommand: "false",
+        publish: false,
+        timeoutMinutes: 2,
+      },
+      deps,
+    ),
+  ).rejects.toThrow("verification failed");
+
+  expect(snapshots.length).toBeGreaterThan(0);
+  for (const snapshot of snapshots) {
+    expect(snapshot.stderrTail).not.toContain(token);
+    expect(snapshot.stderrTail).toContain("[REDACTED]");
+  }
+});
+
+test("abort after publish phase starts blocks push and PR creation", async () => {
+  const { deps, events } = fixture({ publish: true });
+  const controller = new AbortController();
+  deps.signal = controller.signal;
+  deps.onProgress = (receipt) => {
+    if (receipt.phase === "publish") {
+      controller.abort(new Error("stop during publish"));
+    }
+  };
+
+  await expect(
+    runShipwright(
+      {
+        issueUrl: "https://github.com/acme/widget/issues/2",
+        verifyCommand: "bun test",
+        publish: true,
+        timeoutMinutes: 2,
+      },
+      deps,
+    ),
+  ).rejects.toThrow("stop during publish");
+  expect(events).not.toContain("commit");
+  expect(events).not.toContain("push");
+  expect(events).not.toContain("pr");
+  expect(events).toContain("receipt:publish");
+  expect(events.at(-1)).toBe("destroy");
+});
