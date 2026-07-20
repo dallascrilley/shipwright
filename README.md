@@ -23,7 +23,7 @@ bun run dev
 
 The GitHub App needs repository metadata read, issues read, contents write, and pull requests write. It does not need Actions, workflows, administration, secrets, or organization permissions. `GITHUB_REPOSITORY_ALLOWLIST` accepts exact `owner/repo` entries only; wildcards are rejected.
 
-## CLI
+## Issue-to-PR CLI
 
 Dry run (no branch, commit, push, or pull request):
 
@@ -42,6 +42,29 @@ bun run shipwright -- https://github.com/OWNER/REPO/issues/123 --verify "bun tes
 `--timeout-minutes` accepts 1 through 120 and defaults to 30. Each run uses a unique `agent/issue-<number>-<run-id>` branch. Shipwright blocks empty changes, more than 100 files, patches over 1 MiB, `.git/**`, and `.github/workflows/**`. It never force-pushes.
 
 Receipts are written atomically under `${SHIPWRIGHT_STATE_DIR:-.artifacts/shipwright}/receipts/<run-id>/receipt.json`. They record non-secret execution provenance, issue and base identity, changed files, verification result, commit SHA, pull-request URL, and failure phase. If a push succeeds but pull-request creation fails, retain the receipt and generated branch for reconciliation; do not rerun blindly.
+
+## PR review CLI
+
+The separate review workflow targets an existing same-repository pull request head. It projects an explicitly selected `fix-review-findings` Agent Skill into Pi, treats review text as untrusted, independently verifies warranted changes, and keeps GitHub credentials plus thread mutations on the trusted host.
+
+Dry run:
+
+```sh
+bun run review-agent -- https://github.com/OWNER/REPO/pull/123 \
+  --verify "bun test" \
+  --skill /absolute/path/to/fix-review-findings/SKILL.md
+```
+
+Publish verified changes and reply to the original threads:
+
+```sh
+bun run review-agent -- https://github.com/OWNER/REPO/pull/123 \
+  --verify "bun test" \
+  --skill /absolute/path/to/fix-review-findings/SKILL.md \
+  --publish
+```
+
+The host pins the authorized PR head SHA, rejects fork heads and moved branches, and requires one explicit outcome per unresolved current thread. Fixed, rejected, and concretely deferred threads receive an idempotent reply and are resolved; `needs-human` threads receive a reply and remain open. Review receipts are written with mode 0600 under `${SHIPWRIGHT_STATE_DIR:-.artifacts/shipwright}/review-receipts/<run-id>/receipt.json` and record the canonical skill's SHA-256 digest, never its contents or host path.
 
 ## Operator console
 
