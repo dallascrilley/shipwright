@@ -1,6 +1,6 @@
 import type { IssueRef } from "./types.js";
 
-const ISSUE_PATH = /^\/([^/]+)\/([^/]+)\/issues\/([1-9]\d*)$/;
+const ISSUE_PATH = /^\/([^/]+)\/([^/]+)\/issues\/([1-9]\d*)\/?$/;
 
 export function parseIssueUrl(input: string): IssueRef {
   let url: URL;
