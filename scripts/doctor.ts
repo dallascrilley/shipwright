@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 
 import { parseGitHubConfig } from "../src/config/github.js";
 import { resolveProvider } from "../src/config/provider.js";
+import { resolveSandboxImage } from "../src/sandbox/runtime.js";
 
 interface Check {
   name: string;
@@ -51,6 +52,17 @@ const checks: Check[] = [
     detail: "reachable",
     passed: spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0,
   },
+  configurationCheck("Sandbox image", () => {
+    const image = resolveSandboxImage(process.env.SHIPWRIGHT_SANDBOX_IMAGE);
+    if (
+      spawnSync("docker", ["image", "inspect", image], {
+        stdio: "ignore",
+      }).status !== 0
+    ) {
+      throw new Error("sandbox image is not present");
+    }
+    return image;
+  }),
   configurationCheck("State directory", () => {
     accessSync(stateDirectory, constants.R_OK | constants.W_OK | constants.X_OK);
     return stateDirectory;
