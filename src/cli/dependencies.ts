@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createAndRunPiAgent } from "../agent/runner.js";
 import { parseGitHubConfig } from "../config/github.js";
 import { resolveProvider } from "../config/provider.js";
+import { resolveShipwrightStateDirectory } from "../config/state.js";
 import { authorizeIssue, authorizePullRequest, createOctokitTransport } from "../github/app-client.js";
 import { openOrReusePullRequest } from "../github/publisher.js";
 import type { RunReceipt } from "../pipeline/receipt.js";
@@ -58,10 +59,7 @@ export function createReviewPipelineDependencies(
       skills,
     ),
     writeReceipt: defaultReviewReceiptWriter,
-    artifactRoot: join(
-      process.env.SHIPWRIGHT_STATE_DIR?.trim() || ".artifacts/shipwright",
-      "review-receipts",
-    ),
+    artifactRoot: join(resolveShipwrightStateDirectory(), "review-receipts"),
     ...options,
   };
 }
@@ -92,10 +90,7 @@ export function createPipelineDependencies(
     openPullRequest: (authorized, input) =>
       openOrReusePullRequest(authorized.repositoryClient, input),
     writeReceipt: defaultReceiptWriter,
-    artifactRoot: join(
-      process.env.SHIPWRIGHT_STATE_DIR?.trim() || ".artifacts/shipwright",
-      "receipts",
-    ),
+    artifactRoot: join(resolveShipwrightStateDirectory(), "receipts"),
     ...options,
   };
 }
