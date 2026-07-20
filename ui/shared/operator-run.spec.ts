@@ -6,6 +6,7 @@ import {
   operatorRunRequestSchema,
   parseOperatorTarget,
   resolveOperatorNextAction,
+  resolveOperatorPublishConfirmation,
   type OperatorRunRecord,
 } from "./operator-run";
 
@@ -341,5 +342,45 @@ describe("resolveOperatorNextAction", () => {
     );
     expect(view.primary.type).toBe("retry_dry_run");
     expect(view.secondary[0]?.type).toBe("open_url");
+  });
+});
+
+
+describe("resolveOperatorPublishConfirmation", () => {
+  test("keeps a CTA-selected dry run when form inputs later change", () => {
+    const selectedRun = baseRecord({
+      runId: "run-a",
+      request: {
+        ...baseRecord().request,
+        issueUrl: "https://github.com/dallascrilley/example/issues/1",
+        verifyCommand: "bun test",
+      },
+    });
+
+    const confirmation = resolveOperatorPublishConfirmation(selectedRun, {
+      ...baseRecord().request,
+      issueUrl: "https://github.com/dallascrilley/example/issues/2",
+      verifyCommand: "bun run verify",
+    });
+
+    expect(confirmation).toMatchObject({
+      sourceRunId: "run-a",
+      target: "https://github.com/dallascrilley/example/issues/1",
+      verifyCommand: "bun test",
+    });
+  });
+
+  test("uses current form inputs when no dry run is selected", () => {
+    const confirmation = resolveOperatorPublishConfirmation(null, {
+      ...baseRecord().request,
+      issueUrl: "https://github.com/dallascrilley/example/issues/2",
+      verifyCommand: "bun run verify",
+    });
+
+    expect(confirmation).toMatchObject({
+      target: "https://github.com/dallascrilley/example/issues/2",
+      verifyCommand: "bun run verify",
+    });
+    expect(confirmation).not.toHaveProperty("sourceRunId");
   });
 });
