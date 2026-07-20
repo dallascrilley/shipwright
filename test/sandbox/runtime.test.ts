@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   parseNulList,
   requireSuccessfulCommand,
@@ -56,5 +59,29 @@ describe("sandbox command helpers", () => {
     expect(resolveSandboxContainerUser("linux", 996, 988)).toBe("996:988");
     expect(resolveSandboxContainerUser("darwin", 501, 20)).toBeUndefined();
     expect(resolveSandboxContainerUser("linux", undefined, undefined)).toBeUndefined();
+  });
+
+  test("host temp workspaces resolve through macOS private tmp symlinks", async () => {
+    const created = await mkdtemp(join(tmpdir(), "shipwright-workspace-"));
+    try {
+      const resolved = await realpath(created);
+      expect(resolved.startsWith("/private/") || resolved === created).toBe(true);
+      expect(resolved.includes("shipwright-workspace-")).toBe(true);
+    } finally {
+      await rm(created, { recursive: true, force: true });
+    }
+  });
+
+  test("home-local workspace roots stay outside /var/folders", async () => {
+    const root = join(homedir(), ".shipwright", "workspaces");
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    const created = await mkdtemp(join(root, "run-"));
+    try {
+      const resolved = await realpath(created);
+      expect(resolved.includes("/var/folders/")).toBe(false);
+      expect(resolved.includes(".shipwright/workspaces")).toBe(true);
+    } finally {
+      await rm(created, { recursive: true, force: true });
+    }
   });
 });

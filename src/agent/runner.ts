@@ -69,10 +69,12 @@ export async function runPiAgent(
     const modelsConfig = piModelsConfig(provider);
     if (modelsConfig) await vm.writeFile("/home/agentos/.pi/agent/models.json", modelsConfig);
     if (skills.length > 0) {
+      // Pi loads extensions to force resource/skill discovery. Prefer a .ts no-op:
+      // .cjs/.js/.mjs stubs currently break AgentOS session/new host-path inspection.
       await vm.mkdir("/home/agentos/.pi/agent/extensions", { recursive: true });
       await vm.writeFile(
-        "/home/agentos/.pi/agent/extensions/enable-resources.cjs",
-        "module.exports = function enableResources() {};\n",
+        "/home/agentos/.pi/agent/extensions/enable-resources.ts",
+        "export default function enableResources() {}\n",
       );
       for (const skill of skills) {
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(skill.name)) {

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { createHostDirBackend, type ToolKit } from "@rivet-dev/agentos-core";
@@ -16,6 +16,18 @@ export const AGENT_WORKSPACE = "/workspace";
 export const DEFAULT_SANDBOX_IMAGE =
   "rivetdev/sandbox-agent@sha256:640cfb725a94b8a47967e0c2ec153d3ab267244f517f700e8f82f1e4d55b2ea2";
 const execFileAsync = promisify(execFile);
+
+async function createHostWorkspaceDirectory(): Promise<string> {
+  // AgentOS host-dir mounts on macOS/OrbStack fail against /var/folders temp roots.
+  // Prefer a home-local directory and always realpath through private/tmp symlinks.
+  const preferredRoot = join(homedir(), ".shipwright", "workspaces");
+  try {
+    await mkdir(preferredRoot, { recursive: true, mode: 0o700 });
+    return await realpath(await mkdtemp(join(preferredRoot, "run-")));
+  } catch {
+    return await realpath(await mkdtemp(join(tmpdir(), "shipwright-workspace-")));
+  }
+}
 
 export interface CloneInput {
   owner: string;
@@ -79,7 +91,7 @@ export class SandboxWorkspace {
   private constructor(readonly client: SandboxAgent, private readonly hostWorkspace: string) {}
 
   static async start(): Promise<SandboxWorkspace> {
-    const hostWorkspace = await mkdtemp(join(tmpdir(), "shipwright-workspace-"));
+    const hostWorkspace = await createHostWorkspaceDirectory();
     try {
       const containerUser = resolveSandboxContainerUser(
         process.platform,
