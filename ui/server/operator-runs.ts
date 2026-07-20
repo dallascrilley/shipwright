@@ -29,8 +29,19 @@ import {
   parseOperatorTarget,
   targetUrl,
 } from "../shared/operator-run";
+import {
+  DEFAULT_REVIEW_SKILL_ID,
+  resolveSkill,
+  skillIdFromLegacyPath,
+} from "./skills";
+import {
+  assertSafeVerifyCommand,
+  resolveVerifyPreset,
+} from "./verify-presets";
 
-type StoredRequest = Omit<OperatorRunRequest, "publishConfirmed" | "fromRunId">;
+type StoredRequest = import("../shared/operator-run").OperatorStoredRequest;
+
+type LegacyStoredRequest = StoredRequest & { skillPath?: string };
 
 export type RunExecutor = (
   request: StoredRequest,
@@ -99,28 +110,74 @@ export class JsonFileOperatorRunStore implements OperatorRunStore {
   }
 }
 
-function normalizeRecord(stored: OperatorRunRecord): OperatorRunRecord {
-  const mode = stored.request?.mode ?? stored.kind ?? "issue";
-  const kind = stored.kind ?? (mode === "review" ? "review" : "issue");
-  const request = {
-    mode: mode === "review" ? ("review" as const) : ("issue" as const),
-    issueUrl: stored.request?.issueUrl ?? "",
-    pullRequestUrl: stored.request?.pullRequestUrl ?? "",
-    skillPath: stored.request?.skillPath ?? "",
-    skillId: stored.request?.skillId ?? "",
-    presetId: stored.request?.presetId ?? "",
-    verifyCommand: stored.request?.verifyCommand ?? "",
-    publish: Boolean(stored.request?.publish),
-    timeoutMinutes: stored.request?.timeoutMinutes ?? 30,
+function sanitizeStoredRequest(
+  raw: Partial<LegacyStoredRequest> | undefined,
+  kindHint?: string,
+): { request: StoredRequest; operatorHint?: string; mutated: boolean } {
+  const mode =
+    raw?.mode === "review" || kindHint === "review"
+      ? ("review" as const)
+      : ("issue" as const);
+  let mutated = false;
+  let operatorHint: string | undefined;
+  const legacyPath =
+    typeof raw?.skillPath === "string" ? raw.skillPath.trim() : "";
+  let skillId =
+    typeof raw?.skillId === "string" ? raw.skillId.trim() : "";
+  if (legacyPath) {
+    mutated = true;
+    if (!skillId) {
+      const mapped = skillIdFromLegacyPath(legacyPath);
+      if (mapped) {
+        skillId = mapped;
+      } else if (mode === "review") {
+        operatorHint =
+          "re-run required: legacy skill path removed; select skillId";
+      }
+    }
+  }
+  if (mode === "review" && !skillId) {
+    skillId = DEFAULT_REVIEW_SKILL_ID;
+    mutated = true;
+  }
+  const request: StoredRequest = {
+    mode,
+    issueUrl: raw?.issueUrl ?? "",
+    pullRequestUrl: raw?.pullRequestUrl ?? "",
+    skillId,
+    presetId: raw?.presetId ?? "",
+    verifyCommand: raw?.verifyCommand ?? "",
+    publish: Boolean(raw?.publish),
+    timeoutMinutes: raw?.timeoutMinutes ?? 30,
   };
+  // Never persist host skillPath on durable records.
+  return { request, operatorHint, mutated };
+}
+
+function normalizeRecord(stored: OperatorRunRecord): {
+  record: OperatorRunRecord;
+  mutated: boolean;
+} {
+  const kind = stored.kind ?? (stored.request?.mode === "review" ? "review" : "issue");
+  const { request, operatorHint, mutated: requestMutated } = sanitizeStoredRequest(
+    stored.request as Partial<LegacyStoredRequest> | undefined,
+    kind,
+  );
   const target =
     stored.target ?? parseOperatorTarget(targetUrl(request)) ?? undefined;
-  return {
+  const legacyRequest = stored.request as LegacyStoredRequest | undefined;
+  const hadSkillPath = Boolean(legacyRequest?.skillPath?.trim());
+  const mutated = requestMutated || hadSkillPath || (!stored.target && Boolean(target));
+  const record: OperatorRunRecord = {
     ...stored,
-    kind,
+    kind: kind === "review" ? "review" : "issue",
     request,
     ...(target ? { target } : {}),
+    ...(operatorHint && !stored.operatorHint
+      ? { operatorHint }
+      : {}),
   };
+  return { record, mutated };
 }
 
 export class OperatorRunRegistry {
@@ -137,7 +194,8 @@ export class OperatorRunRegistry {
   ) {
     let reconciled = false;
     for (const stored of this.store.load()) {
-      const record = normalizeRecord(structuredClone(stored));
+      const { record, mutated } = normalizeRecord(structuredClone(stored));
+      if (mutated) reconciled = true;
       if (!isTerminalRun(record.status)) {
         const durableReceipt = this.loadReceipt(record.runId);
         if (durableReceipt?.phase === "complete") {
@@ -154,6 +212,8 @@ export class OperatorRunRegistry {
           }
         }
         record.updatedAt = this.now();
+        record.finishedAt = record.finishedAt ?? this.now();
+        record.summary = buildRunSummary(record);
         reconciled = true;
       }
       this.#records.set(record.runId, record);
@@ -170,18 +230,72 @@ export class OperatorRunRegistry {
     const now = this.now();
     const runId = this.createRunId();
     const controller = new AbortController();
-    const mode = input.mode ?? "issue";
-    const request = {
-      mode: mode === "review" ? ("review" as const) : ("issue" as const),
+
+    let base: Partial<LegacyStoredRequest> = {
+      mode: input.mode ?? "issue",
       issueUrl: input.issueUrl ?? "",
       pullRequestUrl: input.pullRequestUrl ?? "",
-      skillPath: input.skillPath ?? "",
       skillId: input.skillId ?? "",
       presetId: input.presetId ?? "",
       verifyCommand: input.verifyCommand,
       publish: input.publish,
       timeoutMinutes: input.timeoutMinutes,
     };
+
+    if (input.fromRunId?.trim()) {
+      const prior = this.#records.get(input.fromRunId.trim());
+      if (!prior) {
+        throw new Error(`Unknown run ${input.fromRunId.trim()}.`);
+      }
+      if (prior.operatorHint?.includes("legacy skill path")) {
+        throw new Error(
+          "Cannot clone legacy review run; start a fresh review with skillId.",
+        );
+      }
+      base = {
+        ...prior.request,
+        // never copy skillPath from legacy
+        publish: input.publish,
+        timeoutMinutes: input.timeoutMinutes || prior.request.timeoutMinutes,
+      };
+      if (input.presetId) base.presetId = input.presetId;
+      if (input.verifyCommand) base.verifyCommand = input.verifyCommand;
+      if (input.skillId) base.skillId = input.skillId;
+      // publishConfirmed enforced by schema when publish true
+    }
+
+    // Expand preset / validate raw command
+    let verifyCommand = base.verifyCommand ?? "";
+    let presetId = base.presetId ?? "";
+    if (presetId) {
+      const preset = resolveVerifyPreset(presetId);
+      verifyCommand = preset.command;
+      presetId = preset.id;
+    } else {
+      verifyCommand = assertSafeVerifyCommand(verifyCommand);
+    }
+
+    let skillId = base.skillId ?? "";
+    const mode = base.mode === "review" ? ("review" as const) : ("issue" as const);
+    if (mode === "review") {
+      skillId = skillId || DEFAULT_REVIEW_SKILL_ID;
+      // resolve now so bad skill fails before queue
+      resolveSkill(skillId);
+    } else {
+      skillId = "";
+    }
+
+    const request: StoredRequest = {
+      mode,
+      issueUrl: base.issueUrl ?? "",
+      pullRequestUrl: base.pullRequestUrl ?? "",
+      skillId,
+      presetId,
+      verifyCommand,
+      publish: Boolean(base.publish),
+      timeoutMinutes: base.timeoutMinutes ?? 30,
+    };
+
     const target = parseOperatorTarget(targetUrl(request));
     const record: OperatorRunRecord = {
       runId,
@@ -373,6 +487,7 @@ async function executePipeline(
     return executeDemo(request, runId, onProgress, signal);
   }
   if (request.mode === "review") {
+    const skill = resolveSkill(request.skillId || DEFAULT_REVIEW_SKILL_ID);
     const receipt = await runReviewAgent(
       {
         pullRequestUrl: request.pullRequestUrl,
@@ -380,7 +495,7 @@ async function executePipeline(
         publish: request.publish,
         timeoutMinutes: request.timeoutMinutes,
       },
-      createReviewPipelineDependencies(request.skillPath, {
+      createReviewPipelineDependencies(skill.path, {
         runId,
         signal,
         onProgress: (progress) => onProgress(toOperatorReviewReceipt(progress)),
@@ -411,7 +526,7 @@ async function executeDemo(
   signal?: AbortSignal,
 ): Promise<OperatorRunReceipt> {
   if (request.publish) {
-    throw new Error("Demo mode supports dry runs only.");
+    throw new Error("Demo supports dry-run only; start a live publish run outside demo.");
   }
   const target =
     request.mode === "review" ? request.pullRequestUrl : request.issueUrl;

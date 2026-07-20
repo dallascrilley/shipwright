@@ -111,12 +111,17 @@ export interface OperatorRunReceipt {
   }>;
 }
 
+export type OperatorStoredRequest = Omit<
+  OperatorRunRequest,
+  "publishConfirmed" | "fromRunId" | "skillPath"
+>;
+
 export interface OperatorRunRecord {
   runId: string;
   status: OperatorRunStatus;
   phase: OperatorRunPhase;
   kind: OperatorRunKind;
-  request: Omit<OperatorRunRequest, "publishConfirmed" | "fromRunId">;
+  request: OperatorStoredRequest;
   receipt?: OperatorRunReceipt;
   message?: string;
   target?: OperatorRunTarget;

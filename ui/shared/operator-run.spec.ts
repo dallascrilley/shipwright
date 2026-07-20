@@ -28,7 +28,6 @@ function baseRecord(
       mode: "issue",
       issueUrl: "https://github.com/dallascrilley/example/issues/12",
       pullRequestUrl: "",
-      skillPath: "",
       skillId: "",
       presetId: "",
       verifyCommand: "bun test",
