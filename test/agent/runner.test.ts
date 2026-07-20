@@ -59,6 +59,50 @@ test("runPiAgent configures Pi's Kimi K3 catalog", async () => {
   });
 });
 
+test("runPiAgent projects a canonical skill before creating the session", async () => {
+  const events: string[] = [];
+  const writes = new Map<string, string>();
+  const vm: AgentVm = {
+    async mkdir(path) { events.push(`mkdir:${path}`); },
+    async writeFile(path, content) { writes.set(path, String(content)); events.push(`write:${path}`); },
+    async createSession() { events.push("session"); return { sessionId: "s1" }; },
+    async prompt() { return { text: "done" }; },
+    closeSession() {},
+    async dispose() {},
+  };
+
+  await runPiAgent(
+    vm,
+    { env: {}, name: "openai", model: "gpt-test" },
+    "fix it",
+    5_000,
+    [{ name: "fix-review-findings", content: "---\nname: fix-review-findings\ndescription: test\n---\n" }],
+  );
+
+  const skillPath = "/home/agentos/.pi/agent/skills/fix-review-findings/SKILL.md";
+  expect(writes.get(skillPath)).toContain("name: fix-review-findings");
+  expect(writes.get("/home/agentos/.pi/agent/extensions/enable-resources.cjs")).toContain("enableResources");
+  expect(events.indexOf(`write:${skillPath}`)).toBeLessThan(events.indexOf("session"));
+});
+
+test("runPiAgent rejects unsafe skill names", async () => {
+  const vm: AgentVm = {
+    async mkdir() {},
+    async writeFile() {},
+    async createSession() { return { sessionId: "s1" }; },
+    async prompt() { return { text: "done" }; },
+    closeSession() {},
+    async dispose() {},
+  };
+  await expect(runPiAgent(
+    vm,
+    { env: {}, name: "openai", model: "gpt-test" },
+    "fix it",
+    5_000,
+    [{ name: "../bad", content: "bad" }],
+  )).rejects.toThrow("invalid skill name");
+});
+
 test("runPiAgent disposes the VM when session creation fails", async () => {
   const events: string[] = [];
   const vm: AgentVm = {
@@ -121,6 +165,7 @@ test("createAndRunPiAgent gives its explicit sidecar a deadline beyond the Pi de
     { env: {}, name: "openai", model: "gpt-test" },
     "fix it",
     5_000,
+    [],
     runtime,
   )).resolves.toBe("done");
 
