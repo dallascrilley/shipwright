@@ -20,7 +20,7 @@ The existing programming agent proves issue-to-new-PR publication. It cannot upd
 - [x] (2026-07-20 00:20Z) Confirmed Pi supports Agent Skills under `~/.pi/agent/skills/`; selected trusted skill projection plus a no-op extension to force the supported resource loader.
 - [x] (2026-07-20 00:31Z) U1. Added canonical PR parsing, allowlisted same-repository authorization, thread/review reads, reply/resolve APIs, and marker helpers; 13 focused tests and typecheck passed.
 - [x] (2026-07-20 00:39Z) U2. Added Pi skill projection with resource-loader activation, hostile-content review prompt, strict outcome validation, exact PR-head cloning, and artifact removal; 13 focused tests and typecheck passed.
-- [ ] U3. Add the host-owned review pipeline, receipt, CLI, documentation, and deterministic verification.
+- [x] (2026-07-20 00:56Z) U3. Added the host-owned review pipeline, atomic receipt, CLI, docs, exact-head recheck, idempotent reply/resolve loop, and no-code outcomes; all 73 deterministic tests and typecheck passed.
 - [ ] U4. Independently review and integrate the runner change into `dallascrilley/rivet-test`, then pin the live runner to that exact reviewed commit.
 - [ ] U5. Run one bounded Kimi request against `.hub#1029`, reconcile receipt/head/threads, verify the exact remote head, audit secrets, and prove cleanup.
 
@@ -133,9 +133,10 @@ No new package dependency is required. Existing `@octokit/app` and `@octokit/res
 
 ## Outcomes & Retrospective
 
-Pending implementation and live proof.
+Implementation checkpoint: U1-U3 are complete. The original issue-to-PR command remains unchanged, while `review-agent` now supports same-repository PR feedback with exact-head pinning, canonical skill projection, independent verification, structured outcomes, and host-owned thread writes. Integration review and the billable live proof remain.
 
 ## Revision History
 
 - 2026-07-19: Initial plan created from live PR #1029 evidence and current runner architecture.
 - 2026-07-19: Marked U1 and U2 complete after focused tests and typecheck; recorded the Pi resource-loader constraint.
+- 2026-07-19: Marked U3 complete after 73 deterministic tests and typecheck; added a pre-publication live PR-state recheck.
