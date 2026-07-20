@@ -53,6 +53,7 @@ ssh "$target" bash -s -- "$release_path" <<'REMOTE'
   runuser -u shipwright -- /usr/local/bin/mise exec -C "$release_path/ui" -- pnpm install --frozen-lockfile
   runuser -u shipwright -- /usr/local/bin/mise exec -C "$release_path/ui" -- pnpm build
   runuser --preserve-environment -u shipwright -- \
+    env HOME=/var/lib/shipwright \
     /usr/local/bin/mise exec -C "$release_path" -- bun run doctor
 
   previous_release=""
