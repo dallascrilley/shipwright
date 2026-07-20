@@ -23,9 +23,14 @@ import type {
   OperatorRunRecord,
   OperatorRunRequest,
 } from "../shared/operator-run";
-import { isTerminalRun } from "../shared/operator-run";
+import {
+  buildRunSummary,
+  isTerminalRun,
+  parseOperatorTarget,
+  targetUrl,
+} from "../shared/operator-run";
 
-type StoredRequest = Omit<OperatorRunRequest, "publishConfirmed">;
+type StoredRequest = Omit<OperatorRunRequest, "publishConfirmed" | "fromRunId">;
 
 export type RunExecutor = (
   request: StoredRequest,
@@ -97,18 +102,24 @@ export class JsonFileOperatorRunStore implements OperatorRunStore {
 function normalizeRecord(stored: OperatorRunRecord): OperatorRunRecord {
   const mode = stored.request?.mode ?? stored.kind ?? "issue";
   const kind = stored.kind ?? (mode === "review" ? "review" : "issue");
+  const request = {
+    mode: mode === "review" ? ("review" as const) : ("issue" as const),
+    issueUrl: stored.request?.issueUrl ?? "",
+    pullRequestUrl: stored.request?.pullRequestUrl ?? "",
+    skillPath: stored.request?.skillPath ?? "",
+    skillId: stored.request?.skillId ?? "",
+    presetId: stored.request?.presetId ?? "",
+    verifyCommand: stored.request?.verifyCommand ?? "",
+    publish: Boolean(stored.request?.publish),
+    timeoutMinutes: stored.request?.timeoutMinutes ?? 30,
+  };
+  const target =
+    stored.target ?? parseOperatorTarget(targetUrl(request)) ?? undefined;
   return {
     ...stored,
     kind,
-    request: {
-      mode,
-      issueUrl: stored.request?.issueUrl ?? "",
-      pullRequestUrl: stored.request?.pullRequestUrl ?? "",
-      skillPath: stored.request?.skillPath ?? "",
-      verifyCommand: stored.request?.verifyCommand ?? "",
-      publish: Boolean(stored.request?.publish),
-      timeoutMinutes: stored.request?.timeoutMinutes ?? 30,
-    },
+    request,
+    ...(target ? { target } : {}),
   };
 }
 
@@ -160,20 +171,25 @@ export class OperatorRunRegistry {
     const runId = this.createRunId();
     const controller = new AbortController();
     const mode = input.mode ?? "issue";
+    const request = {
+      mode: mode === "review" ? ("review" as const) : ("issue" as const),
+      issueUrl: input.issueUrl ?? "",
+      pullRequestUrl: input.pullRequestUrl ?? "",
+      skillPath: input.skillPath ?? "",
+      skillId: input.skillId ?? "",
+      presetId: input.presetId ?? "",
+      verifyCommand: input.verifyCommand,
+      publish: input.publish,
+      timeoutMinutes: input.timeoutMinutes,
+    };
+    const target = parseOperatorTarget(targetUrl(request));
     const record: OperatorRunRecord = {
       runId,
       status: "queued",
       phase: "intake",
       kind: mode === "review" ? "review" : "issue",
-      request: {
-        mode,
-        issueUrl: input.issueUrl ?? "",
-        pullRequestUrl: input.pullRequestUrl ?? "",
-        skillPath: input.skillPath ?? "",
-        verifyCommand: input.verifyCommand,
-        publish: input.publish,
-        timeoutMinutes: input.timeoutMinutes,
-      },
+      request,
+      ...(target ? { target } : {}),
       startedAt: now,
       updatedAt: now,
     };
@@ -270,17 +286,38 @@ export class OperatorRunRegistry {
   #replace(
     runId: string,
     update: Partial<
-      Pick<OperatorRunRecord, "status" | "phase" | "receipt" | "message">
+      Pick<
+        OperatorRunRecord,
+        | "status"
+        | "phase"
+        | "receipt"
+        | "message"
+        | "summary"
+        | "durationMs"
+        | "finishedAt"
+        | "operatorHint"
+        | "target"
+      >
     >,
   ): void {
     const current = this.#records.get(runId);
     if (!current) return;
-    this.#records.set(runId, {
+    const next: OperatorRunRecord = {
       ...current,
       ...update,
       ...(update.receipt ? { receipt: structuredClone(update.receipt) } : {}),
       updatedAt: this.now(),
-    });
+    };
+    if (update.status && isTerminalRun(update.status)) {
+      next.finishedAt = next.finishedAt ?? this.now();
+      const started = Date.parse(next.startedAt);
+      const finished = Date.parse(next.finishedAt);
+      if (Number.isFinite(started) && Number.isFinite(finished)) {
+        next.durationMs = Math.max(0, finished - started);
+      }
+      next.summary = buildRunSummary(next);
+    }
+    this.#records.set(runId, next);
     this.#persist();
   }
 
