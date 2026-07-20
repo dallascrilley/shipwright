@@ -38,7 +38,6 @@ const runtimeOnly = process.argv.includes("--runtime-only");
 const stateDirectory = resolve(
   process.env.SHIPWRIGHT_STATE_DIR?.trim() || ".artifacts/shipwright",
 );
-const sandboxImage = resolveSandboxImage(process.env.SHIPWRIGHT_SANDBOX_IMAGE);
 mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
 
 const checks: Check[] = [
@@ -53,14 +52,17 @@ const checks: Check[] = [
     detail: "reachable",
     passed: spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0,
   },
-  {
-    name: "Sandbox image",
-    detail: sandboxImage,
-    passed:
-      spawnSync("docker", ["image", "inspect", sandboxImage], {
+  configurationCheck("Sandbox image", () => {
+    const image = resolveSandboxImage(process.env.SHIPWRIGHT_SANDBOX_IMAGE);
+    if (
+      spawnSync("docker", ["image", "inspect", image], {
         stdio: "ignore",
-      }).status === 0,
-  },
+      }).status !== 0
+    ) {
+      throw new Error("sandbox image is not present");
+    }
+    return image;
+  }),
   configurationCheck("State directory", () => {
     accessSync(stateDirectory, constants.R_OK | constants.W_OK | constants.X_OK);
     return stateDirectory;

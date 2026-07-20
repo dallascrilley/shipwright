@@ -33,7 +33,7 @@ The deploy command bootstraps Docker, mise, pinned runtimes, Tailscale, the serv
 deploy/deploy.sh root@SERVER_IP
 ```
 
-The command refuses a dirty checkout, uploads the exact current commit to a new release directory, installs locked dependencies, pulls the pinned sandbox image, validates the full GitHub/model configuration as the service user, builds on the Linux host, atomically moves the `current` symlink, starts the service, and waits for a loopback HTTP response. If startup or health verification fails, it automatically restores the previous release and systemd unit.
+The command refuses a dirty checkout, uploads the exact current commit to a new release directory, installs locked dependencies, pulls the sandbox image by immutable SHA-256 digest, validates the full GitHub/model configuration as the service user, builds on the Linux host, atomically moves the `current` symlink, starts the service, and waits for a loopback HTTP response. If startup or health verification fails, it automatically restores the previous release and systemd unit.
 
 ## Configure secrets
 

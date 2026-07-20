@@ -46,6 +46,10 @@ ssh "$target" bash -s -- "$release_path" <<'REMOTE'
   test -n "${BETTER_AUTH_SECRET:-}"
   test -n "${GITHUB_APP_PRIVATE_KEY_PATH:-}"
   test -n "${SHIPWRIGHT_SANDBOX_IMAGE:-}"
+  if [[ ! "$SHIPWRIGHT_SANDBOX_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]; then
+    printf 'SHIPWRIGHT_SANDBOX_IMAGE must use an immutable sha256 digest.\n' >&2
+    false
+  fi
   runuser -u shipwright -- test -r "$GITHUB_APP_PRIVATE_KEY_PATH"
   docker pull "$SHIPWRIGHT_SANDBOX_IMAGE" >/dev/null
   runuser -u shipwright -- /usr/local/bin/mise trust "$release_path/mise.toml" >/dev/null

@@ -14,7 +14,7 @@ const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const SANDBOX_WORKSPACE = "/home/sandbox/workspace";
 export const AGENT_WORKSPACE = "/workspace";
 export const DEFAULT_SANDBOX_IMAGE =
-  "rivetdev/sandbox-agent:0.5.0-rc.2-full";
+  "rivetdev/sandbox-agent@sha256:640cfb725a94b8a47967e0c2ec153d3ab267244f517f700e8f82f1e4d55b2ea2";
 const execFileAsync = promisify(execFile);
 
 export interface CloneInput {
@@ -45,7 +45,11 @@ export function parseNulList(output: string): string[] {
 }
 
 export function resolveSandboxImage(configured?: string): string {
-  return configured?.trim() || DEFAULT_SANDBOX_IMAGE;
+  const image = configured?.trim() || DEFAULT_SANDBOX_IMAGE;
+  if (!/@sha256:[0-9a-f]{64}$/.test(image)) {
+    throw new Error("SHIPWRIGHT_SANDBOX_IMAGE must use an immutable sha256 digest");
+  }
+  return image;
 }
 
 export function requireSuccessfulCommand(label: string, result: ProcessRunResponse): ProcessRunResponse {
