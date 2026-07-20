@@ -1,7 +1,10 @@
 import { defineAction } from "@agent-native/core/action";
 import { z } from "zod";
 
-import { getOperatorRunRegistry } from "../server/operator-runs";
+import {
+  getOperatorRunRegistry,
+  isOperatorDemoMode,
+} from "../server/operator-runs";
 
 export default defineAction({
   description:
@@ -12,5 +15,8 @@ export default defineAction({
   http: { method: "GET" },
   readOnly: true,
   toolCallable: false,
-  run: async ({ limit }) => getOperatorRunRegistry().list(limit ?? 50),
+  run: async ({ limit }) => ({
+    records: getOperatorRunRegistry().list(limit ?? 50),
+    demoMode: isOperatorDemoMode(),
+  }),
 });

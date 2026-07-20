@@ -60,6 +60,11 @@ interface VerifyPreset {
   command: string;
 }
 
+interface OperatorRunListResponse {
+  records: OperatorRunRecord[];
+  demoMode: boolean;
+}
+
 function formatDuration(ms: number | undefined): string {
   if (ms == null || !Number.isFinite(ms)) return "";
   const totalSec = Math.round(ms / 1000);
@@ -98,7 +103,7 @@ export function OperatorConsole() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [useRawVerify, setUseRawVerify] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [pendingPublish, setPendingPublish] = useState(false);
+  const [publishSource, setPublishSource] = useState<OperatorRunRecord | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -109,8 +114,10 @@ export function OperatorConsole() {
     { limit: 50 },
     {
       refetchInterval: (query) => {
-        const records = query.state.data as OperatorRunRecord[] | undefined;
-        return records?.some((item) => !isTerminalRun(item.status)) ? 1000 : 5000;
+        const response = query.state.data as OperatorRunListResponse | undefined;
+        return response?.records.some((item) => !isTerminalRun(item.status))
+          ? 1000
+          : 5000;
       },
     },
   );
@@ -141,11 +148,9 @@ export function OperatorConsole() {
   );
 
   const record = runQuery.data as OperatorRunRecord | undefined;
-  const history = (historyQuery.data as OperatorRunRecord[] | undefined) ?? [];
-  const demoMode = Boolean(
-    record?.receipt?.execution.runtime === "demo" ||
-      history.some((item) => item.receipt?.execution.runtime === "demo"),
-  );
+  const historyResponse = historyQuery.data as OperatorRunListResponse | undefined;
+  const history = historyResponse?.records ?? [];
+  const demoMode = historyResponse?.demoMode ?? false;
   const presets = (presetsQuery.data as VerifyPreset[] | undefined) ?? [];
   const active = Boolean(record && !isTerminalRun(record.status));
   const busy = startRun.isPending || active || preflightPending;
@@ -184,7 +189,6 @@ export function OperatorConsole() {
       issueUrl,
       pullRequestUrl,
       skillId: mode === "review" ? skillId : "",
-      skillPath: "",
       presetId: useRawVerify ? "" : presetId,
       verifyCommand,
       timeoutMinutes,
@@ -207,7 +211,7 @@ export function OperatorConsole() {
       const started = (await startRun.mutateAsync(input)) as OperatorRunRecord;
       setRunId(started.runId);
       setConfirmOpen(false);
-      setPendingPublish(false);
+      setPublishSource(null);
       void historyQuery.refetch();
     } catch (error) {
       setFormError(
@@ -226,9 +230,9 @@ export function OperatorConsole() {
 
   function handlePublishClick() {
     setFormError(null);
+    setPublishSource(null);
     const request = buildRequest(true);
     if (!request) return;
-    setPendingPublish(true);
     setConfirmOpen(true);
   }
 
@@ -269,13 +273,22 @@ export function OperatorConsole() {
     ) {
       if (!action.runId) return;
       if (action.type === "edit_verify_retry") {
+        if (!record || record.runId !== action.runId) return;
+        setTargetInput(targetUrl(record.request));
+        setMode(record.request.mode);
+        setSkillId(record.request.skillId || DEFAULT_SKILL_ID);
+        setPresetId("");
+        setVerifyCommand(record.request.verifyCommand);
+        setTimeoutMinutes(record.request.timeoutMinutes);
         setAdvancedOpen(true);
         setUseRawVerify(true);
+        setFormError("Edit the verification command, then start a dry-run.");
+        return;
       }
       if (action.type === "start_publish_run") {
-        setPendingPublish(true);
-        setConfirmOpen(true);
-        // stash fromRunId via runId already selected
+        if (!record || record.runId !== action.runId) return;
+        setPublishSource(record);
+            setConfirmOpen(true);
         return;
       }
       try {
@@ -299,19 +312,17 @@ export function OperatorConsole() {
   async function confirmPublish() {
     setFormError(null);
     try {
-      if (record && isTerminalRun(record.status) && !record.request.publish) {
+      if (publishSource) {
         const started = (await startRun.mutateAsync({
-          fromRunId: record.runId,
-          verifyCommand: record.request.verifyCommand,
-          presetId: record.request.presetId,
-          skillId: record.request.skillId,
+          fromRunId: publishSource.runId,
+          verifyCommand: publishSource.request.verifyCommand,
           publish: true,
           publishConfirmed: true,
-          timeoutMinutes: record.request.timeoutMinutes,
+          timeoutMinutes: publishSource.request.timeoutMinutes,
         })) as OperatorRunRecord;
         setRunId(started.runId);
         setConfirmOpen(false);
-        setPendingPublish(false);
+          setPublishSource(null);
         void historyQuery.refetch();
         return;
       }
@@ -325,20 +336,19 @@ export function OperatorConsole() {
     }
   }
 
-  const confirmTarget =
-    pendingPublish && record && !record.request.publish
-      ? targetUrl(record.request)
-      : targetInput;
-
-  const confirmVerify =
-    pendingPublish && record && !record.request.publish
-      ? record.request.verifyCommand
-      : verifyCommand;
-
-  const pinnedSha =
-    pendingPublish && record?.receipt?.baseSha
-      ? record.receipt.baseSha.slice(0, 7)
-      : null;
+  const confirmRecord =
+    publishSource?.request.publish === false ? publishSource : undefined;
+  const confirmTarget = confirmRecord
+    ? targetUrl(confirmRecord.request)
+    : targetInput;
+  const confirmVerify = confirmRecord
+    ? confirmRecord.request.verifyCommand
+    : verifyCommand;
+  const confirmMode = confirmRecord?.request.mode ?? mode;
+  const confirmSkillId = confirmRecord?.request.skillId ?? skillId;
+  const pinnedSha = confirmRecord?.receipt?.baseSha
+    ? confirmRecord.receipt.baseSha.slice(0, 7)
+    : null;
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-6 lg:px-8 lg:py-10">
@@ -639,7 +649,15 @@ export function OperatorConsole() {
         />
       </div>
 
-      <Sheet open={confirmOpen} onOpenChange={setConfirmOpen}>
+      <Sheet
+        open={confirmOpen}
+        onOpenChange={(open) => {
+          setConfirmOpen(open);
+          if (!open) {
+                  setPublishSource(null);
+          }
+        }}
+      >
         <SheetContent className="sm:max-w-lg">
           <SheetHeader>
             <SheetTitle>Confirm publication run</SheetTitle>
@@ -653,9 +671,9 @@ export function OperatorConsole() {
           </SheetHeader>
           <div className="my-6 space-y-3 rounded-md border border-border bg-muted/30 p-4 text-sm">
             <p className="font-medium break-all">{confirmTarget}</p>
-            {mode === "review" && (
+            {confirmMode === "review" && (
               <p className="font-mono text-xs text-muted-foreground break-all">
-                skill: {skillId}
+                skill: {confirmSkillId}
               </p>
             )}
             <p className="font-mono text-xs text-muted-foreground break-all">
@@ -668,7 +686,13 @@ export function OperatorConsole() {
             )}
           </div>
           <SheetFooter>
-            <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setConfirmOpen(false);
+                          setPublishSource(null);
+              }}
+            >
               Keep as draft
             </Button>
             <Button
