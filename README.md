@@ -1,47 +1,53 @@
-# Programming agent example
+# Shipwright
 
-This project includes the original agentOS Pi round-trip starter plus a guarded example that takes a GitHub issue, edits and tests its repository in an isolated Docker sandbox, and optionally opens a pull request.
+Turn GitHub issues into verified pull requests.
 
-The host owns GitHub authentication and publication. Pi receives a writable `/workspace` mount and sandbox shell tools, but never the GitHub App private key or installation token. The CLI is dry-run by default.
+Shipwright authorizes an allowlisted GitHub issue, gives Kimi or another supported model an isolated Docker workspace through AgentOS and Pi, independently runs the repository's verification command, and publishes only after explicit operator confirmation. GitHub credentials stay on the host and are never passed to the coding agent.
 
-## Install
+The project includes a CLI and a private Agent Native operator console. It is intentionally a single-operator service, not an autonomous merger or public multi-tenant SaaS.
 
-Prerequisites: Bun, Docker, one supported model API key, and a GitHub App installed only on selected repositories.
+## Bootstrap
 
-```sh
-bun install
-cp .env.example .env
-```
-
-The GitHub App needs repository metadata read, issues read, contents write, and pull requests write. It does not need Actions, workflows, administration, secrets, or organization permissions. Configure exact `owner/repo` entries in `GITHUB_REPOSITORY_ALLOWLIST`; wildcards are rejected.
-
-Set `GITHUB_APP_ID`, exactly one of `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`, and optionally `GITHUB_APP_INSTALLATION_ID`. Configure one model key (`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `KIMI_API_KEY`) and use `AGENTOS_PROVIDER` when more than one is present. `AGENTOS_MODEL` overrides that provider's default model when account policy or availability requires it. Kimi K3 uses `AGENTOS_PROVIDER=kimi` and `AGENTOS_MODEL=k3`; the runtime provisions Pi with Kimi's OpenAI-compatible coding endpoint.
-
-## Run the programming agent
-
-Dry run (no branch, commit, push, or PR):
+Prerequisites are Docker and either [mise](https://mise.jdx.dev/) or the Bun, Node, and pnpm versions pinned in `mise.toml`.
 
 ```sh
-bun run programming-agent -- https://github.com/OWNER/REPO/issues/123 --verify "bun test"
+bun run bootstrap
 ```
 
-Publish after independent verification and policy checks pass:
+Bootstrap installs both lockfiles and creates a mode-0600 `.env` from `.env.example` when needed. Configure one model key plus the least-privileged GitHub App values, then run:
 
 ```sh
-bun run programming-agent -- https://github.com/OWNER/REPO/issues/123 --verify "bun test" --publish
+bun run doctor
+bun run dev
 ```
 
-`--timeout-minutes` accepts 1 through 120 and defaults to 30. Each run uses a unique `agent/issue-<number>-<run-id>` branch. The Pi sidecar frame deadline follows the selected agent timeout with a one-minute cleanup buffer, so a tool-using turn is not cut off by AgentOS's default two-minute frame limit. The host blocks empty changes, more than 100 files, patches over 1 MiB, `.git/**`, and `.github/workflows/**`. It never force-pushes.
+The GitHub App needs repository metadata read, issues read, contents write, and pull requests write. It does not need Actions, workflows, administration, secrets, or organization permissions. `GITHUB_REPOSITORY_ALLOWLIST` accepts exact `owner/repo` entries only; wildcards are rejected.
 
-Receipts are written atomically to `.artifacts/programming-agent/<run-id>/receipt.json`. A receipt records the non-secret agent execution provenance (AgentOS runtime, Pi software, provider name, and model), issue, base SHA, generated branch, changed files, observed verification exit status, commit SHA, PR URL, and failure phase/code. Published pull requests include the same execution provenance. API keys and GitHub credentials are never included. If a push succeeds but PR creation fails, retain the receipt and generated branch for reconciliation; do not rerun blindly or delete the branch.
+## Issue-to-PR CLI
 
-This is a single-run example, not a webhook service, durable queue, autonomous merger, or deployment system.
+Dry run (no branch, commit, push, or pull request):
 
-## Address pull request review feedback
+```sh
+bun run shipwright -- https://github.com/OWNER/REPO/issues/123 --verify "bun test"
+```
 
-The separate review workflow targets an existing same-repository pull request head. It projects an explicitly selected `fix-review-findings` Agent Skill into Pi, treats review text as untrusted, independently verifies any changes, and keeps GitHub credentials and thread mutations on the trusted host.
+Publish only after independent verification and policy checks pass:
 
-Dry run (no commit, push, reply, or resolution):
+```sh
+bun run shipwright -- https://github.com/OWNER/REPO/issues/123 --verify "bun test" --publish
+```
+
+`bun run programming-agent` remains as a temporary compatibility alias. New automation should use `bun run shipwright`.
+
+`--timeout-minutes` accepts 1 through 120 and defaults to 30. Each run uses a unique `agent/issue-<number>-<run-id>` branch. Shipwright blocks empty changes, more than 100 files, patches over 1 MiB, `.git/**`, and `.github/workflows/**`. It never force-pushes.
+
+Receipts are written atomically under `${SHIPWRIGHT_STATE_DIR:-.artifacts/shipwright}/receipts/<run-id>/receipt.json`. They record non-secret execution provenance, issue and base identity, changed files, verification result, commit SHA, pull-request URL, and failure phase. If a push succeeds but pull-request creation fails, retain the receipt and generated branch for reconciliation; do not rerun blindly.
+
+## PR review CLI
+
+The separate review workflow targets an existing same-repository pull request head. It projects an explicitly selected `fix-review-findings` Agent Skill into Pi, treats review text as untrusted, independently verifies warranted changes, and keeps GitHub credentials plus thread mutations on the trusted host.
+
+Dry run:
 
 ```sh
 bun run review-agent -- https://github.com/OWNER/REPO/pull/123 \
@@ -58,41 +64,38 @@ bun run review-agent -- https://github.com/OWNER/REPO/pull/123 \
   --publish
 ```
 
-The host pins the authorized PR head SHA, rejects fork heads and moved branches, and requires exactly one `fixed`, `rejected`, `deferred`, or `needs-human` outcome per unresolved current thread. Fixed, rejected, and concretely deferred threads receive an idempotent run-marked reply and are resolved; `needs-human` threads receive a reply and remain open. Receipts are written atomically with mode 0600 under `.artifacts/review-agent/<run-id>/receipt.json` and record the canonical skill's SHA-256 digest, never its contents or host path.
+The host pins the authorized PR head SHA, rejects fork heads and moved branches, and requires one explicit outcome per unresolved current thread. Fixed, rejected, and concretely deferred threads receive an idempotent reply and are resolved; `needs-human` threads receive a reply and remain open. Review receipts are written with mode 0600 under `${SHIPWRIGHT_STATE_DIR:-.artifacts/shipwright}/review-receipts/<run-id>/receipt.json` and record the canonical skill's SHA-256 digest, never its contents or host path.
 
-## Run the operator console
+## Operator console
 
-The nested `ui/` app is an Agent Native 0.109.4 operator console over the same host-owned pipeline. It preserves the CLI's dry-run default, keeps GitHub credentials server-side, shows live phase and receipt evidence, and uses a separate confirmation sheet before publication.
+The console keeps credentials server-side, defaults to dry-run, shows live phase and receipt evidence, and requires a second confirmation before publication. Run it from the repository root with `bun run dev`, then open the printed local URL.
 
-```sh
-cd ui
-pnpm install --frozen-lockfile
-pnpm dev
-```
-
-Open the local URL printed by Agent Native. The operator console is at `/`; the Agent Native chat workspace is at `/chat`.
-
-For a credential-free visual smoke, start the server with `AGENT_PROGRAMMING_UI_DEMO=1 pnpm dev`. Demo mode accepts dry runs only and returns deterministic local evidence; it never creates a branch or pull request. Real runs use the same GitHub App, model, Docker, and repository allowlist configuration as the CLI.
-
-## Original round-trip starter
-
-Start the server and client in separate terminals:
+For a credential-free deterministic UI smoke:
 
 ```sh
-bun run server
-bun run client
+SHIPWRIGHT_UI_DEMO=1 bun run dev
 ```
 
-The client creates a VM, starts Pi, requires the response marker `AGENTOS_ROUND_TRIP_OK`, and closes the session.
+Run records persist atomically under `SHIPWRIGHT_STATE_DIR`. Completed history survives restarts; an unfinished run is marked interrupted rather than silently resumed.
 
-## Tests
+## Verification
 
 ```sh
-bun test
-bun run typecheck
-cd ui && pnpm test && pnpm typecheck && pnpm build
+bun run verify
 ```
 
-Deterministic tests do not require GitHub, Docker, or a model. `bun run test:e2e` runs the original real Pi round trip when a model key is present. Docker and live GitHub acceptance tests are opt-in and must target a disposable allowlisted repository owned by `dallascrilley` or `dallascrilleymartech`; they never merge a PR.
+Deterministic checks do not require GitHub, Docker, or a model. Docker and live acceptance tests are opt-in:
 
-See the [agentOS documentation](https://agentos-sdk.dev/docs/) for sessions, software, permissions, persistence, and deployment.
+```sh
+bun run test:docker
+bun run test:local-pi
+bun run test:live
+```
+
+Live tests must target an explicitly configured disposable issue in an allowlisted repository owned by `dallascrilley` or `dallascrilleymartech`.
+
+## Deployment
+
+Production runs as a systemd service on a dedicated Linux VM and is exposed privately through Tailscale. The service builds on the Linux host so native Agent Native dependencies match the target architecture. See [docs/deployment.md](docs/deployment.md).
+
+See the [AgentOS documentation](https://agentos-sdk.dev/docs/) for sessions, software, permissions, and sandbox behavior.

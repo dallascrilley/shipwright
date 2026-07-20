@@ -5,7 +5,7 @@ import { operatorRunRequestSchema } from "../shared/operator-run";
 
 export default defineAction({
   description:
-    "Start a GitHub issue programming-agent run. Dry-run is the default. Publishing requires explicit approval.",
+    "Start a Shipwright run for a GitHub issue. Dry-run is the default. Publishing requires explicit approval.",
   schema: operatorRunRequestSchema,
   needsApproval: (input) => input.publish,
   toolCallable: false,

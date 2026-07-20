@@ -1,5 +1,5 @@
-const rawAppName = "programming-agent";
-const rawAppTitle = "Programming Agent";
+const rawAppName = "shipwright";
+const rawAppTitle = "Shipwright";
 
 const APP_NAME_PLACEHOLDER = "{" + "{APP_NAME}}";
 const APP_TITLE_PLACEHOLDER = "{" + "{APP_TITLE}}";

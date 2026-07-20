@@ -1,5 +1,5 @@
 import { parseArgs } from "./args.js";
-import { runProgrammingAgent } from "../pipeline/run.js";
+import { runShipwright } from "../pipeline/run.js";
 import { redactSecrets } from "../pipeline/receipt.js";
 import { createPipelineDependencies } from "./dependencies.js";
 
@@ -10,7 +10,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   process.once("SIGINT", interrupt);
   process.once("SIGTERM", interrupt);
   try {
-    const receipt = await runProgrammingAgent(args, createPipelineDependencies({
+    const receipt = await runShipwright(args, createPipelineDependencies({
       signal: controller.signal,
     }));
     console.log(JSON.stringify(receipt, null, 2));

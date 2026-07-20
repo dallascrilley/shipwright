@@ -1,9 +1,18 @@
 import { randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 
 import { createPipelineDependencies } from "../../src/cli/dependencies.js";
+import { resolveShipwrightStateDirectory } from "../../src/config/state.js";
 import { redactSecrets, type RunReceipt } from "../../src/pipeline/receipt.js";
 import {
-  runProgrammingAgent,
+  runShipwright,
   type RunRequest,
 } from "../../src/pipeline/run.js";
 import type {
@@ -19,6 +28,66 @@ export type RunExecutor = (
   onProgress: (receipt: RunReceipt) => void,
 ) => Promise<RunReceipt>;
 
+export interface OperatorRunStore {
+  load(): OperatorRunRecord[];
+  save(records: readonly OperatorRunRecord[]): void;
+}
+
+export type RunReceiptLoader = (runId: string) => RunReceipt | undefined;
+
+export class MemoryOperatorRunStore implements OperatorRunStore {
+  #records: OperatorRunRecord[];
+
+  constructor(records: OperatorRunRecord[] = []) {
+    this.#records = structuredClone(records);
+  }
+
+  load(): OperatorRunRecord[] {
+    return structuredClone(this.#records);
+  }
+
+  save(records: readonly OperatorRunRecord[]): void {
+    this.#records = structuredClone([...records]);
+  }
+}
+
+export class JsonFileOperatorRunStore implements OperatorRunStore {
+  constructor(private readonly path: string) {}
+
+  load(): OperatorRunRecord[] {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(this.path, "utf8"));
+      if (!Array.isArray(parsed)) {
+        throw new Error("operator run state must be a JSON array");
+      }
+      return structuredClone(parsed as OperatorRunRecord[]);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        return [];
+      }
+      throw new Error(`could not load operator run state at ${this.path}`, {
+        cause: error,
+      });
+    }
+  }
+
+  save(records: readonly OperatorRunRecord[]): void {
+    const directory = dirname(this.path);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const temporaryPath = `${this.path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+    writeFileSync(temporaryPath, `${JSON.stringify(records, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    renameSync(temporaryPath, this.path);
+    chmodSync(this.path, 0o600);
+  }
+}
+
 export class OperatorRunRegistry {
   readonly #records = new Map<string, OperatorRunRecord>();
 
@@ -26,7 +95,35 @@ export class OperatorRunRegistry {
     private readonly execute: RunExecutor = executePipeline,
     private readonly createRunId: () => string = () =>
       randomBytes(8).toString("hex"),
-  ) {}
+    private readonly store: OperatorRunStore = new MemoryOperatorRunStore(),
+    private readonly now: () => string = () => new Date().toISOString(),
+    private readonly loadReceipt: RunReceiptLoader = () => undefined,
+  ) {
+    let reconciled = false;
+    for (const stored of this.store.load()) {
+      const record = structuredClone(stored);
+      if (!isTerminalRun(record.status)) {
+        const durableReceipt = this.loadReceipt(record.runId);
+        if (durableReceipt?.phase === "complete") {
+          record.status = "succeeded";
+          record.phase = "complete";
+          record.receipt = structuredClone(durableReceipt);
+          delete record.message;
+        } else {
+          record.status = "failed";
+          record.message = "Run interrupted by service restart.";
+          if (durableReceipt) {
+            record.phase = durableReceipt.phase;
+            record.receipt = structuredClone(durableReceipt);
+          }
+        }
+        record.updatedAt = this.now();
+        reconciled = true;
+      }
+      this.#records.set(record.runId, record);
+    }
+    if (reconciled) this.#persist();
+  }
 
   start(input: OperatorRunRequest): OperatorRunRecord {
     const active = this.getLatest();
@@ -34,7 +131,7 @@ export class OperatorRunRegistry {
       throw new Error(`Run ${active.runId} is already active.`);
     }
 
-    const now = new Date().toISOString();
+    const now = this.now();
     const runId = this.createRunId();
     const record: OperatorRunRecord = {
       runId,
@@ -50,6 +147,7 @@ export class OperatorRunRegistry {
       updatedAt: now,
     };
     this.#records.set(runId, record);
+    this.#persist();
     queueMicrotask(() => void this.#run(record));
     return structuredClone(record);
   }
@@ -108,8 +206,13 @@ export class OperatorRunRegistry {
       ...current,
       ...update,
       ...(update.receipt ? { receipt: structuredClone(update.receipt) } : {}),
-      updatedAt: new Date().toISOString(),
+      updatedAt: this.now(),
     });
+    this.#persist();
+  }
+
+  #persist(): void {
+    this.store.save([...this.#records.values()]);
   }
 }
 
@@ -118,10 +221,10 @@ async function executePipeline(
   runId: string,
   onProgress: (receipt: RunReceipt) => void,
 ): Promise<RunReceipt> {
-  if (process.env.AGENT_PROGRAMMING_UI_DEMO === "1") {
+  if (process.env.SHIPWRIGHT_UI_DEMO === "1") { // guard:allow-env-credential — deploy-level non-secret mode flag
     return executeDemo(request, runId, onProgress);
   }
-  return runProgrammingAgent(
+  return runShipwright(
     request,
     createPipelineDependencies({ runId, onProgress }),
   );
@@ -183,6 +286,42 @@ async function executeDemo(
 let registry: OperatorRunRegistry | undefined;
 
 export function getOperatorRunRegistry(): OperatorRunRegistry {
-  registry ??= new OperatorRunRegistry();
+  const stateDirectory = resolveShipwrightStateDirectory(); // guard:allow-env-credential — deploy-level state path
+  registry ??= new OperatorRunRegistry(
+    executePipeline,
+    () => randomBytes(8).toString("hex"),
+    new JsonFileOperatorRunStore(join(stateDirectory, "operator-runs.json")),
+    () => new Date().toISOString(),
+    (runId) => loadDurableReceipt(stateDirectory, runId),
+  );
   return registry;
+}
+
+function loadDurableReceipt(
+  stateDirectory: string,
+  runId: string,
+): RunReceipt | undefined {
+  if (!/^[0-9a-f]{16}$/.test(runId)) return undefined;
+  const path = join(stateDirectory, "receipts", runId, "receipt.json");
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !("runId" in parsed) ||
+      parsed.runId !== runId ||
+      !("phase" in parsed) ||
+      typeof parsed.phase !== "string"
+    ) {
+      return undefined;
+    }
+    return parsed as RunReceipt;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw new Error(`could not load durable receipt for run ${runId}`, {
+      cause: error,
+    });
+  }
 }

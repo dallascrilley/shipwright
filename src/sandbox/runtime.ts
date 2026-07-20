@@ -61,7 +61,7 @@ export class SandboxWorkspace {
   private constructor(readonly client: SandboxAgent, private readonly hostWorkspace: string) {}
 
   static async start(): Promise<SandboxWorkspace> {
-    const hostWorkspace = await mkdtemp(join(tmpdir(), "programming-agent-workspace-"));
+    const hostWorkspace = await mkdtemp(join(tmpdir(), "shipwright-workspace-"));
     try {
       const client = await SandboxAgent.start({
         sandbox: docker({ binds: [`${hostWorkspace}:${SANDBOX_WORKSPACE}`] }),
@@ -306,15 +306,15 @@ export class SandboxWorkspace {
     await this.hostGit(["-c", "core.hooksPath=/dev/null", "add", "--all"]);
     await this.hostGit([
       "-c", "core.hooksPath=/dev/null",
-      "-c", "user.name=Programming Agent[bot]",
-      "-c", "user.email=programming-agent[bot]@users.noreply.github.com",
+      "-c", "user.name=Shipwright[bot]",
+      "-c", "user.email=shipwright[bot]@users.noreply.github.com",
       "commit", "-m", message,
     ]);
     return (await this.hostGit(["rev-parse", "HEAD"])).trim();
   }
 
   async push(branch: string, token: string): Promise<void> {
-    const credentialDirectory = await mkdtemp(join(tmpdir(), "programming-agent-credential-"));
+    const credentialDirectory = await mkdtemp(join(tmpdir(), "shipwright-credential-"));
     const helperPath = join(credentialDirectory, "askpass.sh");
     const tokenPath = join(credentialDirectory, "token");
     const helper = [

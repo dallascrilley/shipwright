@@ -52,7 +52,11 @@ export async function runReviewAgent(
   deps: ReviewPipelineDependencies,
 ): Promise<ReviewRunReceipt> {
   const runId = deps.runId ?? randomBytes(8).toString("hex");
-  const receiptPath = join(deps.artifactRoot ?? ".artifacts/review-agent", runId, "receipt.json");
+  const receiptPath = join(
+    deps.artifactRoot ?? ".artifacts/shipwright/review-receipts",
+    runId,
+    "receipt.json",
+  );
   const receipt: ReviewRunReceipt = {
     runId,
     phase: "intake",
