@@ -17,9 +17,9 @@ The deployed service remains intentionally single-operator. It does not become a
 - [x] (2026-07-19 20:03 CDT) Added and exercised deterministic bootstrap and doctor commands, pinned runtime declarations, and deployment assets.
 - [x] (2026-07-19 19:58 CDT) Persisted operator run records atomically and reconciled interrupted runs after restart, with focused tests.
 - [x] (2026-07-19 20:06 CDT) Proved root/UI tests and typechecks, production build/start with HTTP 200, Docker sandbox access, shell validation, and restart persistence.
-- [ ] Commit, push, review, merge, rename the GitHub repository, and create a clean local `shipwright` folder.
-- [ ] Provision and deploy the private production service, configure secrets without printing them, and verify host plus end-to-end behavior.
-- [ ] Update the infrastructure inventory and close all task-owned working state.
+- [x] (2026-07-20 02:55 CDT) Confirmed GitHub `dallascrilley/shipwright`, local canonical checkout at `~/Documents/shipwright`, and main at the deploy commit.
+- [x] (2026-07-20 02:55 CDT) Verified dedicated Hetzner `shipwright` CX33 in `hel1` (`204.168.149.14`, Tailscale `100.93.18.48`), production secrets present without printing values, deployed commit `02b28eb`, `systemctl is-active shipwright`, loopback HTTP 200, Docker reachable, and private Tailscale Serve at `https://shipwright.tail16923a.ts.net`.
+- [x] (2026-07-20 02:55 CDT) Updated the authoritative hosting inventory with the Shipwright host and closed this plan's remaining ship checklist. Residual optional proof: one controlled post-deploy Kimi issue-to-PR run against an allowlisted disposable issue.
 
 ## Surprises & Discoveries
 
@@ -147,3 +147,4 @@ Existing GitHub App and model variables retain their names. Their values stay in
 ## Revision History
 
 - 2026-07-19: Created after name approval, live host audit, PR #8 merge, and first production-start reproduction.
+- 2026-07-20: Closed remaining ship checklist after confirming the dedicated Hetzner host, redeploying commit `02b28eb`, verifying systemd/HTTP/Docker/Tailscale Serve, and updating the authoritative inventory. Residual optional proof remains one controlled post-deploy Kimi issue-to-PR run.
