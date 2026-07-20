@@ -306,8 +306,8 @@ Actions:
 - [x] U3 verify presets
 - [x] U4 fromRunId
 - [x] U5 OperatorConsole UI
-- [ ] U6 resolve-target (optional same epic)
-- [ ] Validation checklist green
+- [x] U6 resolve-target (optional same epic)
+- [x] Validation checklist green (automated; manual demo browser pass still optional)
 
 ## Surprises & Discoveries
 

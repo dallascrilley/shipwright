@@ -61,7 +61,8 @@ describe("OperatorRunRegistry", () => {
       () => "run-1",
     );
 
-    expect(registry.start(request).status).toBe("queued");
+    const started = await registry.start(request);
+    expect(started.status).toBe("queued");
     await flushMicrotasks();
 
     expect(registry.get("run-1")).toMatchObject({
@@ -71,15 +72,15 @@ describe("OperatorRunRegistry", () => {
     });
   });
 
-  test("rejects a second active run", () => {
+  test("rejects a second active run", async () => {
     const registry = new OperatorRunRegistry(
       () => new Promise(() => {}),
       () => "run-1",
     );
 
-    registry.start(request);
+    await registry.start(request);
 
-    expect(() => registry.start(request)).toThrow("already active");
+    await expect(registry.start(request)).rejects.toThrow("already active");
   });
 
   test("keeps the failed phase and redacts tokens from errors", async () => {
@@ -99,7 +100,7 @@ describe("OperatorRunRegistry", () => {
       () => "run-1",
     );
 
-    registry.start(request);
+    await registry.start(request);
     await flushMicrotasks();
 
     expect(registry.get("run-1")?.phase).toBe("verify");
@@ -117,7 +118,7 @@ describe("OperatorRunRegistry", () => {
       store,
     );
 
-    first.start(request);
+    await first.start(request);
     await flushMicrotasks();
 
     const second = new OperatorRunRegistry(
@@ -245,7 +246,7 @@ describe("OperatorRunRegistry", () => {
       })(),
     );
 
-    registry.start(request);
+    await registry.start(request);
     await flushMicrotasks();
     const cancelled = registry.cancel("run-1");
     expect(cancelled.status === "running" || cancelled.status === "failed").toBe(true);
@@ -255,7 +256,7 @@ describe("OperatorRunRegistry", () => {
     expect(failed?.status).toBe("failed");
     expect(failed?.message).toMatch(/cancelled|aborted/i);
     expect(sawSignal).toBe(true);
-    expect(() => registry.start(request)).not.toThrow();
+    await expect(registry.start(request)).resolves.toBeDefined();
   });
 
   test("lists durable runs newest first within the bound", async () => {
@@ -273,9 +274,9 @@ describe("OperatorRunRegistry", () => {
         return () => new Date(Date.UTC(2026, 0, 1, 0, 0, ++tick)).toISOString();
       })(),
     );
-    first.start(request);
+    await first.start(request);
     await flushMicrotasks();
-    first.start(request);
+    await first.start(request);
     await flushMicrotasks();
 
     const second = new OperatorRunRegistry(
@@ -299,7 +300,7 @@ describe("OperatorRunRegistry", () => {
       new MemoryOperatorRunStore(),
       () => new Date(now++ * 1000).toISOString(),
     );
-    registry.start(request);
+    await registry.start(request);
     await flushMicrotasks();
     const record = registry.get("run-1");
     expect(record?.target).toMatchObject({
@@ -365,7 +366,7 @@ describe("OperatorRunRegistry", () => {
         return () => `run-${++n}`;
       })(),
     );
-    registry.start({
+    await registry.start({
       ...request,
       presetId: "bun-test-typecheck",
       verifyCommand: "should-be-ignored",
@@ -376,7 +377,7 @@ describe("OperatorRunRegistry", () => {
     );
     expect(registry.get("run-1")?.request.presetId).toBe("bun-test-typecheck");
 
-    registry.start({
+    await registry.start({
       fromRunId: "run-1",
       verifyCommand: "bun test",
       publish: false,
@@ -398,17 +399,15 @@ describe("OperatorRunRegistry", () => {
         return () => `run-${++n}`;
       })(),
     );
-    registry.start(request);
+    await registry.start(request);
     await flushMicrotasks();
-    expect(() =>
-      registry.start({
-        fromRunId: "run-1",
-        verifyCommand: "bun test",
-        publish: true,
-        publishConfirmed: true,
-        timeoutMinutes: 30,
-      } as any),
-    ).not.toThrow();
+    await registry.start({
+      fromRunId: "run-1",
+      verifyCommand: "bun test",
+      publish: true,
+      publishConfirmed: true,
+      timeoutMinutes: 30,
+    } as any);
     await flushMicrotasks();
   });
 

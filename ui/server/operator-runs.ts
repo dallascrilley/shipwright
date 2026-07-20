@@ -34,6 +34,7 @@ import {
   resolveSkill,
   skillIdFromLegacyPath,
 } from "./skills";
+import { resolveTarget } from "./resolve-target";
 import {
   assertSafeVerifyCommand,
   resolveVerifyPreset,
@@ -221,7 +222,7 @@ export class OperatorRunRegistry {
     if (reconciled) this.#persist();
   }
 
-  start(input: OperatorRunRequest): OperatorRunRecord {
+  async start(input: OperatorRunRequest): Promise<OperatorRunRecord> {
     const active = this.getLatest();
     if (active && !isTerminalRun(active.status)) {
       throw new Error(`Run ${active.runId} is already active.`);
@@ -296,7 +297,18 @@ export class OperatorRunRegistry {
       timeoutMinutes: base.timeoutMinutes ?? 30,
     };
 
-    const target = parseOperatorTarget(targetUrl(request));
+    const url = targetUrl(request);
+    let target = parseOperatorTarget(url);
+    if (target) {
+      const resolved = await resolveTarget(url);
+      if (!resolved.allowed) {
+        throw new Error(resolved.denyReason ?? "Target could not be authorized.");
+      }
+      target = {
+        ...target,
+        ...(resolved.title ? { title: resolved.title } : {}),
+      };
+    }
     const record: OperatorRunRecord = {
       runId,
       status: "queued",

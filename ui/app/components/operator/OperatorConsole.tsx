@@ -37,6 +37,7 @@ import {
   type OperatorNextActionView,
   type OperatorRunRecord,
   type OperatorRunRequest,
+  type ResolveTargetResult,
 } from "../../../shared/operator-run";
 
 const PHASE_LABELS = {
@@ -114,6 +115,14 @@ export function OperatorConsole() {
     },
   );
   const presetsQuery = useActionQuery("list-verify-presets", {});
+  const trimmedTarget = targetInput.trim();
+  const canPreflight = Boolean(detectRunModeFromUrl(trimmedTarget));
+  const targetQuery = useActionQuery(
+    "resolve-target",
+    { url: trimmedTarget },
+    { enabled: canPreflight && trimmedTarget.length > 0 },
+  );
+  const preflight = targetQuery.data as ResolveTargetResult | undefined;
   const runQuery = useActionQuery(
     "get-shipwright-run",
     runId ? { runId } : {},
@@ -152,6 +161,10 @@ export function OperatorConsole() {
   }, [presetId, presets, useRawVerify]);
 
   function buildRequest(publish: boolean): OperatorRunRequest | null {
+    if (preflight && !preflight.allowed) {
+      setFormError(preflight.denyReason ?? "Target is not allowed.");
+      return null;
+    }
     const issueUrl =
       mode === "issue" ? targetInput.trim() : "";
     const pullRequestUrl =
@@ -429,6 +442,28 @@ export function OperatorConsole() {
                     : "Issue to pull request"}
                 </span>
               </p>
+              {preflight?.allowed && preflight.title ? (
+                <p className="text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">
+                    {preflight.title}
+                  </span>
+                  {preflight.pinned?.headSha ? (
+                    <>
+                      {" "}
+                      · pinned head{" "}
+                      <span className="font-mono">
+                        {preflight.pinned.headSha.slice(0, 7)}
+                      </span>
+                    </>
+                  ) : null}
+                  {preflight.pinned?.openThreadCount != null ? (
+                    <> · {preflight.pinned.openThreadCount} open thread(s)</>
+                  ) : null}
+                </p>
+              ) : null}
+              {preflight && !preflight.allowed ? (
+                <p className="text-xs text-destructive">{preflight.denyReason}</p>
+              ) : null}
             </div>
 
             {mode === "review" && (
