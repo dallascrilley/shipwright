@@ -191,6 +191,34 @@ export function targetUrl(
   return request.mode === "review" ? request.pullRequestUrl : request.issueUrl;
 }
 
+export interface OperatorPublishConfirmation {
+  sourceRunId?: string;
+  target: string;
+  verifyCommand: string;
+  mode: OperatorRunKind;
+  skillId: string;
+  pinnedSha?: string;
+}
+
+export function resolveOperatorPublishConfirmation(
+  publishSource: OperatorRunRecord | null,
+  form: Pick<
+    OperatorRunRequest,
+    "mode" | "issueUrl" | "pullRequestUrl" | "skillId" | "verifyCommand"
+  >,
+): OperatorPublishConfirmation {
+  const request = publishSource?.request ?? form;
+  const baseSha = publishSource?.receipt?.baseSha;
+  return {
+    ...(publishSource ? { sourceRunId: publishSource.runId } : {}),
+    target: targetUrl(request),
+    verifyCommand: request.verifyCommand,
+    mode: request.mode,
+    skillId: request.skillId ?? "",
+    ...(baseSha ? { pinnedSha: baseSha.slice(0, 7) } : {}),
+  };
+}
+
 export function parseOperatorTarget(
   url: string,
 ): OperatorRunTarget | undefined {
