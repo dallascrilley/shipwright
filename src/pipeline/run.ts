@@ -15,6 +15,7 @@ export interface WorkspacePort {
   prepareForAgent(): Promise<void>;
   verify(command: string, timeoutMs: number): Promise<Pick<ProcessRunResponse, "exitCode">>;
   inspectChanges(): Promise<{ changedFiles: string[]; patch: string; patchBytes: number }>;
+  quiesce(): Promise<void>;
   assertRunIdentity(baseSha: string, branch: string): Promise<void>;
   commit(message: string): Promise<string>;
   push(branch: string, token: string): Promise<void>;
@@ -117,6 +118,7 @@ export async function runProgrammingAgent(request: RunRequest, deps: PipelineDep
       ) {
         throw new PipelineError("publish", "changes_moved", "repository changes moved after policy inspection");
       }
+      await workspace.quiesce();
       await workspace.assertRunIdentity(authorized.issue.baseSha, branch);
       receipt.commitSha = await workspace.commit(`fix: ${authorized.issue.title} (#${authorized.issue.number})`);
       await authorized.withInstallationToken((token) => workspace!.push(branch, token));

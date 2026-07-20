@@ -7,6 +7,7 @@
     "server": "tsx server.ts",
     "client": "tsx client.ts",
     "programming-agent": "tsx programming-agent.ts",
+    "review-agent": "tsx review-agent.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:docker": "RUN_DOCKER_E2E=1 bun test test/sandbox/docker.e2e.test.ts",

@@ -37,6 +37,29 @@ Receipts are written atomically to `.artifacts/programming-agent/<run-id>/receip
 
 This is a single-run example, not a webhook service, durable queue, autonomous merger, or deployment system.
 
+## Address pull request review feedback
+
+The separate review workflow targets an existing same-repository pull request head. It projects an explicitly selected `fix-review-findings` Agent Skill into Pi, treats review text as untrusted, independently verifies any changes, and keeps GitHub credentials and thread mutations on the trusted host.
+
+Dry run (no commit, push, reply, or resolution):
+
+```sh
+bun run review-agent -- https://github.com/OWNER/REPO/pull/123 \
+  --verify "bun test" \
+  --skill /absolute/path/to/fix-review-findings/SKILL.md
+```
+
+Publish verified changes and reply to the original threads:
+
+```sh
+bun run review-agent -- https://github.com/OWNER/REPO/pull/123 \
+  --verify "bun test" \
+  --skill /absolute/path/to/fix-review-findings/SKILL.md \
+  --publish
+```
+
+The host pins the authorized PR head SHA, rejects fork heads and moved branches, and requires exactly one `fixed`, `rejected`, `deferred`, or `needs-human` outcome per unresolved current thread. Fixed, rejected, and concretely deferred threads receive an idempotent run-marked reply and are resolved; `needs-human` threads receive a reply and remain open. Receipts are written atomically with mode 0600 under `.artifacts/review-agent/<run-id>/receipt.json` and record the canonical skill's SHA-256 digest, never its contents or host path.
+
 ## Run the operator console
 
 The nested `ui/` app is an Agent Native 0.109.4 operator console over the same host-owned pipeline. It preserves the CLI's dry-run default, keeps GitHub credentials server-side, shows live phase and receipt evidence, and uses a separate confirmation sheet before publication.
