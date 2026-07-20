@@ -157,4 +157,57 @@ describe("resolveTarget", () => {
     expect(result.denyReason).toMatch(/allowlist/i);
     expect(result.owner).toBe("dallascrilley");
   });
+
+  test("PR run-start path skips review thread listing", async () => {
+    const authorizePullRequest = vi.fn();
+    const getPullRequest = vi.fn(async () => ({
+      title: "Review me",
+      body: "",
+      state: "open",
+      draft: false,
+      baseBranch: "main",
+      baseSha: "base",
+      headBranch: "feat",
+      headSha: "headsha1",
+      headOwner: "dallascrilley",
+      headRepo: "example",
+    }));
+    const transport = {
+      resolveInstallation: vi.fn(async () => 9),
+      createRepositoryClient: vi.fn(async () => ({
+        client: {
+          getRepository: async () => ({
+            id: 1,
+            owner: "dallascrilley",
+            name: "example",
+            defaultBranch: "main",
+          }),
+          getPullRequest,
+        },
+        withInstallationToken: async <T>(action: (token: string) => Promise<T>) =>
+          action("token"),
+      })),
+    } as unknown as GitHubTransport;
+
+    const result = await resolveTarget(
+      pullUrl,
+      {
+        isDemoMode: () => false,
+        loadGitHubConfig: () => config,
+        createTransport: () => transport,
+        authorizeIssue: vi.fn(),
+        authorizePullRequest,
+      },
+      { includeReviewThreads: false },
+    );
+
+    expect(authorizePullRequest).not.toHaveBeenCalled();
+    expect(getPullRequest).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      allowed: true,
+      title: "Review me",
+      pinned: { headSha: "headsha1" },
+    });
+    expect(result.pinned?.openThreadCount).toBeUndefined();
+  });
 });

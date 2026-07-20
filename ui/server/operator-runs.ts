@@ -300,7 +300,7 @@ export class OperatorRunRegistry {
     const url = targetUrl(request);
     let target = parseOperatorTarget(url);
     if (target) {
-      const resolved = await resolveTarget(url);
+      const resolved = await resolveTarget(url, {}, { includeReviewThreads: false });
       if (!resolved.allowed) {
         throw new Error(resolved.denyReason ?? "Target could not be authorized.");
       }
