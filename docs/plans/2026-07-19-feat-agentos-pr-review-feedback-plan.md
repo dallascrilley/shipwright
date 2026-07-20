@@ -21,7 +21,8 @@ The existing programming agent proves issue-to-new-PR publication. It cannot upd
 - [x] (2026-07-20 00:31Z) U1. Added canonical PR parsing, allowlisted same-repository authorization, thread/review reads, reply/resolve APIs, and marker helpers; 13 focused tests and typecheck passed.
 - [x] (2026-07-20 00:39Z) U2. Added Pi skill projection with resource-loader activation, hostile-content review prompt, strict outcome validation, exact PR-head cloning, and artifact removal; 13 focused tests and typecheck passed.
 - [x] (2026-07-20 00:56Z) U3. Added the host-owned review pipeline, atomic receipt, CLI, docs, exact-head recheck, idempotent reply/resolve loop, and no-code outcomes; all 73 deterministic tests and typecheck passed.
-- [ ] U4. Independently review and integrate the runner change into `dallascrilley/rivet-test`, then pin the live runner to that exact reviewed commit.
+- [x] (2026-07-20 01:00Z) U4. Independently reviewed the runner, fixed credential-boundary and pagination findings, merged PR #9 at reviewed head `c4870ed7926cd779dca6659f3c7e6c85434fd336`, and pinned the proof worktree to merge `ea5beb1d6cda66230eda514c4bf916a676d0864c`.
+- [x] (2026-07-20 01:29Z) Registered the private organization-owned Shipwright DCM App, restricted installation `147693967` to `.hub`, stored its key in 1Password, and repaired the runner's dot-prefixed-repository token path with a red-green regression test and live App-authenticated probe.
 - [ ] U5. Run one bounded Kimi request against `.hub#1029`, reconcile receipt/head/threads, verify the exact remote head, audit secrets, and prove cleanup.
 
 ## Requirements
@@ -42,11 +43,15 @@ The existing programming agent proves issue-to-new-PR publication. It cannot upd
 - Observation: The AgentOS Pi package deliberately uses `MinimalResourceLoader` when no extension is found, so writing a skill alone does not expose it to the model. A trusted no-op extension in Pi's private agent directory activates `DefaultResourceLoader`, which then discovers the projected skill through Pi's documented global skill path.
 - Observation: The initial implementation still performed the credentialed Git push inside the model-controlled Docker sandbox. Local review classified this as HIGH because an altered hook/config or lingering process could observe the installation token. The corrected design quiesces the sandbox, verifies the authorized local Git config, and performs hook-disabled commit/push from the trusted host with ambient Git config disabled.
 - Observation: GitHub review threads and review submissions can exceed one page. The client now paginates both sources instead of silently stopping at 100.
+- Observation: GitHub installation tokens narrowed by repository name return 503 when the selected repository is dot-prefixed (`.hub`), although an installation-scoped token succeeds. Shipwright now validates the token's exact permissions and rejects any installation repository outside the operator allowlist before repository access.
+- Observation: Before the authorized Kimi request ran, PR #1029 independently advanced to `b6ce11568ef350ce1fc4ef5317f2d82fc945e381`; all four original threads received replies from `dallascrilley` and were resolved. No unresolved finding remains for Shipwright to process without duplicating completed work.
 
 ## Decision Log
 
 - Decision: Project the canonical skill at runtime instead of vendoring it. Rationale: the proof should use Hub's current canonical workflow while the receipt preserves an immutable digest. Date/Author: 2026-07-19 / Codex.
 - Decision: Move all post-agent Git publication to the trusted host and stop the sandbox before publication. Rationale: credentials must remain outside the model-controlled process boundary, and no background sandbox process may race the reviewed diff. Date/Author: 2026-07-19 / Codex.
+- Decision: Use a separate private organization-owned GitHub App for the `.hub` proof rather than making the personal App public or transferring it. Rationale: preserve the issue-to-PR installation while limiting Shipwright to one organization repository. Date/Author: 2026-07-20 / Codex.
+- Decision: Do not spend the Kimi request after the authorized target has no unresolved threads. Rationale: rerunning against resolved feedback would not demonstrate `fix-review-findings` and could duplicate already-completed GitHub actions. Date/Author: 2026-07-20 / Codex.
 
 ## Key Technical Decisions
 
@@ -136,7 +141,7 @@ No new package dependency is required. Existing `@octokit/app` and `@octokit/res
 
 ## Outcomes & Retrospective
 
-Implementation checkpoint: U1-U3 are complete. The original issue-to-PR command remains unchanged, while `review-agent` now supports same-repository PR feedback with exact-head pinning, canonical skill projection, independent verification, structured outcomes, and host-owned thread writes. Integration review and the billable live proof remain.
+Implementation and integration are complete, including the live GitHub App authorization path for a dot-prefixed repository. The original issue-to-PR command remains unchanged, while `review-agent` supports same-repository PR feedback with exact-head pinning, canonical skill projection, independent verification, structured outcomes, and host-owned thread writes. The planned Kimi proof on PR #1029 was not run because another actor advanced the PR and resolved every authorized thread before the model request; a fresh unresolved review target is required for U5.
 
 ## Revision History
 
@@ -144,3 +149,4 @@ Implementation checkpoint: U1-U3 are complete. The original issue-to-PR command 
 - 2026-07-19: Marked U1 and U2 complete after focused tests and typecheck; recorded the Pi resource-loader constraint.
 - 2026-07-19: Marked U3 complete after 73 deterministic tests and typecheck; added a pre-publication live PR-state recheck.
 - 2026-07-19: Closed one HIGH token-boundary finding and one MEDIUM pagination finding from local review; fresh full tests, typecheck, and two Docker behavior tests passed.
+- 2026-07-20: Recorded PR #9 integration, Shipwright DCM credentials and installation, the dot-prefixed repository token fix, and the live-target race that left no unresolved findings before the Kimi request.

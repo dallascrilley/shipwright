@@ -1,6 +1,55 @@
 import { expect, test } from "bun:test";
-import { authorizeIssue, authorizePullRequest, type GitHubTransport } from "../../src/github/app-client.js";
+import {
+  authorizeIssue,
+  authorizePullRequest,
+  buildInstallationAuthOptions,
+  extractInstallationToken,
+  validateInstallationRepositories,
+  type GitHubTransport,
+} from "../../src/github/app-client.js";
 import type { GitHubConfig } from "../../src/config/github.js";
+
+const requiredPermissions = {
+  contents: "write",
+  issues: "read",
+  pull_requests: "write",
+  metadata: "read",
+} as const;
+
+test("installation auth avoids GitHub's broken dot-repository token narrowing", () => {
+  expect(buildInstallationAuthOptions({
+    installationId: 42,
+  })).toEqual({
+    type: "installation",
+    installationId: 42,
+  });
+});
+
+test("installation auth accepts only the exact required permission set", () => {
+  expect(extractInstallationToken({
+    token: "ghs_secret-token-value-1234567890",
+    permissions: requiredPermissions,
+  }, requiredPermissions)).toBe("ghs_secret-token-value-1234567890");
+
+  expect(() => extractInstallationToken({
+    token: "ghs_secret-token-value-1234567890",
+    permissions: { ...requiredPermissions, workflows: "write" },
+  }, requiredPermissions)).toThrow("permissions");
+});
+
+test("installation auth rejects repository access outside the operator allowlist", () => {
+  expect(() => validateInstallationRepositories(
+    ["DallasCrilleyMarTech/.hub"],
+    new Set(["dallascrilleymartech/.hub"]),
+    "DallasCrilleyMarTech/.hub",
+  )).not.toThrow();
+
+  expect(() => validateInstallationRepositories(
+    ["DallasCrilleyMarTech/.hub", "DallasCrilleyMarTech/other"],
+    new Set(["dallascrilleymartech/.hub"]),
+    "DallasCrilleyMarTech/.hub",
+  )).toThrow("outside the GitHub repository allowlist");
+});
 
 test("authorizeIssue scopes authentication and returns immutable issue context", async () => {
   const calls: unknown[] = [];
