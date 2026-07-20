@@ -18,8 +18,8 @@ The existing programming agent proves issue-to-new-PR publication. It cannot upd
 - [x] (2026-07-20 00:10Z) Confirmed PR #1029 is open, non-draft, mergeable, and at head `7a6078528e0659ab525d3cf45d52baae52973823` with four unresolved non-outdated threads and a changes-requested review.
 - [x] (2026-07-20 00:18Z) Confirmed the current runner is issue-only and Pi's AgentOS adapter skips skill discovery on its fast path unless at least one extension is present.
 - [x] (2026-07-20 00:20Z) Confirmed Pi supports Agent Skills under `~/.pi/agent/skills/`; selected trusted skill projection plus a no-op extension to force the supported resource loader.
-- [ ] U1. Add tested PR reference parsing, authorization, thread reads, replies, resolution, and reconciliation.
-- [ ] U2. Add tested skill projection, review prompt, structured outcome artifact, and sandbox PR-head operations.
+- [x] (2026-07-20 00:31Z) U1. Added canonical PR parsing, allowlisted same-repository authorization, thread/review reads, reply/resolve APIs, and marker helpers; 13 focused tests and typecheck passed.
+- [x] (2026-07-20 00:39Z) U2. Added Pi skill projection with resource-loader activation, hostile-content review prompt, strict outcome validation, exact PR-head cloning, and artifact removal; 13 focused tests and typecheck passed.
 - [ ] U3. Add the host-owned review pipeline, receipt, CLI, documentation, and deterministic verification.
 - [ ] U4. Independently review and integrate the runner change into `dallascrilley/rivet-test`, then pin the live runner to that exact reviewed commit.
 - [ ] U5. Run one bounded Kimi request against `.hub#1029`, reconcile receipt/head/threads, verify the exact remote head, audit secrets, and prove cleanup.
@@ -36,6 +36,14 @@ The existing programming agent proves issue-to-new-PR publication. It cannot upd
 - R8. Make replies idempotent by embedding the run/thread marker and reusing a matching existing reply during recovery. Re-fetch thread state and fail if any thread expected resolved remains unresolved.
 - R9. Preserve a mode-0600 redacted receipt containing execution, skill digest, PR URL, authorized head, changed files, verification, commit, reply URLs, resolution state, and intentionally open threads.
 - R10. Use one foreground Kimi request, no automatic retry, existing membership quota only, and teardown the Pi session, sidecar, Docker sandbox, temporary token helper, and workspace on every terminal path.
+
+## Surprises & Discoveries
+
+- Observation: The AgentOS Pi package deliberately uses `MinimalResourceLoader` when no extension is found, so writing a skill alone does not expose it to the model. A trusted no-op extension in Pi's private agent directory activates `DefaultResourceLoader`, which then discovers the projected skill through Pi's documented global skill path.
+
+## Decision Log
+
+- Decision: Project the canonical skill at runtime instead of vendoring it. Rationale: the proof should use Hub's current canonical workflow while the receipt preserves an immutable digest. Date/Author: 2026-07-19 / Codex.
 
 ## Key Technical Decisions
 
@@ -130,3 +138,4 @@ Pending implementation and live proof.
 ## Revision History
 
 - 2026-07-19: Initial plan created from live PR #1029 evidence and current runner architecture.
+- 2026-07-19: Marked U1 and U2 complete after focused tests and typecheck; recorded the Pi resource-loader constraint.

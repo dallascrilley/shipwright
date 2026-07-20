@@ -21,6 +21,14 @@ export interface CloneInput {
   token: string;
 }
 
+export interface PullRequestCloneInput {
+  owner: string;
+  repo: string;
+  headBranch: string;
+  headSha: string;
+  token: string;
+}
+
 export interface ChangeInspection {
   changedFiles: string[];
   patch: string;
@@ -166,6 +174,53 @@ export class SandboxWorkspace {
       args: ["switch", "-c", input.branch],
       cwd: SANDBOX_WORKSPACE,
     });
+  }
+
+  async clonePullRequest(input: PullRequestCloneInput): Promise<void> {
+    await this.initialize();
+    await this.withGitCredentials(input.token, async (env) => {
+      await this.runOrThrow("pull request clone", {
+        command: "git",
+        args: [
+          "clone",
+          "--branch",
+          input.headBranch,
+          "--single-branch",
+          `https://github.com/${input.owner}/${input.repo}.git`,
+          SANDBOX_WORKSPACE,
+        ],
+        cwd: "/",
+        env,
+      });
+    });
+    const head = await this.runOrThrow("pull request head SHA check", {
+      command: "git",
+      args: ["rev-parse", "HEAD"],
+      cwd: SANDBOX_WORKSPACE,
+    });
+    if (head.stdout.trim() !== input.headSha) {
+      throw new Error(`pull request head moved: expected ${input.headSha}, received ${head.stdout.trim()}`);
+    }
+  }
+
+  async readAndRemoveArtifact(path: string): Promise<string> {
+    if (path.startsWith("/") || path.split("/").includes("..")) {
+      throw new Error("artifact path must remain inside the repository root");
+    }
+    try {
+      return (await this.runOrThrow("review outcome artifact", {
+        command: "cat",
+        args: [path],
+        cwd: SANDBOX_WORKSPACE,
+        maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+      })).stdout;
+    } finally {
+      await this.run({
+        command: "rm",
+        args: ["-f", "--", path],
+        cwd: SANDBOX_WORKSPACE,
+      });
+    }
   }
 
   async verify(command: string, timeoutMs: number): Promise<ProcessRunResponse> {
