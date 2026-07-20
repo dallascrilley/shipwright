@@ -81,7 +81,7 @@ test("runPiAgent projects a canonical skill before creating the session", async 
 
   const skillPath = "/home/agentos/.pi/agent/skills/fix-review-findings/SKILL.md";
   expect(writes.get(skillPath)).toContain("name: fix-review-findings");
-  expect(writes.get("/home/agentos/.pi/agent/extensions/enable-resources.cjs")).toContain("enableResources");
+  expect(writes.get("/home/agentos/.pi/agent/extensions/enable-resources.ts")).toContain("enableResources");
   expect(events.indexOf(`write:${skillPath}`)).toBeLessThan(events.indexOf("session"));
 });
 
