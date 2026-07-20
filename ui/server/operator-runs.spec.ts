@@ -21,6 +21,8 @@ const request = {
   publish: false,
   publishConfirmed: false,
   timeoutMinutes: 30,
+  skillPath: undefined,
+  fromRunId: undefined,
 };
 
 const completeReceipt: RunReceipt = {
@@ -143,6 +145,8 @@ describe("OperatorRunRegistry", () => {
           mode: "issue",
           issueUrl: request.issueUrl,
           pullRequestUrl: "",
+          skillId: "",
+          presetId: "",
                     verifyCommand: request.verifyCommand,
           publish: request.publish,
           timeoutMinutes: request.timeoutMinutes,
@@ -179,6 +183,8 @@ describe("OperatorRunRegistry", () => {
           mode: "issue",
           issueUrl: request.issueUrl,
           pullRequestUrl: "",
+          skillId: "",
+          presetId: "",
                     verifyCommand: request.verifyCommand,
           publish: true,
           timeoutMinutes: request.timeoutMinutes,

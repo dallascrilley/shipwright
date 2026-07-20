@@ -26,14 +26,14 @@ export const operatorRunRequestSchema = z
     mode: z.enum(["issue", "review"]).default("issue"),
     issueUrl: z.string().trim().max(500).optional().default(""),
     pullRequestUrl: z.string().trim().max(500).optional().default(""),
-    skillPath: z.string().trim().max(1000).optional().default(""),
+    skillPath: z.string().trim().max(1000).optional(),
     skillId: z.string().trim().max(200).optional().default(""),
     presetId: z.string().trim().max(200).optional().default(""),
     verifyCommand: z.string().trim().min(1).max(500),
     publish: z.boolean().default(false),
     publishConfirmed: z.boolean().default(false),
     timeoutMinutes: z.number().int().min(1).max(60).default(30),
-    fromRunId: z.string().trim().max(64).optional().default(""),
+    fromRunId: z.string().trim().max(64).optional(),
   })
   .superRefine((value, context) => {
     if (value.publish && !value.publishConfirmed) {
