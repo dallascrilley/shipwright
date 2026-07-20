@@ -122,7 +122,13 @@ export function OperatorConsole() {
     { url: trimmedTarget },
     { enabled: canPreflight && trimmedTarget.length > 0 },
   );
-  const preflight = targetQuery.data as ResolveTargetResult | undefined;
+  const preflightRaw = targetQuery.data as ResolveTargetResult | undefined;
+  const preflightPending =
+    canPreflight &&
+    (targetQuery.isLoading || targetQuery.isFetching) &&
+    trimmedTarget.length > 0;
+  const preflight =
+    preflightRaw?.url === trimmedTarget ? preflightRaw : undefined;
   const runQuery = useActionQuery(
     "get-shipwright-run",
     runId ? { runId } : {},
@@ -142,7 +148,7 @@ export function OperatorConsole() {
   );
   const presets = (presetsQuery.data as VerifyPreset[] | undefined) ?? [];
   const active = Boolean(record && !isTerminalRun(record.status));
-  const busy = startRun.isPending || active;
+  const busy = startRun.isPending || active || preflightPending;
   const nextActions = useMemo(
     () => (record ? resolveOperatorNextAction(record) : null),
     [record],
@@ -161,6 +167,10 @@ export function OperatorConsole() {
   }, [presetId, presets, useRawVerify]);
 
   function buildRequest(publish: boolean): OperatorRunRequest | null {
+    if (canPreflight && preflightPending) {
+      setFormError("Checking target authorization…");
+      return null;
+    }
     if (preflight && !preflight.allowed) {
       setFormError(preflight.denyReason ?? "Target is not allowed.");
       return null;
@@ -459,6 +469,11 @@ export function OperatorConsole() {
                   {preflight.pinned?.openThreadCount != null ? (
                     <> · {preflight.pinned.openThreadCount} open thread(s)</>
                   ) : null}
+                </p>
+              ) : null}
+              {preflightPending ? (
+                <p className="text-xs text-muted-foreground">
+                  Checking target authorization…
                 </p>
               ) : null}
               {preflight && !preflight.allowed ? (

@@ -63,6 +63,11 @@ function fromParsed(
   };
 }
 
+export interface ResolveTargetOptions {
+  /** When false, PR preflight skips review-thread listing (run start path). */
+  includeReviewThreads?: boolean;
+}
+
 /**
  * Parse-first target preflight. Live mode fetches title/head only when GitHub App
  * is configured; otherwise returns parse-only metadata.
@@ -70,7 +75,9 @@ function fromParsed(
 export async function resolveTarget(
   url: string,
   deps: Partial<ResolveTargetDeps> = {},
+  options: ResolveTargetOptions = {},
 ): Promise<ResolveTargetResult> {
+  const includeReviewThreads = options.includeReviewThreads ?? true;
   const resolved = { ...defaultDeps(), ...deps };
   const parsed = parseOperatorTarget(url.trim());
   if (!parsed) {
@@ -108,6 +115,10 @@ export async function resolveTarget(
       });
     }
 
+    if (!includeReviewThreads) {
+      return resolvePullRequestHead(parsed, config, transport);
+    }
+
     const authorized = await resolved.authorizePullRequest(
       {
         owner: parsed.owner,
@@ -131,10 +142,70 @@ export async function resolveTarget(
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Target could not be authorized.";
-    return {
-      ...fromParsed(parsed, { allowed: false }),
-      allowed: false,
-      denyReason: message,
-    };
+    return fromParsed(parsed, { allowed: false, denyReason: message });
   }
+}
+
+async function resolvePullRequestHead(
+  parsed: NonNullable<ReturnType<typeof parseOperatorTarget>>,
+  config: GitHubConfig,
+  transport: GitHubTransport,
+): Promise<ResolveTargetResult> {
+  const repoKey = `${parsed.owner}/${parsed.repo}`.toLowerCase();
+  if (!config.allowedRepositories.has(repoKey)) {
+    return fromParsed(parsed, {
+      allowed: false,
+      denyReason: "repository is not in the GitHub repository allowlist",
+    });
+  }
+
+  const installationId =
+    config.installationId ??
+    (await transport.resolveInstallation({
+      owner: parsed.owner,
+      repo: parsed.repo,
+      number: parsed.number,
+      url: parsed.url,
+    }));
+  const session = await transport.createRepositoryClient({
+    installationId,
+    owner: parsed.owner,
+    repo: parsed.repo,
+    permissions: {
+      contents: "write",
+      issues: "read",
+      pull_requests: "write",
+      metadata: "read",
+    },
+  });
+  const repository = await session.client.getRepository();
+  const canonicalName = `${repository.owner}/${repository.name}`.toLowerCase();
+  if (!config.allowedRepositories.has(canonicalName)) {
+    return fromParsed(parsed, {
+      allowed: false,
+      denyReason: "canonical repository is not in the GitHub repository allowlist",
+    });
+  }
+
+  const pullRequest = await session.client.getPullRequest(parsed.number);
+  if (pullRequest.state !== "open") {
+    return fromParsed(parsed, {
+      allowed: false,
+      denyReason: "pull request must be open",
+    });
+  }
+  if (
+    `${pullRequest.headOwner}/${pullRequest.headRepo}`.toLowerCase() !==
+    canonicalName
+  ) {
+    return fromParsed(parsed, {
+      allowed: false,
+      denyReason: "fork pull request heads are not supported",
+    });
+  }
+
+  return fromParsed(parsed, {
+    title: pullRequest.title,
+    pinned: { headSha: pullRequest.headSha },
+  });
 }
