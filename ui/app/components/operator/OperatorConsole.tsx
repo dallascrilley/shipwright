@@ -31,6 +31,7 @@ import {
   operatorRunRequestSchema,
   phaseIndex,
   resolveOperatorNextAction,
+  resolveOperatorPublishConfirmation,
   RUN_PHASES,
   targetUrl,
   type OperatorNextAction,
@@ -336,19 +337,18 @@ export function OperatorConsole() {
     }
   }
 
-  const confirmRecord =
-    publishSource?.request.publish === false ? publishSource : undefined;
-  const confirmTarget = confirmRecord
-    ? targetUrl(confirmRecord.request)
-    : targetInput;
-  const confirmVerify = confirmRecord
-    ? confirmRecord.request.verifyCommand
-    : verifyCommand;
-  const confirmMode = confirmRecord?.request.mode ?? mode;
-  const confirmSkillId = confirmRecord?.request.skillId ?? skillId;
-  const pinnedSha = confirmRecord?.receipt?.baseSha
-    ? confirmRecord.receipt.baseSha.slice(0, 7)
-    : null;
+  const confirmation = resolveOperatorPublishConfirmation(publishSource, {
+    mode,
+    issueUrl: mode === "issue" ? targetInput.trim() : "",
+    pullRequestUrl: mode === "review" ? targetInput.trim() : "",
+    skillId: mode === "review" ? skillId : "",
+    verifyCommand,
+  });
+  const confirmTarget = confirmation.target;
+  const confirmVerify = confirmation.verifyCommand;
+  const confirmMode = confirmation.mode;
+  const confirmSkillId = confirmation.skillId;
+  const pinnedSha = confirmation.pinnedSha;
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-6 lg:px-8 lg:py-10">
