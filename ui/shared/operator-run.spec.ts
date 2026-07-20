@@ -97,6 +97,18 @@ describe("operatorRunRequestSchema", () => {
     expect(valid.pullRequestUrl).toContain("/pull/9");
   });
 
+  test("strips review skillPath at the console boundary", () => {
+    const result = operatorRunRequestSchema.parse({
+      mode: "review",
+      pullRequestUrl: "https://github.com/dallascrilley/example/pull/9",
+      skillId: "fix-review-findings",
+      skillPath: "/private/skill/SKILL.md",
+      verifyCommand: "bun test",
+    });
+
+    expect(result).not.toHaveProperty("skillPath");
+  });
+
   test("fromRunId skips target URL validation", () => {
     const result = operatorRunRequestSchema.parse({
       fromRunId: "abc123",
