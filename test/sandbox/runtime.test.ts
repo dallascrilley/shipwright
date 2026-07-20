@@ -37,10 +37,17 @@ describe("sandbox command helpers", () => {
 
   test("resolves the pinned sandbox image", () => {
     expect(resolveSandboxImage(undefined)).toBe(
-      "rivetdev/sandbox-agent:0.5.0-rc.2-full",
+      "rivetdev/sandbox-agent@sha256:640cfb725a94b8a47967e0c2ec153d3ab267244f517f700e8f82f1e4d55b2ea2",
     );
-    expect(resolveSandboxImage(" registry.example.com/shipwright:sandbox ")).toBe(
-      "registry.example.com/shipwright:sandbox",
+    expect(
+      resolveSandboxImage(
+        " registry.example.com/shipwright@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ",
+      ),
+    ).toBe(
+      "registry.example.com/shipwright@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    expect(() => resolveSandboxImage("registry.example.com/shipwright:latest")).toThrow(
+      "immutable sha256 digest",
     );
   });
 });
