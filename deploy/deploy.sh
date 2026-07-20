@@ -45,7 +45,9 @@ ssh "$target" bash -s -- "$release_path" <<'REMOTE'
   set +a
   test -n "${BETTER_AUTH_SECRET:-}"
   test -n "${GITHUB_APP_PRIVATE_KEY_PATH:-}"
+  test -n "${SHIPWRIGHT_SANDBOX_IMAGE:-}"
   runuser -u shipwright -- test -r "$GITHUB_APP_PRIVATE_KEY_PATH"
+  docker pull "$SHIPWRIGHT_SANDBOX_IMAGE" >/dev/null
   runuser -u shipwright -- /usr/local/bin/mise trust "$release_path/mise.toml" >/dev/null
   runuser -u shipwright -- /usr/local/bin/mise install -C "$release_path"
   runuser -u shipwright -- /usr/local/bin/mise exec -C "$release_path" -- corepack enable
