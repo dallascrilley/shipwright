@@ -25,12 +25,12 @@ The systemd service runs as the unprivileged `shipwright` account with Docker gr
 
 ## Provision
 
-Create an Ubuntu 24.04 x86 server with an SSH key and a firewall that permits SSH. Public HTTP/HTTPS ports are not required for the private deployment.
+Create an Ubuntu 24.04 x86 server. Public HTTP/HTTPS ports are not required. The production host is intended to be Tailscale-only: the cloud firewall may intentionally have **no public SSH rule**, so `ssh root@PUBLIC_IP` can time out by design. Bootstrap and break-glass access use Tailscale SSH (or a temporary source-IP-restricted SSH rule).
 
 The deploy command bootstraps Docker, mise, pinned runtimes, Tailscale, the service user, and persistent directories before uploading a release:
 
 ```sh
-deploy/deploy.sh root@SERVER_IP
+deploy/deploy.sh root@TAILSCALE_HOSTNAME_OR_IP
 ```
 
 The command refuses a dirty checkout, uploads the exact current commit to a new release directory, installs locked dependencies, pulls the sandbox image by immutable SHA-256 digest, validates the full GitHub/model configuration as the service user, builds on the Linux host, atomically moves the `current` symlink, starts the service, and waits for a loopback HTTP response. If startup or health verification fails, it automatically restores the previous release and systemd unit.
@@ -43,7 +43,9 @@ Production must set a random `BETTER_AUTH_SECRET` of at least 32 characters. Do 
 
 ## Private access
 
-Join the VM to the authorized tailnet, then publish only the loopback service:
+Primary operator access is Tailscale, not the public internet.
+
+Join the VM to the authorized tailnet, enable Tailscale SSH, then publish only the loopback service:
 
 ```sh
 tailscale up --ssh
@@ -51,11 +53,21 @@ tailscale serve --bg http://127.0.0.1:4317
 tailscale serve status
 ```
 
+Operate over the tailnet:
+
+```sh
+tailscale ssh shipwright@TAILSCALE_HOSTNAME_OR_IP
+# or: ssh shipwright@100.x.y.z
+```
+
 Use the HTTPS URL reported by `tailscale serve status`. On first visit, create the single operator account through Agent Native's normal Better Auth flow.
+
+Optional break-glass: temporarily allow SSH from a single trusted source IP on the cloud firewall, complete the repair, then remove the rule so public SSH stays closed.
 
 ## Verify
 
 ```sh
+tailscale ssh shipwright@TAILSCALE_HOSTNAME_OR_IP
 systemctl is-active shipwright
 systemctl status shipwright --no-pager
 curl -fsS http://127.0.0.1:4317/ >/dev/null

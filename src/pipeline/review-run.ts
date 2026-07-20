@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import type { ProcessRunResponse } from "sandbox-agent";
 import type { AgentSkillProjection } from "../agent/runner.js";
 import { buildReviewPrompt, REVIEW_OUTCOME_PATH } from "../agent/review-prompt.js";
 import type { AuthorizedPullRequest } from "../github/app-client.js";
@@ -10,7 +9,7 @@ import type { PullRequestRef, ReviewThread } from "../github/types.js";
 import type { ChangeInspection } from "../sandbox/runtime.js";
 import { assertPublishableChange } from "./policy.js";
 import { parseReviewOutcomes, type ReviewOutcome } from "./review-outcomes.js";
-import type { AgentExecution } from "./receipt.js";
+import { redactSecrets, truncateTail, type AgentExecution } from "./receipt.js";
 import { type ReviewRunPhase, type ReviewRunReceipt, writeReviewReceipt } from "./review-receipt.js";
 
 export interface ReviewWorkspacePort {
@@ -18,7 +17,7 @@ export interface ReviewWorkspacePort {
   prepareForAgent(): Promise<void>;
   prepareReviewArtifact(path: string): Promise<void>;
   readAndRemoveArtifact(path: string): Promise<string>;
-  verify(command: string, timeoutMs: number): Promise<Pick<ProcessRunResponse, "exitCode">>;
+  verify(command: string, timeoutMs: number): Promise<{ exitCode?: number | null; stdout?: string; stderr?: string }>;
   inspectChanges(): Promise<ChangeInspection>;
   quiesce(): Promise<void>;
   assertRunIdentity(headSha: string, branch: string): Promise<void>;
@@ -120,6 +119,12 @@ export async function runReviewAgent(
     );
     receipt.verification.exitCode = verification.exitCode ?? null;
     receipt.verification.passed = verification.exitCode === 0;
+    if (verification.stdout) {
+      receipt.verification.stdoutTail = truncateTail(verification.stdout);
+    }
+    if (verification.stderr) {
+      receipt.verification.stderrTail = truncateTail(verification.stderr);
+    }
     await emitProgress();
     if (!receipt.verification.passed) throw new Error("independent verification failed");
 
@@ -211,6 +216,7 @@ export async function runReviewAgent(
   } catch (error) {
     receipt.phase = phase;
     receipt.errorCode = `${phase}_failed`;
+    receipt.errorMessage = redactSecrets(error instanceof Error ? error.message : String(error));
     await emitProgress();
     await deps.writeReceipt(receiptPath, receipt);
     throw error;

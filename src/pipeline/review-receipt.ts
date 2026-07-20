@@ -22,11 +22,18 @@ export interface ReviewRunReceipt {
   authorizedHeadSha?: string;
   headBranch?: string;
   changedFiles: string[];
-  verification: { command: string; exitCode: number | null; passed: boolean };
+  verification: {
+    command: string;
+    exitCode: number | null;
+    passed: boolean;
+    stdoutTail?: string;
+    stderrTail?: string;
+  };
   commitSha?: string;
   threadResults: ReviewThreadResult[];
   remainingOpenThreadIds: string[];
   errorCode?: string;
+  errorMessage?: string;
 }
 
 export async function writeReviewReceipt(path: string, receipt: ReviewRunReceipt): Promise<void> {
