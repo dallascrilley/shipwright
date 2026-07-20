@@ -18,6 +18,53 @@ const INSTALLATION_PERMISSIONS = {
   metadata: "read",
 } as const;
 
+type RequiredPermissions = Readonly<Record<string, string>>;
+
+export function buildInstallationAuthOptions(input: {
+  installationId: number;
+}) {
+  return {
+    type: "installation" as const,
+    installationId: input.installationId,
+  };
+}
+
+export function extractInstallationToken(
+  auth: unknown,
+  requiredPermissions: RequiredPermissions,
+): string {
+  if (typeof auth !== "object" || auth === null || !("token" in auth) || typeof auth.token !== "string") {
+    throw new Error("GitHub App did not return an installation token");
+  }
+  if (!("permissions" in auth) || typeof auth.permissions !== "object" || auth.permissions === null) {
+    throw new Error("GitHub App installation token did not report permissions");
+  }
+  const actualPermissions = auth.permissions as Record<string, unknown>;
+  const requiredEntries = Object.entries(requiredPermissions);
+  if (
+    Object.keys(actualPermissions).length !== requiredEntries.length ||
+    requiredEntries.some(([permission, access]) => actualPermissions[permission] !== access)
+  ) {
+    throw new Error("GitHub App installation token permissions do not match the required least-privilege set");
+  }
+  return auth.token;
+}
+
+export function validateInstallationRepositories(
+  repositoryNames: string[],
+  allowedRepositories: ReadonlySet<string>,
+  requestedRepository: string,
+): void {
+  const canonicalNames = repositoryNames.map((name) => name.toLowerCase());
+  const requestedName = requestedRepository.toLowerCase();
+  if (!canonicalNames.includes(requestedName)) {
+    throw new Error("GitHub App installation token cannot access the requested repository");
+  }
+  if (canonicalNames.some((name) => !allowedRepositories.has(name))) {
+    throw new Error("GitHub App installation token exposes a repository outside the GitHub repository allowlist");
+  }
+}
+
 export interface RepositoryClient {
   getRepository(): Promise<{ id: number; owner: string; name: string; defaultBranch: string }>;
   getIssue(number: number): Promise<{ title: string; body: string; isPullRequest: boolean }>;
@@ -173,17 +220,18 @@ export function createOctokitTransport(config: GitHubConfig): GitHubTransport {
       return response.data.id;
     },
     async createRepositoryClient(input) {
-      const auth = await app.octokit.auth({
-        type: "installation",
-        installationId: input.installationId,
-        repositoryNames: [input.repo],
-        permissions: input.permissions,
-      });
-      if (typeof auth !== "object" || auth === null || !("token" in auth) || typeof auth.token !== "string") {
-        throw new Error("GitHub App did not return an installation token");
-      }
-      const token = auth.token;
+      const auth = await app.octokit.auth(buildInstallationAuthOptions(input));
+      const token = extractInstallationToken(auth, input.permissions);
       const octokit = new Octokit({ auth: token });
+      const repositories = await octokit.paginate(
+        octokit.apps.listReposAccessibleToInstallation,
+        { per_page: 100 },
+      );
+      validateInstallationRepositories(
+        repositories.map((repository) => repository.full_name),
+        config.allowedRepositories,
+        `${input.owner}/${input.repo}`,
+      );
       const client: RepositoryClient & PullRequestApi & ReviewApi = {
         async getRepository() {
           const { data } = await octokit.repos.get({ owner: input.owner, repo: input.repo });
