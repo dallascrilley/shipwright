@@ -15,6 +15,7 @@ const KNOWN_SKILL_IDS = new Set([DEFAULT_REVIEW_SKILL_ID]);
 
 function envPathForSkill(skillId: string): string | undefined {
   if (skillId === DEFAULT_REVIEW_SKILL_ID) {
+    // guard:allow-env-credential — deploy-level non-secret canonical Skill path override.
     const value = process.env.SHIPWRIGHT_SKILL_FIX_REVIEW_FINDINGS?.trim();
     return value || undefined;
   }
