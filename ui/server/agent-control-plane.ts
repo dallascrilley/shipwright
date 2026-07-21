@@ -1,3 +1,13 @@
+import { randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname } from "node:path";
+
 import {
   agentControlPlaneSnapshotSchema,
   agentDefinitionSchema,
@@ -44,6 +54,59 @@ export class MemoryAgentControlPlaneStore implements AgentControlPlaneStore {
     const result = operation(candidate);
     this.#snapshot = agentControlPlaneSnapshotSchema.parse(candidate);
     return structuredClone(result);
+  }
+}
+
+/**
+ * Single-process durable transactional store. A complete schema-validated
+ * snapshot is atomically renamed into place, so a restart observes either the
+ * prior snapshot or the committed replacement, never a partial write.
+ */
+export class JsonFileAgentControlPlaneStore
+  implements AgentControlPlaneStore
+{
+  constructor(private readonly path: string) {}
+
+  load(): AgentControlPlaneSnapshot {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(this.path, "utf8"));
+      return structuredClone(agentControlPlaneSnapshotSchema.parse(parsed));
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        return createEmptyAgentControlPlaneSnapshot();
+      }
+      throw new Error(
+        `could not load agent control-plane state at ${this.path}`,
+        { cause: error },
+      );
+    }
+  }
+
+  transaction<Result>(
+    operation: (snapshot: AgentControlPlaneSnapshot) => Result,
+  ): Result {
+    const candidate = structuredClone(this.load());
+    const result = operation(candidate);
+    const snapshot = agentControlPlaneSnapshotSchema.parse(candidate);
+    this.save(snapshot);
+    return structuredClone(result);
+  }
+
+  private save(snapshot: AgentControlPlaneSnapshot): void {
+    const directory = dirname(this.path);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    chmodSync(directory, 0o700);
+    const temporaryPath = `${this.path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+    writeFileSync(temporaryPath, `${JSON.stringify(snapshot, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    renameSync(temporaryPath, this.path);
+    chmodSync(this.path, 0o600);
   }
 }
 

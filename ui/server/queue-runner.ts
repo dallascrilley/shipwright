@@ -1,6 +1,7 @@
 import { targetMatchesScope } from "../shared/agent-definition";
 
 import type { OperatorStoredRequest } from "../shared/operator-run";
+import { canPublishAtStage, resolveRolloutStage } from "./control-plane-runtime";
 import type { QueueRunner } from "./queue-dispatcher";
 import { executeOperatorPipeline } from "./operator-runs";
 import { resolveVerifyPreset } from "./verify-presets";
@@ -24,6 +25,13 @@ export const operatorPipelineQueueRunner: QueueRunner = async (context) => {
   }
 
   const isReview = target.kind === "pull";
+  // Publication is a double opt-in: rollout stage + pinned revision policy.
+  // Anything below publish_allowed forces publish=false at this boundary.
+  const stage = resolveRolloutStage();
+  const publish = canPublishAtStage(
+    stage,
+    context.revision.draft.publicationPolicy,
+  );
   const url = `https://github.com/${target.owner}/${target.repo}/${
     isReview ? "pull" : "issues"
   }/${target.number}`;
@@ -35,7 +43,7 @@ export const operatorPipelineQueueRunner: QueueRunner = async (context) => {
     skillId: isReview ? context.revision.draft.skillId : "",
     presetId: preset.id,
     verifyCommand: preset.command,
-    publish: context.revision.draft.publicationPolicy === "publish_allowed",
+    publish,
     timeoutMinutes: 30,
   };
   try {
