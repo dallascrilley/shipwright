@@ -174,7 +174,11 @@ export class QueueDispatcher {
     return { execution, entry };
   }
 
-  claimNext(owner: string): QueueClaim | undefined {
+  claimNext(
+    owner: string,
+    sources?: readonly ExecutionRequest["source"][],
+  ): QueueClaim | undefined {
+    if (sources && sources.length === 0) return undefined;
     this.recoverExpiredLeases();
     return this.store.transaction((snapshot) => {
       const now = this.now();
@@ -204,8 +208,12 @@ export class QueueDispatcher {
         )
         .find(
           (entry) =>
+            (!sources ||
+              sources.some(
+                (source) => source === entrySource(snapshot, entry),
+              )) &&
             active.filter((item) => item.agentId === entry.agentId).length <
-            this.options.perAgentConcurrency,
+              this.options.perAgentConcurrency,
         );
       if (!candidate) return undefined;
 
@@ -230,8 +238,9 @@ export class QueueDispatcher {
   async dispatchNext(
     owner: string,
     runner: QueueRunner,
+    sources?: readonly ExecutionRequest["source"][],
   ): Promise<QueueEntry | undefined> {
-    const claim = this.claimNext(owner);
+    const claim = this.claimNext(owner, sources);
     if (!claim || !claim.entry.lease) return undefined;
 
     const controller = new AbortController();
@@ -516,4 +525,14 @@ export class QueueDispatcher {
     const { lease: _lease, ...withoutLease } = entry;
     return withoutLease;
   }
+}
+
+/** Queue entries carry no source; resolve it from the parent execution. */
+function entrySource(
+  snapshot: AgentControlPlaneSnapshot,
+  entry: QueueEntry,
+): ExecutionRequest["source"] | undefined {
+  return snapshot.executions.find(
+    (execution) => execution.executionId === entry.executionId,
+  )?.source;
 }

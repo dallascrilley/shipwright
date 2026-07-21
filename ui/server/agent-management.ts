@@ -30,8 +30,13 @@ import {
   type CreateTriggerInput,
 } from "./agent-control-plane";
 import { getOperatorRunRegistry, isOperatorDemoMode } from "./operator-runs";
+import {
+  ControlPlaneRuntime,
+  resolveRolloutStage,
+} from "./control-plane-runtime";
 import { QueueDispatcher } from "./queue-dispatcher";
-import { ScheduleLifecycleService } from "./schedule-runner";
+import { operatorPipelineQueueRunner } from "./queue-runner";
+import { ScheduleLifecycleService, ScheduleScheduler } from "./schedule-runner";
 
 export interface AgentManagementDependencies {
   store?: AgentControlPlaneStore;
@@ -192,6 +197,27 @@ export class AgentManagementService {
 
   getSnapshotForTests(): AgentControlPlaneSnapshot {
     return this.#store.load();
+  }
+
+  /**
+   * Build the U6 worker runtime over this service's shared store and
+   * dispatcher. The plugin decides whether to start it; the stage decides
+   * which sources the dispatcher may claim.
+   */
+  createRuntime(): ControlPlaneRuntime {
+    const scheduler = new ScheduleScheduler(
+      this.#store,
+      this.#dispatcher,
+      this.#createId,
+      this.#now,
+      { maxDueTriggers: 100 },
+    );
+    return new ControlPlaneRuntime(
+      resolveRolloutStage(),
+      this.#dispatcher,
+      operatorPipelineQueueRunner,
+      scheduler,
+    );
   }
 
   private assertEnabledTrigger(agentId: string): void {
