@@ -195,7 +195,8 @@ export class AgentManagementService {
     );
   }
 
-  getSnapshotForTests(): AgentControlPlaneSnapshot {
+  /** Read-only snapshot for observability endpoints and tests. */
+  getSnapshot(): AgentControlPlaneSnapshot {
     return this.#store.load();
   }
 

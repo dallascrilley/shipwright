@@ -4,6 +4,10 @@ const rawAppTitle = "Ui";
 const appTitle = rawAppTitle === "{" + "{APP_TITLE}}" ? "Chat" : rawAppTitle;
 
 export default createAuthPlugin({
+  // Loopback systemd probes and tailnet metric scrapes must reach these
+  // without a session; the handlers expose only aggregate counts, never
+  // operator data (see server/control-plane-observability.ts).
+  publicPaths: ["/healthz", "/readyz", "/metrics"],
   marketing: {
     appName: appTitle,
     tagline:
