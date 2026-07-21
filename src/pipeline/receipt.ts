@@ -1,6 +1,8 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ProviderConfig } from "../config/provider.js";
+import { redactSecrets } from "./secret-safety.js";
+
 
 export type RunPhase =
   | "intake"
@@ -50,29 +52,7 @@ export interface RunReceipt {
 
 export const VERIFICATION_TAIL_MAX_BYTES = 8 * 1024;
 
-const TOKEN_PATTERNS = [
-  /gh[psuor]_[A-Za-z0-9_]{20,}/g,
-  /github_pat_[A-Za-z0-9_]{20,}/g,
-  /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
-  /-----BEGIN(?: [A-Z]+)? PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z]+)? PRIVATE KEY-----/g,
-  /https:\/\/x-access-token:[^@\s]+@github\.com/gi,
-  /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g,
-  /\bsk-or-[A-Za-z0-9_-]{20,}\b/g,
-  /\bsk-[A-Za-z0-9]{20,}\b/g,
-  /\bBearer\s+[A-Za-z0-9._\-+/=]{20,}\b/gi,
-] as const;
-
-export function redactSecrets(input: string): string {
-  return TOKEN_PATTERNS.reduce((value, pattern) => value.replace(pattern, "[REDACTED]"), input);
-}
-
-/** Shared high-confidence secret detector used by receipt redaction and publication policy. */
-export function containsSecretLikeContent(input: string): boolean {
-  return TOKEN_PATTERNS.some((pattern) => {
-    pattern.lastIndex = 0;
-    return pattern.test(input);
-  });
-}
+export { containsSecretLikeContent, redactSecrets } from "./secret-safety.js";
 
 export function truncateTail(input: string, maxBytes = VERIFICATION_TAIL_MAX_BYTES): string {
   if (!input) return input;
