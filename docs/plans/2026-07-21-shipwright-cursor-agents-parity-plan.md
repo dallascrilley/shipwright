@@ -1,12 +1,19 @@
 ---
 date: 2026-07-21
-origin:
-  - user direction: "explicitly seek to replicate Cursor Agents"
-  - docs/ideation/2026-07-20-shipwright-operator-console-capabilities.md
-  - docs/plans/2026-07-20-feat-operator-console-p0-ux-plan.md
-worktree_slug: feat/cursor-agents-parity
-status: proposed
+status: superseded
+superseded_by: docs/plans/2026-07-21-shipwright-automation-agents-plan.md
 ---
+
+# Shipwright Cursor Agents parity plan (superseded)
+
+> **This document is superseded.** Use the canonical Phase 2 plan:
+> [`docs/plans/2026-07-21-shipwright-automation-agents-plan.md`](2026-07-21-shipwright-automation-agents-plan.md)
+>
+> That document adds explicit durable schemas/entities, execution/trigger architecture, enable/disable and emergency-stop semantics, UI surfaces, migration/security boundaries, stable U1+ units, validation, rollout/cost constraints, and out-of-scope items — without implementation detail.
+
+---
+
+## Archived body (2026-07-21 draft)
 
 # Shipwright Cursor Agents parity plan
 
@@ -14,7 +21,9 @@ status: proposed
 
 Make Shipwright an always-on cloud-agent platform with durable agent definitions, event and schedule triggers, explicit enable/disable control, policy-governed execution, and an operator console that makes every configuration and run inspectable.
 
-This is a new phase. The delivered P0 operator console remains its management-surface foundation; it is not retroactively redefined. The separate P1 operator-capabilities plan may strengthen history, recovery, and readiness in parallel, but it must not defer this Phase 2 objective indefinitely.
+This is **Phase 2** — a separate plan from delivered P0 and from the P1 manual-operator capability sequence. Do not ship or merge the `feat/operator-console-capability-plan` draft as the automation answer; any “deferred to Phase 2” language there is superseded by this document.
+
+**Delivered P0** (`docs/plans/2026-07-20-feat-operator-console-p0-ux-plan.md`) stays unchanged: task-oriented cockpit, presets, `skillId`, retry/publish-from-prior-inputs, demo/live disclosure. **P1** (evidence, recovery, lineage, history, readiness in `docs/plans/2026-07-20-feat-operator-console-capabilities-plan.md`) may land in parallel; it must not block or replace this automation phase.
 
 ## Product target
 
@@ -22,7 +31,7 @@ Cursor Agents is the capability north star; Cursor Automations is the UX referen
 
 - Named, persistent cloud agents rather than one-off local runs.
 - Agent-owned configuration: instructions, allowed tools, repository and branch scope, verification policy, and publication policy.
-- GitHub event and schedule triggers that create durable, idempotent execution requests.
+- GitHub webhook, schedule, and validated trigger ingress that create durable, idempotent execution requests.
 - Explicit enable/disable controls, with auditable lifecycle changes and a global emergency stop.
 - A dense operator surface: agent health and KPIs, searchable agent/run history, configuration separate from execution evidence, test-run support, and safe recovery.
 
@@ -226,5 +235,5 @@ flowchart LR
 ## Decision record
 
 - **2026-07-21:** The user set Cursor Agents parity—not merely Cursor Automations-inspired UX—as Shipwright’s explicit end goal.
-- **2026-07-21:** Preserve P0 as delivered and retain P1 as a separate operator-capabilities sequence. This Phase 2 plan makes the always-on cloud-agent target actionable without retroactively altering delivered scope.
+- **2026-07-21:** Preserve P0 as delivered and retain P1 as a separate operator-capabilities sequence. This Phase 2 plan supersedes automation/deferral language in the capabilities draft and makes the always-on cloud-agent target actionable without retroactively altering delivered scope.
 - **2026-07-21:** Public `cursor.com/agents` redirects to authentication. The plan therefore uses capability parity as the contract and reserves authenticated-product observation as a pre-implementation validation task.
