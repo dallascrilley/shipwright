@@ -10,6 +10,7 @@ const enUS = {
     toggleTheme: "Toggle theme",
   },
   navigation: {
+    agents: "Agents",
     chat: "Chat",
     observability: "Observability",
     database: "Database",

@@ -11,7 +11,7 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-The operator is at `/`. Agent Native chat remains available at `/chat`.
+The operator is at `/`, and the agent management console is at `/agents`. Agent Native chat remains available at `/chat`.
 
 For deterministic UI work without GitHub, a model account, or Docker:
 
@@ -29,6 +29,18 @@ Demo mode is dry-run only. Real runs use the root project's GitHub App, provider
 - `list-shipwright-runs` / `get-shipwright-run` / `cancel-shipwright-run`: history, detail, cancel.
 - `view-screen`: returns current navigation plus the latest redacted run state.
 - `navigate`: changes the visible application route.
+
+### Agent management actions
+
+All actions in this section are UI-only and unavailable to the in-app model, MCP, and A2A tool surfaces.
+
+- `list-agents` / `get-agent`: return a searchable safe projection of agent status, configuration, triggers, queue history, redacted receipt evidence, and audit events. The list intentionally excludes instructions.
+- `create-agent` / `save-agent`: create a disabled draft and explicitly save later immutable revisions. Agent draft validation rejects secret-like values before they enter control-plane state or action responses.
+- `create-agent-trigger`: adds a schema-validated GitHub event or schedule trigger, pinned to the selected revision.
+- `set-agent-enabled`, `set-schedule-trigger-paused`, and `emergency-stop-agent`: UI-only actions with explicit UI confirmation for agent enable, disable, and stop. Enabling requires an enabled, valid trigger.
+- `queue-agent-test-run`: queues a dry-run test against the current revision and repository scope. It never activates a worker or publication path.
+
+The management console currently uses the process-local transactional adapter. It is suitable for local inspection and deterministic tests only: U6 must supply durable storage and process ownership before a trigger, scheduler, or worker is activated in production.
 
 Dry-run success offers **Start publish run (same inputs)** — a new publish run that reruns the agent (not an in-place promote). Demo mode refuses publish with a friendly error after confirm.
 
@@ -65,7 +77,6 @@ and the production scheduler loop.
 
 `approval_required` likewise runs dry until the U5 operator approval workflow can
 create a separately confirmed publish execution.
-
 
 `ui/server/agent-control-plane.ts` currently exposes an in-memory transactional adapter
 for deterministic tests. The existing JSON run registry remains the P0 history adapter;

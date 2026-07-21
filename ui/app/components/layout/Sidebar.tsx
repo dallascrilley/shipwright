@@ -20,6 +20,7 @@ import {
   IconPlus,
   IconSettings,
   IconTerminal2,
+  IconShieldCheck,
 } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
@@ -46,6 +47,12 @@ const navItems = [
     labelKey: "navigation.operator",
     href: "/",
     view: "operator",
+  },
+  {
+    icon: IconShieldCheck,
+    labelKey: "navigation.agents",
+    href: "/agents",
+    view: "agents",
   },
   {
     icon: IconMessageCircle,
