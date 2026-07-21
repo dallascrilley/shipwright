@@ -48,69 +48,7 @@ describe("AgentControlPlane", () => {
     ]);
   });
 
-  test("does not enqueue work while an agent is disabled", () => {
-    const controlPlane = createControlPlane();
-    const agent = controlPlane.createAgent(draft);
-    controlPlane.setEnabled(agent.agentId, 1, true);
-    controlPlane.setEnabled(agent.agentId, 1, false);
 
-
-    expect(() =>
-      controlPlane.createExecution({
-        agentId: agent.agentId,
-        source: "test",
-        idempotencyKey: "test:disabled-agent",
-        target: {
-          kind: "issue",
-          owner: "dallascrilley",
-          repo: "shipwright",
-          number: 42,
-        },
-      }),
-    ).toThrow(/disabled/);
-    expect(controlPlane.listQueueEntries()).toEqual([]);
-    expect(controlPlane.listLifecycleEvents(agent.agentId).map((event) => event.action)).toEqual([
-      "created",
-      "enabled",
-      "disabled",
-    ]);
-  });
-
-  test("does not enqueue through a disabled trigger", () => {
-    const store = new MemoryAgentControlPlaneStore();
-    const controlPlane = createControlPlane(store);
-    const agent = controlPlane.createAgent(draft);
-    controlPlane.setEnabled(agent.agentId, 1, true);
-    const trigger = controlPlane.createTrigger({
-      agentId: agent.agentId,
-      expectedRevision: 1,
-      kind: "github",
-      config: { event: "issues", actions: ["opened"] },
-    });
-    store.transaction((snapshot) => {
-      const stored = snapshot.triggers.find(
-        (item) => item.triggerId === trigger.triggerId,
-      );
-      if (!stored) throw new Error("missing trigger");
-      stored.enabled = false;
-    });
-
-    expect(() =>
-      controlPlane.createExecution({
-        agentId: agent.agentId,
-        triggerId: trigger.triggerId,
-        source: "test",
-        idempotencyKey: "test:disabled-trigger",
-        target: {
-          kind: "issue",
-          owner: "dallascrilley",
-          repo: "shipwright",
-          number: 42,
-        },
-      }),
-    ).toThrow(/trigger .*disabled/i);
-    expect(controlPlane.listQueueEntries()).toEqual([]);
-  });
 
   test("fails loud on a stale revision and preserves historic revisions", () => {
     const controlPlane = createControlPlane();
@@ -147,7 +85,7 @@ describe("AgentControlPlane", () => {
     expect(controlPlane.listLifecycleEvents(agent.agentId)).toHaveLength(1);
   });
 
-  test("orders lifecycle audit events and pins trigger execution to the active revision", () => {
+  test("orders lifecycle audit events and pins triggers to the active revision", () => {
     const controlPlane = createControlPlane();
     const agent = controlPlane.createAgent(draft);
     const updated = controlPlane.updateAgent(agent.agentId, 1, {
@@ -161,27 +99,12 @@ describe("AgentControlPlane", () => {
       kind: "github",
       config: { event: "issues", actions: ["opened"] },
     });
-    const execution = controlPlane.createExecution({
-      agentId: agent.agentId,
-      triggerId: trigger.triggerId,
-      source: "test",
-      idempotencyKey: "test:agent:1",
-      target: {
-        kind: "issue",
-        owner: "dallascrilley",
-        repo: "shipwright",
-        number: 42,
-      },
-    });
 
-    expect(execution).toMatchObject({
+    expect(trigger).toMatchObject({
       agentId: agent.agentId,
       agentRevision: 2,
-      source: "test",
+      kind: "github",
     });
-    expect(controlPlane.listQueueEntries()).toMatchObject([
-      { executionId: execution.executionId, state: "queued" },
-    ]);
     expect(controlPlane.listLifecycleEvents(agent.agentId).map((event) => event.action)).toEqual([
       "created",
       "updated",

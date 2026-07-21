@@ -192,7 +192,7 @@ export class OperatorRunRegistry {
   readonly #controllers = new Map<string, AbortController>();
 
   constructor(
-    private readonly execute: RunExecutor = executePipeline,
+    private readonly execute: RunExecutor = executeOperatorPipeline,
     private readonly createRunId: () => string = () =>
       randomBytes(8).toString("hex"),
     private readonly store: OperatorRunStore = new MemoryOperatorRunStore(),
@@ -494,7 +494,7 @@ function toOperatorReviewReceipt(receipt: ReviewRunReceipt): OperatorRunReceipt 
   };
 }
 
-async function executePipeline(
+export async function executeOperatorPipeline(
   request: StoredRequest,
   runId: string,
   onProgress: (receipt: OperatorRunReceipt) => void,
@@ -641,7 +641,7 @@ let registry: OperatorRunRegistry | undefined;
 export function getOperatorRunRegistry(): OperatorRunRegistry {
   const stateDirectory = resolveShipwrightStateDirectory(); // guard:allow-env-credential — deploy-level state path
   registry ??= new OperatorRunRegistry(
-    executePipeline,
+    executeOperatorPipeline,
     () => randomBytes(8).toString("hex"),
     new JsonFileOperatorRunStore(join(stateDirectory, "operator-runs.json")),
     () => new Date().toISOString(),

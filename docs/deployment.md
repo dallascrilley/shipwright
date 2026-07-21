@@ -23,6 +23,13 @@ Shipwright runs on a dedicated Ubuntu 24.04 x86 VM. It is not placed on a shared
 
 The systemd service runs as the unprivileged `shipwright` account with Docker group membership. This membership is root-equivalent on the dedicated VM; no unrelated workloads belong on the host.
 
+## Agent queue status
+
+The Phase 2 queue dispatcher is a library and demo adapter only. The deployed systemd
+service does not start queue workers or activate agent triggers. Do not add a worker
+process until a durable transactional control-plane store and the U6 rollout are in
+place; the current in-memory store is test-only.
+
 ## Provision
 
 Create an Ubuntu 24.04 x86 server. Public HTTP/HTTPS ports are not required. The production host is intended to be Tailscale-only: the cloud firewall may intentionally have **no public SSH rule**, so `ssh root@PUBLIC_IP` can time out by design. Bootstrap and break-glass access use Tailscale SSH (or a temporary source-IP-restricted SSH rule).
