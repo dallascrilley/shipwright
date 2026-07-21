@@ -67,11 +67,11 @@ The detail view makes a workflow legible without opening its implementation: nam
 ### Parity targets worth adopting
 
 1. **Operate from summaries, investigate from evidence.** Add compact run outcome aggregates and target/status filtering to Shipwright history; retain the current receipt as the deeper evidence surface.
-2. **Make each run profile self-explanatory.** Surface selected target, verification preset, run mode, and explicit safety state together before execution. This adapts Cursor's trigger/repository/environment header without adding autonomous triggers.
+2. **Make each run profile self-explanatory and operable.** Surface the selected target, trigger, verification policy, run mode, and enabled state together. Adapt Cursor's repository/environment header into a persistent cloud-automation profile with explicit enable/disable controls.
 3. **Separate configuration from execution history.** Keep the intake/publish form focused on the next request; make historical attempts searchable and show terminal status, duration, verification result, and parent/retry lineage.
 4. **Treat dry runs as first-class operator tests.** Preserve Shipwright's explicit publish confirmation, but make a dry-run's scope, verification selection, and result easy to inspect and intentionally reuse.
 5. **Favor dense, quiet scanability.** Cursor's dark, single-table layout and small KPI cards make routine health legible before details; Shipwright should prefer these bounded summaries over a chat-like activity feed.
 
-### Deliberate non-parity
+### Target operating model
 
-Shipwright must not copy Cursor's always-on cloud agents or enable/disable automation toggle as an autonomous execution model. Its allowlisted intake, host-side credentials, dry-run default, and second confirmation before publication remain the governing safety boundary. A global stop control is only justified if Shipwright later supports concurrent or persistent runs.
+Shipwright's intended end state is **always-on cloud agents** with explicit automation enable/disable controls. Safety should come from scoped credentials, allowlists, policy-gated write actions, auditable receipts, and emergency stop controls—not from ruling out autonomous execution. The open product-design work is to define which actions may run unattended and which remain confirmation-gated.
