@@ -34,7 +34,9 @@ describe("agentDefinition contracts", () => {
   });
 
   test("rejects invalid draft, trigger, and execution boundaries", () => {
-    expect(agentDraftSchema.safeParse({ ...draft, name: "" }).success).toBe(false);
+    expect(agentDraftSchema.safeParse({ ...draft, name: "" }).success).toBe(
+      false,
+    );
     expect(
       agentDraftSchema.safeParse({
         ...draft,
@@ -71,6 +73,61 @@ describe("agentDefinition contracts", () => {
         createdAt: "2026-07-21T00:00:00.000Z",
       }).success,
     ).toBe(false);
+  });
+
+  test("requires bounded runnable schedule trigger state", () => {
+    const trigger = {
+      triggerId: "schedule-1",
+      agentId: "agent-1",
+      agentRevision: 1,
+      kind: "schedule" as const,
+      enabled: true,
+      config: {
+        schedule: "0 9 * * *",
+        timezone: "America/New_York",
+        target: { kind: "issue" as const, number: 42 },
+      },
+      nextFireAt: "2026-07-21T13:00:00.000Z",
+      consecutiveFailures: 0,
+      createdAt: "2026-07-21T00:00:00.000Z",
+      updatedAt: "2026-07-21T00:00:00.000Z",
+    };
+
+    expect(agentTriggerSchema.safeParse(trigger).success).toBe(true);
+    expect(
+      agentTriggerSchema.safeParse({
+        ...trigger,
+        config: { ...trigger.config, schedule: "* * * * *" },
+      }).success,
+    ).toBe(false);
+    expect(
+      agentTriggerSchema.safeParse({
+        ...trigger,
+        config: {
+          ...trigger.config,
+          target: {
+            ...trigger.config.target,
+            number: Number.MAX_SAFE_INTEGER + 1,
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      agentTriggerSchema.safeParse({
+        ...trigger,
+        nextFireAt: undefined,
+      }).success,
+    ).toBe(false);
+    expect(
+      lifecycleEventSchema.safeParse({
+        eventId: "event-1",
+        agentId: "agent-1",
+        action: "circuit_open",
+        revision: 1,
+        sequence: 1,
+        occurredAt: "2026-07-21T00:00:00.000Z",
+      }).success,
+    ).toBe(true);
   });
 
   test("rejects secret-like values and unrecognized fields", () => {

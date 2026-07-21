@@ -52,6 +52,17 @@ matching belongs to the U3/U4 trigger ingress that supplies one.
 queues only bounded issue/PR target data for enabled, scoped triggers. It remains
 library-only until U6 supplies the durable store and deploys the webhook endpoint.
 
+`ScheduleScheduler` accepts five-field cron schedules with a valid IANA timezone
+and a five-minute minimum interval, including across forward timezone changes.
+It rechecks the actual cadence around each next persisted occurrence. Each trigger
+pins a concrete issue/PR target to its revision scope, advances its persisted cursor
+transactionally, and uses the
+trigger plus scheduled occurrence for idempotency. It records schedule, skip,
+trigger enablement, pause, resume, retry, stop, and circuit-breaker decisions; an
+open per-agent failure circuit blocks every schedule trigger for that agent until
+an operator resumes it. This remains library-only until U6 owns durable storage
+and the production scheduler loop.
+
 `approval_required` likewise runs dry until the U5 operator approval workflow can
 create a separately confirmed publish execution.
 

@@ -16,6 +16,7 @@ import {
   type QueueEntry,
 } from "../shared/agent-definition";
 import type { OperatorRunRecord } from "../shared/operator-run";
+import { nextScheduleOccurrence } from "../shared/schedule";
 
 export interface AgentControlPlaneStore {
   load(): AgentControlPlaneSnapshot;
@@ -59,14 +60,10 @@ export class RevisionConflictError extends Error {
   }
 }
 
-export type CreateTriggerInput = Pick<
-  AgentTriggerInput,
-  "kind" | "config"
-> & {
+export type CreateTriggerInput = Pick<AgentTriggerInput, "kind" | "config"> & {
   agentId: string;
   expectedRevision: number;
 };
-
 
 /**
  * State transitions for durable agent definitions. This class has no dispatcher or
@@ -135,7 +132,13 @@ export class AgentControlPlane {
       snapshot.agents[snapshot.agents.indexOf(agent)] = next;
       this.appendEvent(snapshot, next.agentId, "updated", revision, now);
       if (previous.draft.publicationPolicy !== draft.publicationPolicy) {
-        this.appendEvent(snapshot, next.agentId, "policy_changed", revision, now);
+        this.appendEvent(
+          snapshot,
+          next.agentId,
+          "policy_changed",
+          revision,
+          now,
+        );
       }
       return next;
     });
@@ -146,26 +149,40 @@ export class AgentControlPlane {
     expectedRevision: number,
     enabled: boolean,
   ): AgentDefinition {
-    return this.store.transaction((snapshot) => {
-      const agent = this.requireAgent(snapshot, agentId);
-      this.assertRevision(agent, expectedRevision);
-      if (agent.enabled === enabled) return agent;
-      const now = this.now();
-      const next = agentDefinitionSchema.parse({
-        ...agent,
-        enabled,
-        updatedAt: now,
-      });
-      snapshot.agents[snapshot.agents.indexOf(agent)] = next;
-      this.appendEvent(
+    return this.store.transaction((snapshot) =>
+      this.setEnabledInTransaction(
         snapshot,
-        next.agentId,
-        enabled ? "enabled" : "disabled",
-        next.currentRevision,
-        now,
-      );
-      return next;
+        agentId,
+        expectedRevision,
+        enabled,
+      ),
+    );
+  }
+
+  setEnabledInTransaction(
+    snapshot: AgentControlPlaneSnapshot,
+    agentId: string,
+    expectedRevision: number,
+    enabled: boolean,
+    now = this.now(),
+  ): AgentDefinition {
+    const agent = this.requireAgent(snapshot, agentId);
+    this.assertRevision(agent, expectedRevision);
+    if (agent.enabled === enabled) return agent;
+    const next = agentDefinitionSchema.parse({
+      ...agent,
+      enabled,
+      updatedAt: now,
     });
+    snapshot.agents[snapshot.agents.indexOf(agent)] = next;
+    this.appendEvent(
+      snapshot,
+      next.agentId,
+      enabled ? "enabled" : "disabled",
+      next.currentRevision,
+      now,
+    );
+    return next;
   }
 
   createTrigger(input: CreateTriggerInput): AgentTrigger {
@@ -173,6 +190,10 @@ export class AgentControlPlane {
       const agent = this.requireAgent(snapshot, input.agentId);
       this.assertRevision(agent, input.expectedRevision);
       const now = this.now();
+      const scheduleConfig =
+        input.kind === "schedule" && "schedule" in input.config
+          ? input.config
+          : undefined;
       const trigger = agentTriggerSchema.parse({
         triggerId: this.createId(),
         agentId: agent.agentId,
@@ -180,6 +201,16 @@ export class AgentControlPlane {
         kind: input.kind,
         enabled: true,
         config: input.config,
+        ...(scheduleConfig
+          ? {
+              nextFireAt: nextScheduleOccurrence(
+                scheduleConfig.schedule,
+                scheduleConfig.timezone,
+                now,
+              ),
+              consecutiveFailures: 0,
+            }
+          : {}),
         createdAt: now,
         updatedAt: now,
       });
@@ -187,7 +218,6 @@ export class AgentControlPlane {
       return trigger;
     });
   }
-
 
   getAgent(agentId: string): AgentDefinition | undefined {
     return this.store.load().agents.find((agent) => agent.agentId === agentId);
@@ -229,7 +259,8 @@ export class AgentControlPlane {
     const found = snapshot.revisions.find(
       (item) => item.agentId === agentId && item.revision === revision,
     );
-    if (!found) throw new Error(`Missing revision ${revision} for agent ${agentId}.`);
+    if (!found)
+      throw new Error(`Missing revision ${revision} for agent ${agentId}.`);
     return found;
   }
 
@@ -252,23 +283,45 @@ export class AgentControlPlane {
     action: LifecycleEvent["action"],
     revision: number,
     occurredAt: string,
+    triggerId?: string,
   ): void {
-    const sequence =
-      snapshot.lifecycleEvents.reduce(
-        (highest, event) => Math.max(highest, event.sequence),
-        0,
-      ) + 1;
-    snapshot.lifecycleEvents.push(
-      lifecycleEventSchema.parse({
-        eventId: this.createId(),
-        agentId,
-        action,
-        revision,
-        sequence,
-        occurredAt,
-      }),
+    appendLifecycleEvent(
+      snapshot,
+      this.createId,
+      agentId,
+      action,
+      revision,
+      occurredAt,
+      triggerId,
     );
   }
+}
+
+export function appendLifecycleEvent(
+  snapshot: AgentControlPlaneSnapshot,
+  createId: () => string,
+  agentId: AgentDefinition["agentId"],
+  action: LifecycleEvent["action"],
+  revision: number,
+  occurredAt: string,
+  triggerId?: string,
+): void {
+  const sequence =
+    snapshot.lifecycleEvents.reduce(
+      (highest, event) => Math.max(highest, event.sequence),
+      0,
+    ) + 1;
+  snapshot.lifecycleEvents.push(
+    lifecycleEventSchema.parse({
+      eventId: createId(),
+      agentId,
+      action,
+      ...(triggerId ? { triggerId } : {}),
+      revision,
+      sequence,
+      occurredAt,
+    }),
+  );
 }
 
 /**
