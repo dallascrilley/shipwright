@@ -5,17 +5,13 @@ import {
   agentRevisionSchema,
   agentTriggerSchema,
   createEmptyAgentControlPlaneSnapshot,
-  executionRequestSchema,
   lifecycleEventSchema,
-  queueEntrySchema,
   type AgentControlPlaneSnapshot,
   type AgentDefinition,
   type AgentDraftInput,
   type AgentRevision,
   type AgentTrigger,
   type AgentTriggerInput,
-  type ExecutionRequest,
-  type ExecutionRequestInput,
   type LifecycleEvent,
   type QueueEntry,
 } from "../shared/agent-definition";
@@ -71,13 +67,6 @@ export type CreateTriggerInput = Pick<
   expectedRevision: number;
 };
 
-export type CreateExecutionInput = Pick<
-  ExecutionRequestInput,
-  "source" | "idempotencyKey" | "target"
-> & {
-  agentId: string;
-  triggerId?: string;
-};
 
 /**
  * State transitions for durable agent definitions. This class has no dispatcher or
@@ -199,46 +188,6 @@ export class AgentControlPlane {
     });
   }
 
-  createExecution(input: CreateExecutionInput): ExecutionRequest {
-    return this.store.transaction((snapshot) => {
-      const agent = this.requireAgent(snapshot, input.agentId);
-      if (!agent.enabled) {
-        throw new Error(`Agent ${agent.agentId} is disabled and cannot enqueue work.`);
-      }
-      const trigger = input.triggerId
-        ? snapshot.triggers.find((item) => item.triggerId === input.triggerId)
-        : undefined;
-      if (input.triggerId && (!trigger || trigger.agentId !== agent.agentId)) {
-        throw new Error(`Unknown trigger ${input.triggerId} for agent ${agent.agentId}.`);
-      }
-      if (trigger && !trigger.enabled) {
-        throw new Error(`Trigger ${trigger.triggerId} is disabled and cannot enqueue work.`);
-      }
-      const now = this.now();
-      const execution = executionRequestSchema.parse({
-        executionId: this.createId(),
-        agentId: agent.agentId,
-        agentRevision: trigger?.agentRevision ?? agent.currentRevision,
-        ...(trigger ? { triggerId: trigger.triggerId } : {}),
-        source: input.source,
-        idempotencyKey: input.idempotencyKey,
-        target: input.target,
-        createdAt: now,
-      });
-      const queueEntry = queueEntrySchema.parse({
-        queueEntryId: this.createId(),
-        executionId: execution.executionId,
-        agentId: execution.agentId,
-        agentRevision: execution.agentRevision,
-        state: "queued",
-        createdAt: now,
-        updatedAt: now,
-      });
-      snapshot.executions.push(execution);
-      snapshot.queueEntries.push(queueEntry);
-      return execution;
-    });
-  }
 
   getAgent(agentId: string): AgentDefinition | undefined {
     return this.store.load().agents.find((agent) => agent.agentId === agentId);

@@ -183,6 +183,8 @@ export const executionRequestSchema = z
         number: z.number().int().positive(),
       })
       .strict(),
+    scheduledAt: timestampSchema,
+    priority: z.number().int().min(0).max(100),
     createdAt: timestampSchema,
   })
   .strict();
@@ -190,6 +192,29 @@ export const executionRequestSchema = z
 export type ExecutionRequest = z.output<typeof executionRequestSchema>;
 export type ExecutionRequestInput = z.input<typeof executionRequestSchema>;
 
+export function targetMatchesScope(
+  target: ExecutionRequest["target"],
+  scope: AgentDraft["targetScope"],
+): boolean {
+  return `${target.owner}/${target.repo}`.toLowerCase() === scope.repository.toLowerCase();
+}
+
+const queueLeaseSchema = z
+  .object({
+    leaseId: identifierSchema,
+    owner: identifierSchema,
+    expiresAt: timestampSchema,
+  })
+  .strict();
+
+const queueReceiptSchema = z
+  .object({
+    runId: identifierSchema,
+    phase: safeText(100),
+    verificationPassed: z.boolean(),
+    errorCode: identifierSchema.optional(),
+  })
+  .strict();
 
 export const queueEntrySchema = z
   .object({
@@ -207,10 +232,33 @@ export const queueEntrySchema = z
       "interrupted",
       "dead_letter",
     ]),
+    scheduledAt: timestampSchema,
+    priority: z.number().int().min(0).max(100),
+    attempts: z.number().int().nonnegative(),
+    lease: queueLeaseSchema.optional(),
+    receipt: queueReceiptSchema.optional(),
+    failureCode: identifierSchema.optional(),
     createdAt: timestampSchema,
     updatedAt: timestampSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const active = value.state === "claimed" || value.state === "running";
+    if (active && !value.lease) {
+      context.addIssue({
+        code: "custom",
+        path: ["lease"],
+        message: "Claimed and running entries require a lease.",
+      });
+    }
+    if (!active && value.lease) {
+      context.addIssue({
+        code: "custom",
+        path: ["lease"],
+        message: "Only claimed and running entries may retain a lease.",
+      });
+    }
+  });
 
 export type QueueEntry = z.output<typeof queueEntrySchema>;
 
