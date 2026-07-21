@@ -57,3 +57,21 @@ survivors: 7
 - **Basis:** `direct` — successful operation depends on configured model and least-privileged GitHub App credentials plus Docker/toolchain prerequisites (`README.md:11-24`), but the console header only distinguishes Demo from Live (`ui/app/components/operator/OperatorConsole.tsx:369-377`) before a run fails.
 - **Why it matters:** Operators currently learn that a host dependency is unavailable only after attempting a run. A small, non-secret readiness panel can surface whether the configured provider, GitHub App configuration, sandbox runtime, and state store pass safe health checks—without exposing credentials or adding configuration controls to the browser.
 - **What exploring it looks like:** Define a redacted health contract, refresh cadence, failure disclosures, and the exact difference between “not configured,” “unreachable,” and “ready.”
+
+## Competitive reference: Cursor Automations
+
+**Observed in Chrome on 2026-07-20:** Cursor frames automation as a lightweight operations console, not a generic agent chat. Its index starts with two compact seven-day KPIs (total runs and success rate), then a Mine/Team switch, search, and a scan-friendly table with automation name, author, creation date, active/inactive state, connected tools, and overflow actions.
+
+The detail view makes a workflow legible without opening its implementation: name and enabled state, repository, branch, execution environment, author, editable GitHub trigger, and explicit agent instructions. A separate Run History provides search and filtering, 24-hour and seven-day success/failure counts, individual trigger payloads, tool usage, status, duration, pagination, and an emergency **Stop All Runs** control. It also exposes **Test run** before a configuration save.
+
+### Parity targets worth adopting
+
+1. **Operate from summaries, investigate from evidence.** Add compact run outcome aggregates and target/status filtering to Shipwright history; retain the current receipt as the deeper evidence surface.
+2. **Make each run profile self-explanatory.** Surface selected target, verification preset, run mode, and explicit safety state together before execution. This adapts Cursor's trigger/repository/environment header without adding autonomous triggers.
+3. **Separate configuration from execution history.** Keep the intake/publish form focused on the next request; make historical attempts searchable and show terminal status, duration, verification result, and parent/retry lineage.
+4. **Treat dry runs as first-class operator tests.** Preserve Shipwright's explicit publish confirmation, but make a dry-run's scope, verification selection, and result easy to inspect and intentionally reuse.
+5. **Favor dense, quiet scanability.** Cursor's dark, single-table layout and small KPI cards make routine health legible before details; Shipwright should prefer these bounded summaries over a chat-like activity feed.
+
+### Deliberate non-parity
+
+Shipwright must not copy Cursor's always-on cloud agents or enable/disable automation toggle as an autonomous execution model. Its allowlisted intake, host-side credentials, dry-run default, and second confirmation before publication remain the governing safety boundary. A global stop control is only justified if Shipwright later supports concurrent or persistent runs.
