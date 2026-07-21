@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseGitHubConfig } from "../../src/config/github.js";
+import { parseGitHubConfig, parseGitHubWebhookConfig } from "../../src/config/github.js";
 
 const base = {
   GITHUB_APP_ID: "123",
@@ -30,5 +30,32 @@ describe("parseGitHubConfig", () => {
     expect(() => parseGitHubConfig({ ...base, GITHUB_REPOSITORY_ALLOWLIST: "" })).toThrow(
       "allowlist",
     );
+  });
+});
+
+describe("parseGitHubWebhookConfig", () => {
+  test("requires a sufficiently long signing secret and an exact allowlist", () => {
+    expect(
+      parseGitHubWebhookConfig({
+        GITHUB_WEBHOOK_SECRET: "test-webhook-signing-value-at-least-32",
+        GITHUB_REPOSITORY_ALLOWLIST: "Owner/Repo",
+      }),
+    ).toMatchObject({
+      allowedRepositories: new Set(["owner/repo"]),
+    });
+  });
+
+  test("rejects missing signing secrets and wildcard allowlists", () => {
+    expect(() =>
+      parseGitHubWebhookConfig({
+        GITHUB_REPOSITORY_ALLOWLIST: "owner/repo",
+      }),
+    ).toThrow("webhook secret");
+    expect(() =>
+      parseGitHubWebhookConfig({
+        GITHUB_WEBHOOK_SECRET: "test-webhook-signing-value-at-least-32",
+        GITHUB_REPOSITORY_ALLOWLIST: "*",
+      }),
+    ).toThrow("allowlist");
   });
 });
