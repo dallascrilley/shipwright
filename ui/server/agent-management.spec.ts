@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 
+import { MemoryAgentControlPlaneStore } from "./agent-control-plane";
 import { AgentManagementService } from "./agent-management";
 
 const draft = {
@@ -20,6 +21,7 @@ const draft = {
 function createService() {
   let sequence = 0;
   return new AgentManagementService({
+    store: new MemoryAgentControlPlaneStore(),
     createId: () => `id-${++sequence}`,
     now: () => "2026-07-21T12:00:00.000Z",
   });
