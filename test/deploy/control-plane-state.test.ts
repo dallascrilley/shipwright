@@ -70,7 +70,81 @@ describe("control-plane state backup/restore", () => {
 
       const restore = run(["restore", backupFile, stateDir]);
       expect(restore.code).not.toBe(0);
-      expect(restore.output).toContain("control-plane snapshot");
+      expect(restore.output).toContain("not a valid control-plane snapshot");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("restore rejects a structurally incomplete v1 snapshot and keeps live state", () => {
+    const root = mkdtempSync(join(tmpdir(), "shipwright-state-drill-"));
+    try {
+      const stateDir = join(root, "state");
+      Bun.spawnSync(["mkdir", "-p", stateDir]);
+      const live = join(stateDir, "agent-control-plane.json");
+      writeFileSync(live, SNAPSHOT, { mode: 0o600 });
+      const shallow = join(root, "shallow.json");
+      writeFileSync(
+        shallow,
+        '{"version":1,"agents":[{"agentId":"agent-evil","enabled":true}]}',
+        "utf8",
+      );
+
+      const restore = run(["restore", shallow, stateDir]);
+      expect(restore.code).not.toBe(0);
+      expect(readFileSync(live, "utf8")).toBe(SNAPSHOT);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("restore refuses a tampered backup whose checksum sidecar disagrees", () => {
+    const root = mkdtempSync(join(tmpdir(), "shipwright-state-drill-"));
+    try {
+      const stateDir = join(root, "state");
+      const backupDir = join(root, "backups");
+      Bun.spawnSync(["mkdir", "-p", stateDir]);
+      writeFileSync(join(stateDir, "agent-control-plane.json"), SNAPSHOT, {
+        mode: 0o600,
+      });
+      expect(run(["backup", stateDir, backupDir]).code).toBe(0);
+      const backup = readdirSync(backupDir).find(
+        (name) => !name.endsWith(".sha256"),
+      )!;
+      const backupPath = join(backupDir, backup);
+      writeFileSync(backupPath, SNAPSHOT.replace("\"version\":1", "\"version\":1 "), "utf8");
+
+      const restore = run(["restore", backupPath, join(root, "restored")]);
+      expect(restore.code).toBe(1);
+      expect(restore.output).toContain("Checksum mismatch");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("restore retains the displaced live snapshot as a .bak file", () => {
+    const root = mkdtempSync(join(tmpdir(), "shipwright-state-drill-"));
+    try {
+      const stateDir = join(root, "state");
+      const backupDir = join(root, "backups");
+      Bun.spawnSync(["mkdir", "-p", stateDir]);
+      writeFileSync(join(stateDir, "agent-control-plane.json"), SNAPSHOT, {
+        mode: 0o600,
+      });
+      expect(run(["backup", stateDir, backupDir]).code).toBe(0);
+      const backup = readdirSync(backupDir).find(
+        (name) => !name.endsWith(".sha256"),
+      )!;
+      writeFileSync(
+        join(stateDir, "agent-control-plane.json"),
+        SNAPSHOT.replace("[]", '["changed"]'),
+        { mode: 0o600 },
+      );
+
+      expect(run(["restore", join(backupDir, backup), stateDir]).code).toBe(0);
+      expect(readFileSync(join(stateDir, "agent-control-plane.json.bak"), "utf8")).toContain(
+        '"changed"',
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

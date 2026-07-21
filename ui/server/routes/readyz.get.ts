@@ -23,12 +23,12 @@ export default defineEventHandler((event) => {
     if (!status.ok) setResponseStatus(event, 503);
     return status;
   } catch (error) {
+    // Detail stays in server logs; the public probe gets a fixed reason.
+    console.error("control-plane readiness probe failed", error);
     setResponseStatus(event, 503);
     return {
       ok: false,
-      reasons: [
-        error instanceof Error ? error.message : "control-plane state unreadable",
-      ],
+      reasons: ["control-plane state unreadable"],
     };
   }
 });

@@ -69,6 +69,8 @@ export interface ControlPlaneMetricsInput {
   snapshot: AgentControlPlaneSnapshot;
   stage: RolloutStage;
   now: string;
+  /** Lease TTL used to derive active-lease age from its expiry. */
+  leaseDurationMs?: number;
 }
 
 /**
@@ -79,6 +81,7 @@ export interface ControlPlaneMetricsInput {
  */
 export function buildMetricsText(input: ControlPlaneMetricsInput): string {
   const { snapshot, stage, now } = input;
+  const leaseDurationMs = input.leaseDurationMs ?? 60_000;
   const nowTime = Date.parse(now);
   const lines: string[] = [];
 
@@ -90,7 +93,7 @@ export function buildMetricsText(input: ControlPlaneMetricsInput): string {
       (entry.state === "claimed" || entry.state === "running") &&
       entry.lease
     ) {
-      const age = nowTime - (Date.parse(entry.lease.expiresAt) - 60_000);
+      const age = nowTime - (Date.parse(entry.lease.expiresAt) - leaseDurationMs);
       activeLeaseMaxAgeMs = Math.max(activeLeaseMaxAgeMs, age);
     }
   }
