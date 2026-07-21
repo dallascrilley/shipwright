@@ -1,4 +1,7 @@
 import { randomBytes } from "node:crypto";
+import { join } from "node:path";
+
+import { resolveShipwrightStateDirectory } from "../../src/config/state.js";
 
 import {
   agentDraftSchema,
@@ -21,11 +24,12 @@ import {
 import type { OperatorRunRecord } from "../shared/operator-run";
 import {
   AgentControlPlane,
+  JsonFileAgentControlPlaneStore,
   MemoryAgentControlPlaneStore,
   type AgentControlPlaneStore,
   type CreateTriggerInput,
 } from "./agent-control-plane";
-import { getOperatorRunRegistry } from "./operator-runs";
+import { getOperatorRunRegistry, isOperatorDemoMode } from "./operator-runs";
 import { QueueDispatcher } from "./queue-dispatcher";
 import { ScheduleLifecycleService } from "./schedule-runner";
 
@@ -71,7 +75,7 @@ export class AgentManagementService {
   readonly #operatorRuns: () => readonly OperatorRunRecord[];
 
   constructor(dependencies: AgentManagementDependencies = {}) {
-    this.#store = dependencies.store ?? new MemoryAgentControlPlaneStore();
+    this.#store = dependencies.store ?? createDefaultControlPlaneStore();
     this.#createId =
       dependencies.createId ?? (() => randomBytes(8).toString("hex"));
     this.#now = dependencies.now ?? (() => new Date().toISOString());
@@ -214,6 +218,18 @@ function requireAgent(
   const agent = snapshot.agents.find((item) => item.agentId === agentId);
   if (!agent) throw new Error(`Unknown agent ${agentId}.`);
   return agent;
+}
+
+/**
+ * Demo mode keeps the process-local store so isolated UI demos never write
+ * host state; every other mode persists under the shipwright state directory
+ * so the control plane survives service restarts.
+ */
+function createDefaultControlPlaneStore(): AgentControlPlaneStore {
+  if (isOperatorDemoMode()) return new MemoryAgentControlPlaneStore();
+  return new JsonFileAgentControlPlaneStore(
+    join(resolveShipwrightStateDirectory(), "agent-control-plane.json"),
+  );
 }
 
 let service: AgentManagementService | undefined;
