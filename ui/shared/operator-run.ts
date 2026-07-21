@@ -142,6 +142,9 @@ export interface OperatorRunRecord {
   receipt?: OperatorRunReceipt;
   message?: string;
   target?: OperatorRunTarget;
+  /** Present only for Phase 2 control-plane executions; P0 runs stay standalone. */
+  agentId?: string;
+  agentRevision?: number;
   summary?: string;
   durationMs?: number;
   finishedAt?: string;
