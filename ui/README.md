@@ -32,18 +32,31 @@ Demo mode is dry-run only. Real runs use the root project's GitHub App, provider
 
 Dry-run success offers **Start publish run (same inputs)** — a new publish run that reruns the agent (not an in-place promote). Demo mode refuses publish with a friendly error after confirm.
 
-## Phase 2 control-plane foundation
+## Phase 2 control-plane and queue foundation
 
 Agent definitions begin disabled. Each update creates an immutable revision; lifecycle
 events record creation, configuration/policy changes, and enable/disable transitions.
-Triggers and queue entries pin an execution to the revision current at trigger creation;
-after an agent edit, replace a trigger to use the newer revision. This unit does not
-activate triggers or dispatch work.
+Triggers pin their executions to the revision current at creation, and queue entries
+retain that pinned revision; after an agent edit, replace a trigger to use the newer revision.
+
+`QueueDispatcher` makes immutable, idempotent enqueue requests and moves them through
+transactional lease states. Its pipeline adapter passes the lease-bound `AbortSignal`
+and the pinned verification and publication policy to Shipwright's existing host-owned
+pipeline. Triggers and background workers are not activated in this unit.
+
+The dispatcher enforces each revision's repository scope at enqueue and immediately
+before pipeline invocation. Issue/PR execution targets do not carry a ref, so branch
+matching belongs to the U3/U4 trigger ingress that supplies one.
+
+`approval_required` likewise runs dry until the U5 operator approval workflow can
+create a separately confirmed publish execution.
+
 
 `ui/server/agent-control-plane.ts` currently exposes an in-memory transactional adapter
 for deterministic tests. The existing JSON run registry remains the P0 history adapter;
 legacy runs have no `agentId` or `agentRevision`, while Phase 2 executions may carry both.
-Replace the in-memory adapter with a durable transactional store before enabling triggers.
+Replace the in-memory adapter with a durable transactional store before enabling triggers
+or a production queue worker.
 
 ## Verification
 

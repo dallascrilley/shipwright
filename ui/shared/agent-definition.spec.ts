@@ -66,6 +66,8 @@ describe("agentDefinition contracts", () => {
           repo: "shipwright",
           number: 42,
         },
+        scheduledAt: "2026-07-21T00:00:00.000Z",
+        priority: 0,
         createdAt: "2026-07-21T00:00:00.000Z",
       }).success,
     ).toBe(false);
@@ -111,6 +113,8 @@ describe("agentDefinition contracts", () => {
           repo: "shipwright",
           number: 42,
         },
+        scheduledAt: "2026-07-21T00:00:00.000Z",
+        priority: 0,
         createdAt: "2026-07-21T00:00:00.000Z",
       }).success,
     ).toBe(false);
@@ -120,6 +124,9 @@ describe("agentDefinition contracts", () => {
       agentId: "agent-1",
       agentRevision: 2,
       state: "queued",
+      scheduledAt: "2026-07-21T00:00:00.000Z",
+      priority: 0,
+      attempts: 0,
       createdAt: "2026-07-21T00:00:00.000Z",
       updatedAt: "2026-07-21T00:00:00.000Z",
     };
@@ -174,6 +181,8 @@ describe("agentDefinition contracts", () => {
           repo: "shipwright",
           number: 42,
         },
+        scheduledAt: "2026-07-21T00:00:00.000Z",
+        priority: 0,
         createdAt: "2026-07-21T00:00:00.000Z",
       }),
     ).toMatchObject({ agentRevision: 2, source: "test" });
