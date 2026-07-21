@@ -55,9 +55,15 @@ else
       exit 1
     fi
   fi
-  script_dir="$(cd "$(dirname "$0")" && pwd)"
+  script_dir="$(cd -- "$(dirname -- "$0")" >/dev/null 2>&1 && pwd -P)"
   SCHEMA_MODULE="$script_dir/../ui/shared/agent-definition.ts" bun -e '
-    const mod = await import(process.env.SCHEMA_MODULE);
+    let mod;
+    try {
+      mod = await import(process.env.SCHEMA_MODULE);
+    } catch (error) {
+      console.error(`could not load snapshot schema module: ${error.message}`);
+      process.exit(2);
+    }
     const parsed = JSON.parse(await Bun.file(process.argv[1]).text());
     mod.agentControlPlaneSnapshotSchema.parse(parsed);
   ' "$backup_file" || { printf 'Backup %s is not a valid control-plane snapshot; live state untouched.\n' "$backup_file" >&2; exit 1; }
