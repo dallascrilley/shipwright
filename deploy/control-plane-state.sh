@@ -43,17 +43,33 @@ else
   state_dir="${3:-}"
   [[ -n "$backup_file" && -n "$state_dir" ]] || usage
   [[ -f "$backup_file" ]] || { printf 'No backup at %s\n' "$backup_file" >&2; exit 1; }
-  bun -e '
-    const path = process.argv[1];
-    const parsed = JSON.parse(await Bun.file(path).text());
-    if (parsed?.version !== 1 || !Array.isArray(parsed.agents)) {
-      throw new Error("not a version-1 control-plane snapshot");
-    }
-  ' "$backup_file"
+  if [[ -f "$backup_file.sha256" ]]; then
+    recorded="$(awk '{print $1}' "$backup_file.sha256")"
+    if command -v shasum >/dev/null 2>&1; then
+      actual="$(shasum -a 256 "$backup_file" | awk '{print $1}')"
+    else
+      actual="$(sha256sum "$backup_file" | awk '{print $1}')"
+    fi
+    if [[ "$recorded" != "$actual" ]]; then
+      printf 'Checksum mismatch for %s; refusing to restore.\n' "$backup_file" >&2
+      exit 1
+    fi
+  fi
+  script_dir="$(cd "$(dirname "$0")" && pwd)"
+  SCHEMA_MODULE="$script_dir/../ui/shared/agent-definition.ts" bun -e '
+    const mod = await import(process.env.SCHEMA_MODULE);
+    const parsed = JSON.parse(await Bun.file(process.argv[1]).text());
+    mod.agentControlPlaneSnapshotSchema.parse(parsed);
+  ' "$backup_file" || { printf 'Backup %s is not a valid control-plane snapshot; live state untouched.\n' "$backup_file" >&2; exit 1; }
   mkdir -p "$state_dir"
+  live="$state_dir/$state_file"
+  if [[ -f "$live" ]]; then
+    cp "$live" "$live.bak"
+    chmod 600 "$live.bak"
+  fi
   temporary="$state_dir/$state_file.restore.$$"
   cp "$backup_file" "$temporary"
-  mv "$temporary" "$state_dir/$state_file"
-  chmod 600 "$state_dir/$state_file"
-  printf 'Restored %s into %s\n' "$backup_file" "$state_dir/$state_file"
+  mv "$temporary" "$live"
+  chmod 600 "$live"
+  printf 'Restored %s into %s (previous state retained as %s.bak)\n' "$backup_file" "$live" "$live"
 fi

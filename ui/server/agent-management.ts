@@ -66,10 +66,9 @@ export interface AgentTestRunInput {
   };
 }
 
-/**
- * UI-facing control-plane boundary. It intentionally holds process-local state
- * until U6 supplies the production transaction store and worker ownership.
- */
+export const DEFAULT_LEASE_DURATION_MS = 60_000;
+
+/** UI-facing control-plane boundary over the durable U6 store. */
 export class AgentManagementService {
   readonly #store: AgentControlPlaneStore;
   readonly #controlPlane: AgentControlPlane;
@@ -96,7 +95,7 @@ export class AgentManagementService {
       this.#createId,
       this.#now,
       {
-        leaseDurationMs: 60_000,
+        leaseDurationMs: DEFAULT_LEASE_DURATION_MS,
         globalConcurrency: 1,
         perAgentConcurrency: 1,
         failureThreshold: 3,
