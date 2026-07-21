@@ -25,19 +25,69 @@ The systemd service runs as the unprivileged `shipwright` account with Docker gr
 
 ## Agent queue status
 
-The Phase 2 queue dispatcher is a library and demo adapter only. The deployed systemd
-service does not start queue workers or activate agent triggers. Do not add a worker
-process until a durable transactional control-plane store and the U6 rollout are in
-place; the current in-memory store is test-only.
+The U6 rollout adds a durable control-plane store and a rollout-gated worker.
+Which sources the deployed service executes is controlled by
+`SHIPWRIGHT_ROLLOUT_STAGE` in `/etc/shipwright/shipwright.env`:
 
-GitHub webhook processing is likewise inactive until U6 provides the durable
-control-plane store. The checked-in environment templates reserve
-`GITHUB_WEBHOOK_SECRET` for that rollout; keep its value only in the host
-environment or a secret manager, and do not configure a public GitHub callback yet.
+| Stage | Behavior |
+| --- | --- |
+| `disabled` (default) | No scheduler, no queue worker. UI actions still enqueue test runs but nothing claims them. |
+| `test_only` | Worker claims operator-queued test runs only; the scheduler stays off and publication is forced off. |
+| `dry_run` | Scheduler and GitHub triggers enqueue; every run is forced `publish: false`. |
+| `approval_required` | Same as `dry_run`; publication requires the operator confirmation already built into the pipeline. Publication remains forced off at the queue boundary. |
+| `publish_allowed` | Publication permitted only for agents whose pinned revision is `publish_allowed`. |
 
-Likewise, do not start a cron/scheduler process from the systemd unit yet.
-`ScheduleScheduler` is a library exercised by deterministic tests only until U6
-adds durable control-plane storage, process ownership, and monitoring.
+Advance one stage at a time and verify each before moving on. The deploy script
+refuses unknown stage values, and `bun run doctor` is run as the service user
+on every deploy.
+
+GitHub webhook processing stays inactive until the operator configures a
+callback; `GITHUB_WEBHOOK_SECRET` lives only in the host environment.
+
+## Observability
+
+The service exposes three unauthenticated loopback endpoints (added to the
+auth guard `publicPaths` because systemd and tailnet scrapers have no
+session):
+
+- `GET /healthz` — liveness; process is up.
+- `GET /readyz` — readiness; durable control-plane state loads and an active
+  scheduler is not overdue. Returns 503 with redacted reasons on failure.
+- `GET /metrics` — Prometheus text exposition of aggregate state only: queue
+  depth by state, oldest active lease age, lifecycle events by action,
+  terminal entries, paused circuit breakers, and the configured rollout
+  stage. It never emits agent ids, repository names, target URLs, run ids,
+  instructions, or any operator-supplied text.
+
+The deploy health gate requires both `/healthz` and `/readyz` to return 200
+before the new release is kept.
+
+Recommended alert rules (point your scraper/alerting at the tailnet address):
+
+- `shipwright_oldest_active_lease_age_seconds > 300` for 10 minutes — stale lease.
+- `shipwright_queue_entries{state="dead_letter"} > 0` — dead letter needs triage.
+- `increase(shipwright_queue_entries{state="queued"}[1h]) > 20` without matching terminal entries — unexpected queue growth.
+- `shipwright_paused_circuit_breakers > 0` — a schedule circuit breaker opened.
+- `/readyz` returning non-200 — scheduler failure or unreadable state.
+
+Alerts must route only these aggregate series; never forward raw payloads,
+prompt contents, or credentials.
+
+## Backup and restore
+
+The control-plane snapshot is one file,
+`$SHIPWRIGHT_STATE_DIR/agent-control-plane.json`, written atomically with
+mode 0600. Operator-run receipts remain independent and unaffected by
+control-plane rollback.
+
+```sh
+deploy/control-plane-state.sh backup /var/lib/shipwright /var/lib/shipwright/backups
+deploy/control-plane-state.sh restore /var/lib/shipwright/backups/agent-control-plane.json.<stamp> /var/lib/shipwright
+```
+
+Restore validates the JSON parses as a version-1 snapshot before atomically
+replacing live state. A nightly cron `backup` run with 30-day retention is
+sufficient; test restore quarterly.
 
 ## Provision
 
@@ -86,7 +136,9 @@ Optional break-glass: temporarily allow SSH from a single trusted source IP on t
 tailscale ssh shipwright@TAILSCALE_HOSTNAME_OR_IP
 systemctl is-active shipwright
 systemctl status shipwright --no-pager
-curl -fsS http://127.0.0.1:4317/ >/dev/null
+curl -fsS http://127.0.0.1:4317/healthz
+curl -fsS http://127.0.0.1:4317/readyz
+curl -fsS http://127.0.0.1:4317/metrics | head -20
 tailscale serve status
 docker ps --format 'table {{.Names}}\t{{.Status}}'
 df -h /
@@ -110,7 +162,8 @@ ls -1 /opt/shipwright/releases
 ln -sfn /opt/shipwright/releases/KNOWN_GOOD_COMMIT /opt/shipwright/current.next
 mv -Tf /opt/shipwright/current.next /opt/shipwright/current
 systemctl restart shipwright
-curl -fsS http://127.0.0.1:4317/ >/dev/null
+curl -fsS http://127.0.0.1:4317/healthz
+curl -fsS http://127.0.0.1:4317/readyz
 ```
 
 State and credentials remain outside release directories, so code rollback does not replace receipts, the database, or secrets.

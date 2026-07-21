@@ -1,4 +1,7 @@
 import { randomBytes } from "node:crypto";
+import { join } from "node:path";
+
+import { resolveShipwrightStateDirectory } from "../../src/config/state.js";
 
 import {
   agentDraftSchema,
@@ -21,13 +24,19 @@ import {
 import type { OperatorRunRecord } from "../shared/operator-run";
 import {
   AgentControlPlane,
+  JsonFileAgentControlPlaneStore,
   MemoryAgentControlPlaneStore,
   type AgentControlPlaneStore,
   type CreateTriggerInput,
 } from "./agent-control-plane";
-import { getOperatorRunRegistry } from "./operator-runs";
+import { getOperatorRunRegistry, isOperatorDemoMode } from "./operator-runs";
+import {
+  ControlPlaneRuntime,
+  resolveRolloutStage,
+} from "./control-plane-runtime";
 import { QueueDispatcher } from "./queue-dispatcher";
-import { ScheduleLifecycleService } from "./schedule-runner";
+import { operatorPipelineQueueRunner } from "./queue-runner";
+import { ScheduleLifecycleService, ScheduleScheduler } from "./schedule-runner";
 
 export interface AgentManagementDependencies {
   store?: AgentControlPlaneStore;
@@ -57,10 +66,9 @@ export interface AgentTestRunInput {
   };
 }
 
-/**
- * UI-facing control-plane boundary. It intentionally holds process-local state
- * until U6 supplies the production transaction store and worker ownership.
- */
+export const DEFAULT_LEASE_DURATION_MS = 60_000;
+
+/** UI-facing control-plane boundary over the durable U6 store. */
 export class AgentManagementService {
   readonly #store: AgentControlPlaneStore;
   readonly #controlPlane: AgentControlPlane;
@@ -71,7 +79,7 @@ export class AgentManagementService {
   readonly #operatorRuns: () => readonly OperatorRunRecord[];
 
   constructor(dependencies: AgentManagementDependencies = {}) {
-    this.#store = dependencies.store ?? new MemoryAgentControlPlaneStore();
+    this.#store = dependencies.store ?? createDefaultControlPlaneStore();
     this.#createId =
       dependencies.createId ?? (() => randomBytes(8).toString("hex"));
     this.#now = dependencies.now ?? (() => new Date().toISOString());
@@ -87,7 +95,7 @@ export class AgentManagementService {
       this.#createId,
       this.#now,
       {
-        leaseDurationMs: 60_000,
+        leaseDurationMs: DEFAULT_LEASE_DURATION_MS,
         globalConcurrency: 1,
         perAgentConcurrency: 1,
         failureThreshold: 3,
@@ -186,8 +194,30 @@ export class AgentManagementService {
     );
   }
 
-  getSnapshotForTests(): AgentControlPlaneSnapshot {
+  /** Read-only snapshot for observability endpoints and tests. */
+  getSnapshot(): AgentControlPlaneSnapshot {
     return this.#store.load();
+  }
+
+  /**
+   * Build the U6 worker runtime over this service's shared store and
+   * dispatcher. The plugin decides whether to start it; the stage decides
+   * which sources the dispatcher may claim.
+   */
+  createRuntime(): ControlPlaneRuntime {
+    const scheduler = new ScheduleScheduler(
+      this.#store,
+      this.#dispatcher,
+      this.#createId,
+      this.#now,
+      { maxDueTriggers: 100 },
+    );
+    return new ControlPlaneRuntime(
+      resolveRolloutStage(),
+      this.#dispatcher,
+      operatorPipelineQueueRunner,
+      scheduler,
+    );
   }
 
   private assertEnabledTrigger(agentId: string): void {
@@ -214,6 +244,18 @@ function requireAgent(
   const agent = snapshot.agents.find((item) => item.agentId === agentId);
   if (!agent) throw new Error(`Unknown agent ${agentId}.`);
   return agent;
+}
+
+/**
+ * Demo mode keeps the process-local store so isolated UI demos never write
+ * host state; every other mode persists under the shipwright state directory
+ * so the control plane survives service restarts.
+ */
+function createDefaultControlPlaneStore(): AgentControlPlaneStore {
+  if (isOperatorDemoMode()) return new MemoryAgentControlPlaneStore();
+  return new JsonFileAgentControlPlaneStore(
+    join(resolveShipwrightStateDirectory(), "agent-control-plane.json"),
+  );
 }
 
 let service: AgentManagementService | undefined;

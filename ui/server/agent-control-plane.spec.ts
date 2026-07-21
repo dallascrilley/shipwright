@@ -1,11 +1,17 @@
-import { describe, expect, test } from "vitest";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, test } from "vitest";
 
 import type { OperatorRunRecord } from "../shared/operator-run";
 import {
   AgentControlPlane,
+  JsonFileAgentControlPlaneStore,
   MemoryAgentControlPlaneStore,
   RevisionConflictError,
   migrateLegacyOperatorRuns,
+  type AgentControlPlaneStore,
 } from "./agent-control-plane";
 
 const draft = {
@@ -21,8 +27,16 @@ const draft = {
   publicationPolicy: "dry_run" as const,
 };
 
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 function createControlPlane(
-  store = new MemoryAgentControlPlaneStore(),
+  store: AgentControlPlaneStore = new MemoryAgentControlPlaneStore(),
 ): AgentControlPlane {
   let id = 0;
   return new AgentControlPlane(
@@ -181,5 +195,32 @@ describe("AgentControlPlane", () => {
       queueEntries: [],
     });
     expect(migrateLegacyOperatorRuns([])).toEqual([]);
+  });
+
+  test("persists validated control-plane state privately across store instances", () => {
+    const directory = mkdtempSync(join(tmpdir(), "shipwright-control-plane-"));
+    const path = join(directory, "state", "agent-control-plane.json");
+    temporaryDirectories.push(directory);
+    const store = new JsonFileAgentControlPlaneStore(path);
+    const controlPlane = createControlPlane(store);
+
+    const agent = controlPlane.createAgent(draft);
+    const restored = new JsonFileAgentControlPlaneStore(path).load();
+
+    expect(restored.agents).toHaveLength(1);
+    expect(restored.agents[0]?.agentId).toBe(agent.agentId);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(statSync(join(directory, "state")).mode & 0o777).toBe(0o700);
+  });
+
+  test("fails closed when durable control-plane state is malformed", () => {
+    const directory = mkdtempSync(join(tmpdir(), "shipwright-control-plane-"));
+    const path = join(directory, "agent-control-plane.json");
+    temporaryDirectories.push(directory);
+    writeFileSync(path, '{"version":1,"agents":"invalid"}\n', "utf8");
+
+    expect(() => new JsonFileAgentControlPlaneStore(path).load()).toThrow(
+      `could not load agent control-plane state at ${path}`,
+    );
   });
 });
