@@ -150,6 +150,40 @@ describe("control-plane state backup/restore", () => {
     }
   });
 
+  test("restore works under a hostile CDPATH from a relative invocation", () => {
+    const root = mkdtempSync(join(tmpdir(), "shipwright-state-drill-"));
+    try {
+      const stateDir = join(root, "state");
+      const backupDir = join(root, "backups");
+      Bun.spawnSync(["mkdir", "-p", stateDir]);
+      writeFileSync(join(stateDir, "agent-control-plane.json"), SNAPSHOT, {
+        mode: 0o600,
+      });
+      expect(run(["backup", stateDir, backupDir]).code).toBe(0);
+      const backup = readdirSync(backupDir).find(
+        (name) => !name.endsWith(".sha256"),
+      )!;
+
+      const hostile = Bun.spawnSync(
+        [
+          "bash",
+          "-c",
+          `CDPATH=".:${root}" deploy/control-plane-state.sh restore "$1" "$2"`,
+          "bash",
+          join(backupDir, backup),
+          join(root, "restored"),
+        ],
+        { cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
+      );
+      expect(hostile.exitCode).toBe(0);
+      expect(
+        readFileSync(join(root, "restored", "agent-control-plane.json"), "utf8"),
+      ).toBe(SNAPSHOT);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("backup fails clearly when no snapshot exists", () => {
     const root = mkdtempSync(join(tmpdir(), "shipwright-state-drill-"));
     try {
