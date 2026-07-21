@@ -48,6 +48,10 @@ The dispatcher enforces each revision's repository scope at enqueue and immediat
 before pipeline invocation. Issue/PR execution targets do not carry a ref, so branch
 matching belongs to the U3/U4 trigger ingress that supplies one.
 
+`ui/server/github-webhook.ts` verifies GitHub HMAC signatures before parsing and
+queues only bounded issue/PR target data for enabled, scoped triggers. It remains
+library-only until U6 supplies the durable store and deploys the webhook endpoint.
+
 `approval_required` likewise runs dry until the U5 operator approval workflow can
 create a separately confirmed publish execution.
 
