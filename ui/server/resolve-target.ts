@@ -22,6 +22,7 @@ export interface ResolveTargetDeps {
 
 function defaultDeps(): ResolveTargetDeps {
   return {
+    // guard:allow-env-credential — deploy-level non-secret demo-mode flag.
     isDemoMode: () => process.env.SHIPWRIGHT_UI_DEMO === "1",
     loadGitHubConfig: () => {
       try {

@@ -13,19 +13,12 @@ const config: GitHubConfig = {
   allowedRepositories: new Set(["dallascrilley/example"]),
 };
 
-let savedDemoEnv: string | undefined;
-
 beforeEach(() => {
-  savedDemoEnv = process.env.SHIPWRIGHT_UI_DEMO;
-  delete process.env.SHIPWRIGHT_UI_DEMO;
+  vi.stubEnv("SHIPWRIGHT_UI_DEMO", "");
 });
 
 afterEach(() => {
-  if (savedDemoEnv === undefined) {
-    delete process.env.SHIPWRIGHT_UI_DEMO;
-  } else {
-    process.env.SHIPWRIGHT_UI_DEMO = savedDemoEnv;
-  }
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -37,7 +30,7 @@ describe("resolveTarget", () => {
   });
 
   test("demo mode returns parse-only pin without GitHub", async () => {
-    process.env.SHIPWRIGHT_UI_DEMO = "1";
+    vi.stubEnv("SHIPWRIGHT_UI_DEMO", "1");
     const result = await resolveTarget(issueUrl, {
       loadGitHubConfig: () => {
         throw new Error("should not load config in demo");
