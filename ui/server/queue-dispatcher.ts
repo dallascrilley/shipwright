@@ -47,9 +47,7 @@ export interface QueueRunResult {
   receipt: NonNullable<QueueEntry["receipt"]>;
 }
 
-export type QueueRunner = (
-  context: QueueRunContext,
-) => Promise<QueueRunResult>;
+export type QueueRunner = (context: QueueRunContext) => Promise<QueueRunResult>;
 
 const TERMINAL_STATES: Partial<Record<QueueEntry["state"], true>> = {
   succeeded: true,
@@ -65,6 +63,7 @@ const TERMINAL_STATES: Partial<Record<QueueEntry["state"], true>> = {
  */
 export class QueueDispatcher {
   readonly #controllers = new Map<string, AbortController>();
+  readonly #terminalListeners = new Set<() => void>();
 
   constructor(
     private readonly store: AgentControlPlaneStore,
@@ -86,68 +85,93 @@ export class QueueDispatcher {
     }
   }
 
-  enqueue(input: QueueEnqueueInput): QueueEnqueueResult {
-    return this.store.transaction((snapshot) => {
-      const agent = this.requireAgent(snapshot, input.agentId);
-      if (!agent.enabled) {
-        throw new Error(`Agent ${agent.agentId} is disabled and cannot enqueue work.`);
-      }
-      const trigger = input.triggerId
-        ? snapshot.triggers.find((item) => item.triggerId === input.triggerId)
-        : undefined;
-      if (input.triggerId && (!trigger || trigger.agentId !== agent.agentId)) {
-        throw new Error(`Unknown trigger ${input.triggerId} for agent ${agent.agentId}.`);
-      }
-      if (trigger && !trigger.enabled) {
-        throw new Error(`Trigger ${trigger.triggerId} is disabled and cannot enqueue work.`);
-      }
-      const agentRevision = trigger?.agentRevision ?? agent.currentRevision;
-      const revision = this.requireRevision(snapshot, agent.agentId, agentRevision);
-      if (!targetMatchesScope(input.target, revision.draft.targetScope)) {
-        throw new Error(`Target is outside agent ${agent.agentId} repository scope.`);
-      }
-      const existing = snapshot.executions.find(
-        (execution) =>
-          execution.agentId === agent.agentId &&
-          execution.agentRevision === agentRevision &&
-          execution.idempotencyKey === input.idempotencyKey,
-      );
-      if (existing) {
-        return {
-          execution: existing,
-          entry: this.requireEntry(snapshot, existing.executionId),
-        };
-      }
+  onTerminal(listener: () => void): () => void {
+    this.#terminalListeners.add(listener);
+    return () => this.#terminalListeners.delete(listener);
+  }
 
-      const now = this.now();
-      const execution = executionRequestSchema.parse({
-        executionId: this.createId(),
-        agentId: agent.agentId,
-        agentRevision,
-        ...(trigger ? { triggerId: trigger.triggerId } : {}),
-        source: input.source,
-        idempotencyKey: input.idempotencyKey,
-        target: input.target,
-        scheduledAt: input.scheduledAt ?? now,
-        priority: input.priority ?? 0,
-        createdAt: now,
-      });
-      const entry = queueEntrySchema.parse({
-        queueEntryId: this.createId(),
-        executionId: execution.executionId,
-        agentId: execution.agentId,
-        agentRevision: execution.agentRevision,
-        state: "queued",
-        scheduledAt: execution.scheduledAt,
-        priority: execution.priority,
-        attempts: 0,
-        createdAt: now,
-        updatedAt: now,
-      });
-      snapshot.executions.push(execution);
-      snapshot.queueEntries.push(entry);
-      return { execution, entry };
+  enqueue(input: QueueEnqueueInput): QueueEnqueueResult {
+    return this.store.transaction((snapshot) =>
+      this.enqueueInTransaction(snapshot, input),
+    );
+  }
+
+  /** Caller owns the surrounding store transaction and its atomic commit. */
+  enqueueInTransaction(
+    snapshot: AgentControlPlaneSnapshot,
+    input: QueueEnqueueInput,
+  ): QueueEnqueueResult {
+    const agent = this.requireAgent(snapshot, input.agentId);
+    if (!agent.enabled) {
+      throw new Error(
+        `Agent ${agent.agentId} is disabled and cannot enqueue work.`,
+      );
+    }
+    const trigger = input.triggerId
+      ? snapshot.triggers.find((item) => item.triggerId === input.triggerId)
+      : undefined;
+    if (input.triggerId && (!trigger || trigger.agentId !== agent.agentId)) {
+      throw new Error(
+        `Unknown trigger ${input.triggerId} for agent ${agent.agentId}.`,
+      );
+    }
+    if (trigger && !trigger.enabled) {
+      throw new Error(
+        `Trigger ${trigger.triggerId} is disabled and cannot enqueue work.`,
+      );
+    }
+    const agentRevision = trigger?.agentRevision ?? agent.currentRevision;
+    const revision = this.requireRevision(
+      snapshot,
+      agent.agentId,
+      agentRevision,
+    );
+    if (!targetMatchesScope(input.target, revision.draft.targetScope)) {
+      throw new Error(
+        `Target is outside agent ${agent.agentId} repository scope.`,
+      );
+    }
+    const existing = snapshot.executions.find(
+      (execution) =>
+        execution.agentId === agent.agentId &&
+        execution.agentRevision === agentRevision &&
+        execution.idempotencyKey === input.idempotencyKey,
+    );
+    if (existing) {
+      return {
+        execution: existing,
+        entry: this.requireEntry(snapshot, existing.executionId),
+      };
+    }
+
+    const now = this.now();
+    const execution = executionRequestSchema.parse({
+      executionId: this.createId(),
+      agentId: agent.agentId,
+      agentRevision,
+      ...(trigger ? { triggerId: trigger.triggerId } : {}),
+      source: input.source,
+      idempotencyKey: input.idempotencyKey,
+      target: input.target,
+      scheduledAt: input.scheduledAt ?? now,
+      priority: input.priority ?? 0,
+      createdAt: now,
     });
+    const entry = queueEntrySchema.parse({
+      queueEntryId: this.createId(),
+      executionId: execution.executionId,
+      agentId: execution.agentId,
+      agentRevision: execution.agentRevision,
+      state: "queued",
+      scheduledAt: execution.scheduledAt,
+      priority: execution.priority,
+      attempts: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    snapshot.executions.push(execution);
+    snapshot.queueEntries.push(entry);
+    return { execution, entry };
   }
 
   claimNext(owner: string): QueueClaim | undefined {
@@ -163,7 +187,14 @@ export class QueueDispatcher {
       const candidate = snapshot.queueEntries
         .filter(
           (entry) =>
-            entry.state === "queued" && Date.parse(entry.scheduledAt) <= nowTime,
+            entry.state === "queued" &&
+            Date.parse(entry.scheduledAt) <= nowTime &&
+            snapshot.agents.some(
+              (agent) =>
+                agent.agentId === entry.agentId &&
+                agent.enabled &&
+                agent.health.state !== "paused",
+            ),
         )
         .sort(
           (left, right) =>
@@ -181,7 +212,9 @@ export class QueueDispatcher {
       const lease = {
         leaseId: this.createId(),
         owner,
-        expiresAt: new Date(nowTime + this.options.leaseDurationMs).toISOString(),
+        expiresAt: new Date(
+          nowTime + this.options.leaseDurationMs,
+        ).toISOString(),
       };
       const claimed = this.replaceEntry(snapshot, candidate, {
         ...candidate,
@@ -203,13 +236,20 @@ export class QueueDispatcher {
 
     const controller = new AbortController();
     this.#controllers.set(claim.execution.executionId, controller);
-    const running = this.markRunning(claim.execution.executionId, claim.entry.lease.leaseId);
+    const running = this.markRunning(
+      claim.execution.executionId,
+      claim.entry.lease.leaseId,
+    );
     if (!running) {
       this.#controllers.delete(claim.execution.executionId);
       return this.get(claim.execution.executionId);
     }
     try {
-      const result = await runner({ ...claim, entry: running, signal: controller.signal });
+      const result = await runner({
+        ...claim,
+        entry: running,
+        signal: controller.signal,
+      });
       const state = result.receipt.verificationPassed
         ? "succeeded"
         : this.nextFailureState(running.attempts);
@@ -248,8 +288,50 @@ export class QueueDispatcher {
         updatedAt: this.now(),
       });
     });
-    this.#controllers.get(executionId)?.abort(new Error("Run cancelled by operator."));
+    this.#controllers
+      .get(executionId)
+      ?.abort(new Error("Run cancelled by operator."));
+    this.notifyTerminal();
     return cancelled;
+  }
+
+  cancelForAgent(agentId: string, cancelLeaseHeld: boolean): QueueEntry[] {
+    const cancelled = this.store.transaction((snapshot) =>
+      this.cancelForAgentInTransaction(snapshot, agentId, cancelLeaseHeld),
+    );
+    this.abortCancelledEntries(cancelled);
+    return cancelled;
+  }
+
+  cancelForAgentInTransaction(
+    snapshot: AgentControlPlaneSnapshot,
+    agentId: string,
+    cancelLeaseHeld: boolean,
+    now = this.now(),
+  ): QueueEntry[] {
+    return snapshot.queueEntries
+      .filter(
+        (entry) =>
+          entry.agentId === agentId &&
+          !TERMINAL_STATES[entry.state] &&
+          (cancelLeaseHeld || entry.state === "queued"),
+      )
+      .map((entry) =>
+        this.replaceEntry(snapshot, entry, {
+          ...this.withoutLease(entry),
+          state: "cancelled",
+          updatedAt: now,
+        }),
+      );
+  }
+
+  abortCancelledEntries(entries: readonly QueueEntry[]): void {
+    for (const entry of entries) {
+      this.#controllers
+        .get(entry.executionId)
+        ?.abort(new Error("Run cancelled by operator."));
+    }
+    if (entries.length > 0) this.notifyTerminal();
   }
 
   recoverExpiredLeases(): QueueEntry[] {
@@ -278,6 +360,7 @@ export class QueueDispatcher {
         .get(entry.executionId)
         ?.abort(new Error("Queue lease expired before completion."));
     }
+    if (expired.length > 0) this.notifyTerminal();
     return expired;
   }
 
@@ -288,7 +371,9 @@ export class QueueDispatcher {
         throw new Error(`Execution ${executionId} is not retryable.`);
       }
       if (current.attempts >= this.options.failureThreshold) {
-        throw new Error(`Execution ${executionId} reached the dead-letter threshold.`);
+        throw new Error(
+          `Execution ${executionId} reached the dead-letter threshold.`,
+        );
       }
       return this.replaceEntry(snapshot, current, {
         ...this.withoutLease(current),
@@ -311,7 +396,10 @@ export class QueueDispatcher {
     return this.store.load().queueEntries;
   }
 
-  private markRunning(executionId: string, leaseId: string): QueueEntry | undefined {
+  private markRunning(
+    executionId: string,
+    leaseId: string,
+  ): QueueEntry | undefined {
     return this.store.transaction((snapshot) => {
       const current = this.requireEntry(snapshot, executionId);
       if (current.state !== "claimed" || current.lease?.leaseId !== leaseId) {
@@ -332,7 +420,7 @@ export class QueueDispatcher {
     receipt?: QueueRunResult["receipt"],
     failureCode?: string,
   ): QueueEntry {
-    return this.store.transaction((snapshot) => {
+    const finished = this.store.transaction((snapshot) => {
       const current = this.requireEntry(snapshot, executionId);
       if (
         (current.state !== "claimed" && current.state !== "running") ||
@@ -348,6 +436,12 @@ export class QueueDispatcher {
         updatedAt: this.now(),
       });
     });
+    if (TERMINAL_STATES[finished.state]) this.notifyTerminal();
+    return finished;
+  }
+
+  private notifyTerminal(): void {
+    for (const listener of this.#terminalListeners) listener();
   }
 
   private nextFailureState(attempts: number): "failed" | "dead_letter" {

@@ -35,6 +35,10 @@ control-plane store. The checked-in environment templates reserve
 `GITHUB_WEBHOOK_SECRET` for that rollout; keep its value only in the host
 environment or a secret manager, and do not configure a public GitHub callback yet.
 
+Likewise, do not start a cron/scheduler process from the systemd unit yet.
+`ScheduleScheduler` is a library exercised by deterministic tests only until U6
+adds durable control-plane storage, process ownership, and monitoring.
+
 ## Provision
 
 Create an Ubuntu 24.04 x86 server. Public HTTP/HTTPS ports are not required. The production host is intended to be Tailscale-only: the cloud firewall may intentionally have **no public SSH rule**, so `ssh root@PUBLIC_IP` can time out by design. Bootstrap and break-glass access use Tailscale SSH (or a temporary source-IP-restricted SSH rule).

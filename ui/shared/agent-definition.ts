@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { containsSecretLikeContent } from "../../src/pipeline/secret-safety";
+import { validateSchedule } from "./schedule";
 
 const identifierSchema = z
   .string()
@@ -62,18 +63,20 @@ export const agentDraftSchema = z
       })
       .strict(),
     publicationPolicy: publicationPolicySchema,
+    failureThreshold: z.number().int().min(1).max(100).optional(),
+    cancelInFlight: z.boolean().optional(),
   })
   .strict();
 
 export type AgentDraft = z.output<typeof agentDraftSchema>;
 export type AgentDraftInput = z.input<typeof agentDraftSchema>;
 
-
 export const agentHealthSchema = z
   .object({
     state: z.enum(["idle", "queued", "running", "paused", "failed"]),
     lastExecutionAt: timestampSchema.optional(),
     lastOutcome: z.enum(["succeeded", "failed", "cancelled"]).optional(),
+    consecutiveScheduleFailures: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -112,8 +115,25 @@ const scheduleTriggerConfigSchema = z
   .object({
     schedule: safeText(200),
     timezone: safeText(100),
+    target: z
+      .object({
+        kind: z.enum(["issue", "pull"]),
+        number: z.number().int().positive(),
+      })
+      .strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    try {
+      validateSchedule(value.schedule, value.timezone);
+    } catch (error) {
+      context.addIssue({
+        code: "custom",
+        path: ["schedule"],
+        message: error instanceof Error ? error.message : "Invalid schedule.",
+      });
+    }
+  });
 
 export const agentTriggerSchema = z
   .object({
@@ -123,6 +143,10 @@ export const agentTriggerSchema = z
     kind: z.enum(["github", "schedule"]),
     enabled: z.boolean(),
     config: z.union([githubTriggerConfigSchema, scheduleTriggerConfigSchema]),
+    nextFireAt: timestampSchema.optional(),
+    pausedAt: timestampSchema.optional(),
+    consecutiveFailures: z.number().int().nonnegative().optional(),
+    lastOutcomeExecutionId: identifierSchema.optional(),
     createdAt: timestampSchema,
     updatedAt: timestampSchema,
   })
@@ -142,11 +166,21 @@ export const agentTriggerSchema = z
         message: "Schedule triggers require schedule configuration.",
       });
     }
+    if (
+      value.kind === "schedule" &&
+      (value.nextFireAt === undefined ||
+        value.consecutiveFailures === undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["nextFireAt"],
+        message: "Schedule triggers require next-fire and failure state.",
+      });
+    }
   });
 
 export type AgentTrigger = z.output<typeof agentTriggerSchema>;
 export type AgentTriggerInput = z.input<typeof agentTriggerSchema>;
-
 
 export const lifecycleEventSchema = z
   .object({
@@ -158,7 +192,15 @@ export const lifecycleEventSchema = z
       "policy_changed",
       "enabled",
       "disabled",
+      "scheduled",
+      "skipped",
+      "paused",
+      "resumed",
+      "stopped",
+      "retry",
+      "circuit_open",
     ]),
+    triggerId: identifierSchema.optional(),
     revision: revisionSchema,
     sequence: z.number().int().positive(),
     occurredAt: timestampSchema,
@@ -196,7 +238,10 @@ export function targetMatchesScope(
   target: ExecutionRequest["target"],
   scope: AgentDraft["targetScope"],
 ): boolean {
-  return `${target.owner}/${target.repo}`.toLowerCase() === scope.repository.toLowerCase();
+  return (
+    `${target.owner}/${target.repo}`.toLowerCase() ===
+    scope.repository.toLowerCase()
+  );
 }
 
 const queueLeaseSchema = z

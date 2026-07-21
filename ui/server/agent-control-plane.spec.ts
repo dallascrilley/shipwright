@@ -43,12 +43,12 @@ describe("AgentControlPlane", () => {
       health: { state: "idle" },
     });
     expect(controlPlane.getRevision(agent.agentId, 1)?.draft).toEqual(draft);
-    expect(controlPlane.listLifecycleEvents(agent.agentId).map((event) => event.action)).toEqual([
-      "created",
-    ]);
+    expect(
+      controlPlane
+        .listLifecycleEvents(agent.agentId)
+        .map((event) => event.action),
+    ).toEqual(["created"]);
   });
-
-
 
   test("fails loud on a stale revision and preserves historic revisions", () => {
     const controlPlane = createControlPlane();
@@ -105,18 +105,39 @@ describe("AgentControlPlane", () => {
       agentRevision: 2,
       kind: "github",
     });
-    expect(controlPlane.listLifecycleEvents(agent.agentId).map((event) => event.action)).toEqual([
-      "created",
-      "updated",
-      "policy_changed",
-      "enabled",
-    ]);
-    expect(controlPlane.listLifecycleEvents(agent.agentId).map((event) => event.sequence)).toEqual([
-      1,
-      2,
-      3,
-      4,
-    ]);
+    expect(
+      controlPlane
+        .listLifecycleEvents(agent.agentId)
+        .map((event) => event.action),
+    ).toEqual(["created", "updated", "policy_changed", "enabled"]);
+    expect(
+      controlPlane
+        .listLifecycleEvents(agent.agentId)
+        .map((event) => event.sequence),
+    ).toEqual([1, 2, 3, 4]);
+  });
+
+  test("initializes a schedule trigger with its first computed occurrence", () => {
+    const controlPlane = createControlPlane();
+    const agent = controlPlane.createAgent(draft);
+
+    const trigger = controlPlane.createTrigger({
+      agentId: agent.agentId,
+      expectedRevision: agent.currentRevision,
+      kind: "schedule",
+      config: {
+        schedule: "0 9 * * *",
+        timezone: "America/New_York",
+        target: { kind: "issue", number: 42 },
+      },
+    });
+
+    expect(trigger).toMatchObject({
+      agentId: agent.agentId,
+      kind: "schedule",
+      consecutiveFailures: 0,
+      nextFireAt: "2026-07-21T13:00:00.000Z",
+    });
   });
 
   test("keeps legacy P0 run records standalone during migration", () => {
