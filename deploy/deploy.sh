@@ -50,6 +50,14 @@ ssh "$target" bash -s -- "$release_path" <<'REMOTE'
     printf 'SHIPWRIGHT_SANDBOX_IMAGE must use an immutable sha256 digest.\n' >&2
     false
   fi
+  stage="${SHIPWRIGHT_ROLLOUT_STAGE:-disabled}"
+  case "$stage" in
+    disabled|test_only|dry_run|approval_required|publish_allowed) ;;
+    *)
+      printf 'SHIPWRIGHT_ROLLOUT_STAGE must be one of disabled, test_only, dry_run, approval_required, publish_allowed.\n' >&2
+      false
+      ;;
+  esac
   runuser -u shipwright -- test -r "$GITHUB_APP_PRIVATE_KEY_PATH"
   docker pull "$SHIPWRIGHT_SANDBOX_IMAGE" >/dev/null
   runuser -u shipwright -- /usr/local/bin/mise trust "$release_path/mise.toml" >/dev/null
@@ -101,7 +109,8 @@ ssh "$target" bash -s -- "$release_path" <<'REMOTE'
 
   healthy=0
   for _ in {1..30}; do
-    if curl -fsS http://127.0.0.1:4317/ >/dev/null; then
+    if curl -fsS http://127.0.0.1:4317/healthz >/dev/null \
+      && curl -fsS http://127.0.0.1:4317/readyz >/dev/null; then
       healthy=1
       break
     fi
