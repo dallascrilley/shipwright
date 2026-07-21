@@ -89,6 +89,29 @@ describe("AgentManagementService", () => {
     );
   });
 
+  test("pauses and resumes a schedule trigger through the management boundary", () => {
+    const service = createService();
+    const created = service.createAgent(draft);
+    const trigger = service.createTrigger({
+      agentId: created.agentId,
+      expectedRevision: created.currentRevision,
+      kind: "schedule",
+      config: {
+        schedule: "*/5 * * * *",
+        timezone: "UTC",
+        target: { kind: "issue", number: 42 },
+      },
+    });
+
+    expect(service.pauseScheduleTrigger(trigger.triggerId).pausedAt).toBe(
+      "2026-07-21T12:00:00.000Z",
+    );
+    expect(
+      service.resumeScheduleTrigger(trigger.triggerId).pausedAt,
+    ).toBeUndefined();
+    expect(service.getAgent(created.agentId)?.audit[0]?.action).toBe("resumed");
+  });
+
   test("projects searchable non-secret list data and supports emergency stop", () => {
     const service = createService();
     const created = service.createAgent(draft);
