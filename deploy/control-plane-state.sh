@@ -5,8 +5,10 @@
 #   deploy/control-plane-state.sh restore <backup_file> <state_dir>
 #
 # The snapshot is a single JSON document. Backup copies it atomically and
-# records a SHA-256 checksum. Restore validates the JSON parses before an
-# atomic move, so a corrupt backup never replaces the live snapshot.
+# records a SHA-256 checksum. Restore verifies the checksum (when the sidecar
+# exists) and validates the document against the full snapshot schema before
+# an atomic move, so a corrupt or truncated backup never replaces live state;
+# the displaced live file is retained as agent-control-plane.json.bak.
 set -euo pipefail
 
 command_name="${1:-}"
