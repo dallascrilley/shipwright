@@ -1,14 +1,19 @@
 ---
 date: 2026-07-21
-origin:
-  - user direction: "explicitly seek to replicate Cursor Agents"
-  - docs/ideation/2026-07-20-shipwright-operator-console-capabilities.md
-  - docs/plans/2026-07-20-feat-operator-console-p0-ux-plan.md
-  - docs/plans/2026-07-20-feat-operator-console-capabilities-plan.md (automation/deferral sections superseded)
-worktree_slug: feat/cursor-agents-parity
-status: proposed
-supersedes_automation_from: docs/plans/2026-07-20-feat-operator-console-capabilities-plan.md
+status: superseded
+superseded_by: docs/plans/2026-07-21-shipwright-automation-agents-plan.md
 ---
+
+# Shipwright Cursor Agents parity plan (superseded)
+
+> **This document is superseded.** Use the canonical Phase 2 plan:
+> [`docs/plans/2026-07-21-shipwright-automation-agents-plan.md`](2026-07-21-shipwright-automation-agents-plan.md)
+>
+> That document adds explicit durable schemas/entities, execution/trigger architecture, enable/disable and emergency-stop semantics, UI surfaces, migration/security boundaries, stable U1+ units, validation, rollout/cost constraints, and out-of-scope items — without implementation detail.
+
+---
+
+## Archived body (2026-07-21 draft)
 
 # Shipwright Cursor Agents parity plan
 
