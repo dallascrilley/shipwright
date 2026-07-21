@@ -13,12 +13,24 @@ const config: GitHubConfig = {
   allowedRepositories: new Set(["dallascrilley/example"]),
 };
 
+let savedDemoEnv: string | undefined;
+
+
 beforeEach(() => {
-  vi.stubEnv("SHIPWRIGHT_UI_DEMO", "");
+  // guard:allow-env-credential — tests isolate deploy-level non-secret demo mode.
+  savedDemoEnv = process.env.SHIPWRIGHT_UI_DEMO;
+  // guard:allow-env-credential — tests isolate deploy-level non-secret demo mode.
+  delete process.env.SHIPWRIGHT_UI_DEMO;
 });
 
 afterEach(() => {
-  vi.unstubAllEnvs();
+  if (savedDemoEnv === undefined) {
+    // guard:allow-env-credential — tests restore deploy-level non-secret demo mode.
+    delete process.env.SHIPWRIGHT_UI_DEMO;
+  } else {
+    // guard:allow-env-credential — tests restore deploy-level non-secret demo mode.
+    process.env.SHIPWRIGHT_UI_DEMO = savedDemoEnv;
+  }
   vi.restoreAllMocks();
 });
 
@@ -30,7 +42,8 @@ describe("resolveTarget", () => {
   });
 
   test("demo mode returns parse-only pin without GitHub", async () => {
-    vi.stubEnv("SHIPWRIGHT_UI_DEMO", "1");
+    // guard:allow-env-credential — tests enable deploy-level non-secret demo mode.
+    process.env.SHIPWRIGHT_UI_DEMO = "1";
     const result = await resolveTarget(issueUrl, {
       loadGitHubConfig: () => {
         throw new Error("should not load config in demo");
