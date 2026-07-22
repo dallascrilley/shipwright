@@ -139,6 +139,20 @@ describe("QueueDispatcher", () => {
     expect(() => enqueue(fixture, agent.agentId, "test:disabled-agent")).toThrow(
       /disabled/,
     );
+    expect(() =>
+      fixture.dispatcher.enqueue({
+        agentId: agent.agentId,
+        source: "github",
+        allowDisabledAgentForTest: true,
+        idempotencyKey: "github:cannot-bypass-disabled-agent",
+        target: {
+          kind: "issue",
+          owner: "dallascrilley",
+          repo: "shipwright",
+          number: 42,
+        },
+      }),
+    ).toThrow(/disabled/);
     fixture.controlPlane.setEnabled(agent.agentId, 1, true);
     const trigger = fixture.controlPlane.createTrigger({
       agentId: agent.agentId,

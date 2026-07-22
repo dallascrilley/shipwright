@@ -135,6 +135,10 @@ export interface RemoveTriggerInput {
   triggerId: string;
 }
 
+export type ReplaceTriggerInput = CreateTriggerInput & {
+  triggerId: string;
+};
+
 /**
  * State transitions for durable agent definitions. This class has no dispatcher or
  * trigger activation path; U2 owns claiming and executing the queue.
@@ -259,34 +263,7 @@ export class AgentControlPlane {
     return this.store.transaction((snapshot) => {
       const agent = this.requireAgent(snapshot, input.agentId);
       this.assertRevision(agent, input.expectedRevision);
-      if (input.kind === "github") {
-        curatedGithubTriggerConfigSchema.parse(input.config);
-      }
-      const now = this.now();
-      const scheduleConfig =
-        input.kind === "schedule" && "schedule" in input.config
-          ? input.config
-          : undefined;
-      const trigger = agentTriggerSchema.parse({
-        triggerId: this.createId(),
-        agentId: agent.agentId,
-        agentRevision: agent.currentRevision,
-        kind: input.kind,
-        enabled: true,
-        config: input.config,
-        ...(scheduleConfig
-          ? {
-              nextFireAt: nextScheduleOccurrence(
-                scheduleConfig.schedule,
-                scheduleConfig.timezone,
-                now,
-              ),
-              consecutiveFailures: 0,
-            }
-          : {}),
-        createdAt: now,
-        updatedAt: now,
-      });
+      const trigger = this.buildTrigger(agent, input, this.now());
       snapshot.triggers.push(trigger);
       return trigger;
     });
@@ -319,6 +296,35 @@ export class AgentControlPlane {
         removed.triggerId,
       );
       return removed;
+    });
+  }
+
+  replaceTrigger(input: ReplaceTriggerInput): AgentTrigger {
+    return this.store.transaction((snapshot) => {
+      const agent = this.requireAgent(snapshot, input.agentId);
+      this.assertRevision(agent, input.expectedRevision);
+      const triggerIndex = snapshot.triggers.findIndex(
+        (trigger) =>
+          trigger.agentId === agent.agentId &&
+          trigger.triggerId === input.triggerId,
+      );
+      if (triggerIndex < 0) {
+        throw new Error(
+          `Unknown trigger ${input.triggerId} for agent ${agent.agentId}.`,
+        );
+      }
+      const now = this.now();
+      const replacement = this.buildTrigger(agent, input, now);
+      snapshot.triggers.splice(triggerIndex, 1, replacement);
+      this.appendEvent(
+        snapshot,
+        agent.agentId,
+        "trigger_removed",
+        agent.currentRevision,
+        now,
+        input.triggerId,
+      );
+      return replacement;
     });
   }
 
@@ -397,6 +403,40 @@ export class AgentControlPlane {
       occurredAt,
       triggerId,
     );
+  }
+
+  private buildTrigger(
+    agent: AgentDefinition,
+    input: Pick<CreateTriggerInput, "kind" | "config">,
+    now: string,
+  ): AgentTrigger {
+    if (input.kind === "github") {
+      curatedGithubTriggerConfigSchema.parse(input.config);
+    }
+    const scheduleConfig =
+      input.kind === "schedule" && "schedule" in input.config
+        ? input.config
+        : undefined;
+    return agentTriggerSchema.parse({
+      triggerId: this.createId(),
+      agentId: agent.agentId,
+      agentRevision: agent.currentRevision,
+      kind: input.kind,
+      enabled: true,
+      config: input.config,
+      ...(scheduleConfig
+        ? {
+            nextFireAt: nextScheduleOccurrence(
+              scheduleConfig.schedule,
+              scheduleConfig.timezone,
+              now,
+            ),
+            consecutiveFailures: 0,
+          }
+        : {}),
+      createdAt: now,
+      updatedAt: now,
+    });
   }
 }
 

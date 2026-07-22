@@ -23,7 +23,7 @@ The manual Operator console remains unchanged. New agents remain disabled, test 
 - [x] (2026-07-22 14:49Z) Imported epic `td-c4c766` with U1 `td-d39f87`, U2 `td-d77115`, U3 `td-997e46`, and U4 `td-137fbf`; verified the dependency graph.
 - [x] (2026-07-22 15:25Z) U1: Added the GitHub App-backed allowed repository catalog, safe read action, and create/repository-changing save enforcement with unchanged-scope outage compatibility.
 - [x] (2026-07-22 15:34Z) U2: Added the four curated GitHub choices, legacy-safe trigger projection/removal, audited optimistic removal, and deterministic version-1 secret-free export.
-- [ ] U3: Replace free-form repository/action inputs with the repository picker and readable trigger editor.
+- [x] (2026-07-22 15:50Z) U3: Replaced free-form repository/action inputs with the guarded searchable picker and readable trigger editor; added atomic replacement, safe JSON copy, disabled-agent dry-run proof, and desktop/390 px browser validation.
 - [ ] U4: Align deployment configuration and documentation, then prove the flow locally and in the deployed operator UI.
 
 ## Surprises & Discoveries
@@ -34,6 +34,7 @@ The manual Operator console remains unchanged. New agents remain disabled, test 
 - Observation: Trigger creation exists, but no public control-plane operation removes or replaces a trigger. Existing raw action strings therefore require an additive compatibility path rather than a schema-narrowing migration.
 - Observation: `@octokit/app` already exposes `app.eachRepository.iterator()` in the installed version, so repository discovery needs no dependency change.
 - Observation: The repository's shared `td` database resolves from the primary checkout; the linked worktree contains only copied diagnostic files. Tracker commands for this plan must use `td -w /Users/dallascrilley/Documents/shipwright` or the equivalent explicit work directory.
+- Observation: Browser proof exposed that the explicit test-run action reused the dispatcher’s activation guard and therefore rejected disabled agents, contradicting the test-before-enable workflow. Evidence: the action failed with `Agent <id> is disabled and cannot enqueue work`; a narrow test-source-only dispatcher override now permits the dry-run queue entry without enabling the agent or weakening webhook/schedule traffic.
 
 ## Requirements
 
@@ -58,6 +59,8 @@ The manual Operator console remains unchanged. New agents remain disabled, test 
 - Decision: Unsupported legacy GitHub triggers render as clearly labeled read-only rows and can be removed; they are never silently rewritten. Rationale: this preserves current behavior and gives the operator an intentional migration path. Date/Author: 2026-07-22 / Codex.
 - Decision: Add a versioned safe configuration projection and **Copy as JSON**, but no import or generic workflow action graph. Rationale: this satisfies portability and reviewability without turning Shipwright into a Cursor DSL clone. Date/Author: 2026-07-22 / Codex.
 - Decision: Do not add a `conditions` field in this slice. Preserve the discriminated trigger boundary and plan conditions separately. Rationale: an unused or weakly validated condition field would imply behavior that does not exist. Date/Author: 2026-07-22 / Codex.
+- Decision: Replace GitHub triggers atomically in the control-plane transaction instead of composing client-side add/remove requests. Rationale: an enabled agent must never observe a missing or duplicate replacement caused by a partial two-request workflow. Date/Author: 2026-07-22 / Codex.
+- Decision: Permit disabled-agent queueing only when the trusted caller explicitly marks a `source: test` request as the pre-activation proof path. Rationale: operators must test before enable, while trigger-driven traffic must continue to fail closed for disabled agents. Date/Author: 2026-07-22 / Codex.
 
 ## Context and Orientation
 

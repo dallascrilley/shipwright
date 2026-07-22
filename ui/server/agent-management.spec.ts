@@ -104,6 +104,27 @@ describe("AgentManagementService", () => {
     );
   });
 
+  test("queues an explicit dry-run test while the agent remains disabled", async () => {
+    const service = createService();
+    const created = await service.createAgent(draft);
+    service.createTrigger({
+      agentId: created.agentId,
+      expectedRevision: created.currentRevision,
+      kind: "github",
+      config: { event: "issues", actions: ["opened"] },
+    });
+
+    const queued = service.queueTestRun({
+      agentId: created.agentId,
+      expectedRevision: created.currentRevision,
+      target: { kind: "issue", number: 42 },
+    });
+
+    expect(queued.execution.source).toBe("test");
+    expect(queued.entry.state).toBe("queued");
+    expect(service.getAgent(created.agentId)?.enabled).toBe(false);
+  });
+
   test("pauses and resumes a schedule trigger through the management boundary", async () => {
     const service = createService();
     const created = await service.createAgent(draft);

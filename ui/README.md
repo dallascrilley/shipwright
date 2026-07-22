@@ -37,7 +37,7 @@ All actions in this section are UI-only and unavailable to the in-app model, MCP
 - `list-agents` / `get-agent`: return a searchable safe projection of agent status, configuration, triggers, queue history, redacted receipt evidence, and audit events. The list intentionally excludes instructions.
 - `list-agent-repositories`: returns only GitHub App-accessible repositories that pass the host allowlist; archived repositories remain visible but unavailable.
 - `create-agent` / `save-agent`: create a disabled draft and explicitly save later immutable revisions. Agent draft validation rejects secret-like values before they enter control-plane state or action responses.
-- `create-agent-trigger` / `remove-agent-trigger`: add one of the four curated GitHub events or a validated schedule, or remove one active trigger at the expected revision. Persisted legacy GitHub actions remain readable and removable.
+- `create-agent-trigger` / `replace-agent-trigger` / `remove-agent-trigger`: add one of the four curated GitHub events or a validated schedule, atomically replace a GitHub trigger, or remove one active trigger at the expected revision. Persisted legacy GitHub actions remain readable, replaceable, and removable.
 - `export-agent-definition`: returns the deterministic version-1, secret-free current configuration and trigger document used by **Copy as JSON**.
 - `set-agent-enabled`, `set-schedule-trigger-paused`, and `emergency-stop-agent`: UI-only actions with explicit UI confirmation for agent enable, disable, and stop. Enabling requires an enabled, valid trigger.
 - `queue-agent-test-run`: queues a dry-run test against the current revision and repository scope. It never activates a worker or publication path.

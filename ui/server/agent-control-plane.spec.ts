@@ -254,6 +254,50 @@ describe("AgentControlPlane", () => {
     ).toBe(false);
   });
 
+  test("replaces a trigger atomically and rejects invalid replacements without mutation", () => {
+    const store = new MemoryAgentControlPlaneStore();
+    const controlPlane = createControlPlane(store);
+    const agent = controlPlane.createAgent(draft);
+    const original = controlPlane.createTrigger({
+      agentId: agent.agentId,
+      expectedRevision: agent.currentRevision,
+      kind: "github",
+      config: { event: "issues", actions: ["opened"] },
+    });
+
+    expect(() =>
+      controlPlane.replaceTrigger({
+        agentId: agent.agentId,
+        expectedRevision: agent.currentRevision,
+        triggerId: original.triggerId,
+        kind: "github",
+        config: { event: "pull_request", actions: ["closed"] },
+      }),
+    ).toThrow(/supported GitHub trigger/i);
+    expect(store.load().triggers).toEqual([original]);
+
+    const replacement = controlPlane.replaceTrigger({
+      agentId: agent.agentId,
+      expectedRevision: agent.currentRevision,
+      triggerId: original.triggerId,
+      kind: "github",
+      config: { event: "pull_request", actions: ["synchronize"] },
+    });
+
+    expect(replacement).toMatchObject({
+      agentId: agent.agentId,
+      agentRevision: agent.currentRevision,
+      kind: "github",
+      config: { event: "pull_request", actions: ["synchronize"] },
+    });
+    expect(replacement.triggerId).not.toBe(original.triggerId);
+    expect(store.load().triggers).toEqual([replacement]);
+    expect(controlPlane.listLifecycleEvents(agent.agentId).slice(-1)[0]).toMatchObject({
+      action: "trigger_removed",
+      triggerId: original.triggerId,
+    });
+  });
+
   test("keeps legacy P0 run records standalone during migration", () => {
     const legacy: OperatorRunRecord = {
       runId: "legacy-run",

@@ -32,6 +32,7 @@ import {
   type AgentControlPlaneStore,
   type CreateTriggerInput,
   type RemoveTriggerInput,
+  type ReplaceTriggerInput,
 } from "./agent-control-plane";
 import { getOperatorRunRegistry, isOperatorDemoMode } from "./operator-runs";
 import {
@@ -179,6 +180,10 @@ export class AgentManagementService {
     return this.#controlPlane.removeTrigger(input);
   }
 
+  replaceTrigger(input: ReplaceTriggerInput): AgentTrigger {
+    return this.#controlPlane.replaceTrigger(input);
+  }
+
   exportAgentDefinition(agentId: string): AgentDefinitionExport {
     return buildAgentDefinitionDocument(this.#store.load(), agentId);
   }
@@ -232,6 +237,7 @@ export class AgentManagementService {
     return this.#dispatcher.enqueue({
       agentId: agent.agentId,
       source: "test",
+      allowDisabledAgentForTest: true,
       idempotencyKey: `test:${agent.agentId}:${agent.currentRevision}:${this.#createId()}`,
       target: { ...input.target, owner, repo },
     });

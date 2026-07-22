@@ -95,6 +95,40 @@ function createSnapshot() {
 }
 
 describe("agent management trigger projections", () => {
+  test.each([
+    ["issues", "opened", "Issue created"],
+    ["issues", "edited", "Issue edited"],
+    ["pull_request", "opened", "Pull request created"],
+    [
+      "pull_request",
+      "synchronize",
+      "Commits pushed to pull request",
+    ],
+  ] as const)(
+    "renders %s.%s as a readable trigger sentence",
+    (event, action, label) => {
+      const snapshot = createSnapshot();
+      const trigger = agentControlPlaneSnapshotSchema.shape.triggers.element.parse({
+        triggerId: `trigger-${event}-${action}`,
+        agentId: "agent-1",
+        agentRevision: 2,
+        kind: "github",
+        enabled: true,
+        config: { event, actions: [action] },
+        createdAt: "2026-07-21T00:01:00.000Z",
+        updatedAt: "2026-07-21T00:01:00.000Z",
+      });
+
+      expect(
+        buildAgentTriggerView(trigger, draft.targetScope.repository),
+      ).toMatchObject({
+        label: `${label} in dallascrilley/shipwright`,
+        legacy: false,
+      });
+      expect(snapshot.triggers).toHaveLength(3);
+    },
+  );
+
   test("renders supported and legacy GitHub triggers without mutating them", () => {
     const snapshot = createSnapshot();
     const supported = buildAgentTriggerView(
@@ -121,6 +155,12 @@ describe("agent management trigger projections", () => {
       event: "pull_request",
       actions: ["closed"],
     });
+    expect(
+      buildAgentTriggerView(
+        snapshot.triggers[0]!,
+        draft.targetScope.repository,
+      ).label,
+    ).toBe("Schedule 0 9 * * * (America/Chicago)");
   });
 
   test("builds a deterministic versioned secret-free configuration document", () => {
