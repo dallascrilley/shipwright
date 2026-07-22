@@ -15,6 +15,7 @@ import {
   agentRevisionSchema,
   agentTriggerSchema,
   createEmptyAgentControlPlaneSnapshot,
+  curatedGithubTriggerConfigSchema,
   lifecycleEventSchema,
   type AgentControlPlaneSnapshot,
   type AgentDefinition,
@@ -126,6 +127,16 @@ export class RevisionConflictError extends Error {
 export type CreateTriggerInput = Pick<AgentTriggerInput, "kind" | "config"> & {
   agentId: string;
   expectedRevision: number;
+};
+
+export interface RemoveTriggerInput {
+  agentId: string;
+  expectedRevision: number;
+  triggerId: string;
+}
+
+export type ReplaceTriggerInput = CreateTriggerInput & {
+  triggerId: string;
 };
 
 /**
@@ -252,33 +263,68 @@ export class AgentControlPlane {
     return this.store.transaction((snapshot) => {
       const agent = this.requireAgent(snapshot, input.agentId);
       this.assertRevision(agent, input.expectedRevision);
-      const now = this.now();
-      const scheduleConfig =
-        input.kind === "schedule" && "schedule" in input.config
-          ? input.config
-          : undefined;
-      const trigger = agentTriggerSchema.parse({
-        triggerId: this.createId(),
-        agentId: agent.agentId,
-        agentRevision: agent.currentRevision,
-        kind: input.kind,
-        enabled: true,
-        config: input.config,
-        ...(scheduleConfig
-          ? {
-              nextFireAt: nextScheduleOccurrence(
-                scheduleConfig.schedule,
-                scheduleConfig.timezone,
-                now,
-              ),
-              consecutiveFailures: 0,
-            }
-          : {}),
-        createdAt: now,
-        updatedAt: now,
-      });
+      const trigger = this.buildTrigger(agent, input, this.now());
       snapshot.triggers.push(trigger);
       return trigger;
+    });
+  }
+
+  removeTrigger(input: RemoveTriggerInput): AgentTrigger {
+    return this.store.transaction((snapshot) => {
+      const agent = this.requireAgent(snapshot, input.agentId);
+      this.assertRevision(agent, input.expectedRevision);
+      const triggerIndex = snapshot.triggers.findIndex(
+        (trigger) =>
+          trigger.agentId === agent.agentId &&
+          trigger.triggerId === input.triggerId,
+      );
+      if (triggerIndex < 0) {
+        throw new Error(
+          `Unknown trigger ${input.triggerId} for agent ${agent.agentId}.`,
+        );
+      }
+      const [removed] = snapshot.triggers.splice(triggerIndex, 1);
+      if (!removed) {
+        throw new Error(`Could not remove trigger ${input.triggerId}.`);
+      }
+      this.appendEvent(
+        snapshot,
+        agent.agentId,
+        "trigger_removed",
+        agent.currentRevision,
+        this.now(),
+        removed.triggerId,
+      );
+      return removed;
+    });
+  }
+
+  replaceTrigger(input: ReplaceTriggerInput): AgentTrigger {
+    return this.store.transaction((snapshot) => {
+      const agent = this.requireAgent(snapshot, input.agentId);
+      this.assertRevision(agent, input.expectedRevision);
+      const triggerIndex = snapshot.triggers.findIndex(
+        (trigger) =>
+          trigger.agentId === agent.agentId &&
+          trigger.triggerId === input.triggerId,
+      );
+      if (triggerIndex < 0) {
+        throw new Error(
+          `Unknown trigger ${input.triggerId} for agent ${agent.agentId}.`,
+        );
+      }
+      const now = this.now();
+      const replacement = this.buildTrigger(agent, input, now);
+      snapshot.triggers.splice(triggerIndex, 1, replacement);
+      this.appendEvent(
+        snapshot,
+        agent.agentId,
+        "trigger_removed",
+        agent.currentRevision,
+        now,
+        input.triggerId,
+      );
+      return replacement;
     });
   }
 
@@ -357,6 +403,40 @@ export class AgentControlPlane {
       occurredAt,
       triggerId,
     );
+  }
+
+  private buildTrigger(
+    agent: AgentDefinition,
+    input: Pick<CreateTriggerInput, "kind" | "config">,
+    now: string,
+  ): AgentTrigger {
+    if (input.kind === "github") {
+      curatedGithubTriggerConfigSchema.parse(input.config);
+    }
+    const scheduleConfig =
+      input.kind === "schedule" && "schedule" in input.config
+        ? input.config
+        : undefined;
+    return agentTriggerSchema.parse({
+      triggerId: this.createId(),
+      agentId: agent.agentId,
+      agentRevision: agent.currentRevision,
+      kind: input.kind,
+      enabled: true,
+      config: input.config,
+      ...(scheduleConfig
+        ? {
+            nextFireAt: nextScheduleOccurrence(
+              scheduleConfig.schedule,
+              scheduleConfig.timezone,
+              now,
+            ),
+            consecutiveFailures: 0,
+          }
+        : {}),
+      createdAt: now,
+      updatedAt: now,
+    });
   }
 }
 

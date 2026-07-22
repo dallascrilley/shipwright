@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { MemoryAgentControlPlaneStore } from "./agent-control-plane";
 import { AgentManagementService } from "./agent-management";
@@ -18,19 +18,32 @@ const draft = {
   cancelInFlight: true,
 };
 
-function createService() {
+const selectableRepository = {
+  repository: "dallascrilley/shipwright",
+  owner: "dallascrilley",
+  name: "shipwright",
+  defaultBranch: "main",
+  visibility: "private" as const,
+  archived: false,
+  selectable: true,
+};
+
+function createService(
+  assertSelectable = vi.fn(async () => selectableRepository),
+) {
   let sequence = 0;
   return new AgentManagementService({
     store: new MemoryAgentControlPlaneStore(),
     createId: () => `id-${++sequence}`,
     now: () => "2026-07-21T12:00:00.000Z",
+    repositoryCatalog: { assertSelectable },
   });
 }
 
 describe("AgentManagementService", () => {
-  test("creates disabled agents and requires a validated trigger before enable", () => {
+  test("creates disabled agents and requires a validated trigger before enable", async () => {
     const service = createService();
-    const created = service.createAgent(draft);
+    const created = await service.createAgent(draft);
 
     expect(created.enabled).toBe(false);
     expect(() =>
@@ -57,9 +70,9 @@ describe("AgentManagementService", () => {
     ).toBe(true);
   });
 
-  test("saves an immutable revision and queues a test run against that revision", () => {
+  test("saves an immutable revision and queues a test run against that revision", async () => {
     const service = createService();
-    const created = service.createAgent(draft);
+    const created = await service.createAgent(draft);
     service.createTrigger({
       agentId: created.agentId,
       expectedRevision: created.currentRevision,
@@ -71,7 +84,7 @@ describe("AgentManagementService", () => {
       expectedRevision: created.currentRevision,
       enabled: true,
     });
-    const saved = service.saveAgent({
+    const saved = await service.saveAgent({
       agentId: created.agentId,
       expectedRevision: created.currentRevision,
       draft: { ...draft, publicationPolicy: "approval_required" },
@@ -91,9 +104,30 @@ describe("AgentManagementService", () => {
     );
   });
 
-  test("pauses and resumes a schedule trigger through the management boundary", () => {
+  test("queues an explicit dry-run test while the agent remains disabled", async () => {
     const service = createService();
-    const created = service.createAgent(draft);
+    const created = await service.createAgent(draft);
+    service.createTrigger({
+      agentId: created.agentId,
+      expectedRevision: created.currentRevision,
+      kind: "github",
+      config: { event: "issues", actions: ["opened"] },
+    });
+
+    const queued = service.queueTestRun({
+      agentId: created.agentId,
+      expectedRevision: created.currentRevision,
+      target: { kind: "issue", number: 42 },
+    });
+
+    expect(queued.execution.source).toBe("test");
+    expect(queued.entry.state).toBe("queued");
+    expect(service.getAgent(created.agentId)?.enabled).toBe(false);
+  });
+
+  test("pauses and resumes a schedule trigger through the management boundary", async () => {
+    const service = createService();
+    const created = await service.createAgent(draft);
     const trigger = service.createTrigger({
       agentId: created.agentId,
       expectedRevision: created.currentRevision,
@@ -114,9 +148,9 @@ describe("AgentManagementService", () => {
     expect(service.getAgent(created.agentId)?.audit[0]?.action).toBe("resumed");
   });
 
-  test("projects searchable non-secret list data and supports emergency stop", () => {
+  test("projects searchable non-secret list data and supports emergency stop", async () => {
     const service = createService();
-    const created = service.createAgent(draft);
+    const created = await service.createAgent(draft);
     service.createTrigger({
       agentId: created.agentId,
       expectedRevision: created.currentRevision,
@@ -156,14 +190,111 @@ describe("AgentManagementService", () => {
     expect(service.getAgent(created.agentId)?.audit[0]?.action).toBe("stopped");
   });
 
-  test("rejects secret-like configuration before it reaches a UI response", () => {
+  test("rejects secret-like configuration before it reaches a UI response", async () => {
     const service = createService();
 
-    expect(() =>
+    await expect(
       service.createAgent({
         ...draft,
         instructions: "Use token ghp_0123456789012345678901234567890123456789",
       }),
-    ).toThrow("Secret-like");
+    ).rejects.toThrow("Secret-like");
+  });
+
+  test("rejects an inaccessible repository before creating an agent", async () => {
+    const assertSelectable = vi.fn(async () => {
+      throw new Error("Repository foreign/nope is not accessible.");
+    });
+    const service = createService(assertSelectable);
+
+    await expect(
+      service.createAgent({
+        ...draft,
+        targetScope: { ...draft.targetScope, repository: "foreign/nope" },
+      }),
+    ).rejects.toThrow(/not accessible/i);
+    expect(service.getSnapshot().agents).toHaveLength(0);
+    expect(service.getSnapshot().revisions).toHaveLength(0);
+  });
+
+  test("rejects a repository-changing save without creating a revision", async () => {
+    const assertSelectable = vi.fn(async () => selectableRepository);
+    const service = createService(assertSelectable);
+    const created = await service.createAgent(draft);
+    assertSelectable.mockRejectedValueOnce(
+      new Error("Repository dallascrilley/other is not accessible."),
+    );
+
+    await expect(
+      service.saveAgent({
+        agentId: created.agentId,
+        expectedRevision: created.currentRevision,
+        draft: {
+          ...draft,
+          targetScope: {
+            ...draft.targetScope,
+            repository: "dallascrilley/other",
+          },
+        },
+      }),
+    ).rejects.toThrow(/not accessible/i);
+    expect(service.getSnapshot().revisions).toHaveLength(1);
+  });
+
+  test("allows an unchanged repository save during a catalog outage", async () => {
+    const assertSelectable = vi.fn(async () => selectableRepository);
+    const service = createService(assertSelectable);
+    const created = await service.createAgent(draft);
+    assertSelectable.mockRejectedValueOnce(
+      new Error("GitHub repositories could not be loaded."),
+    );
+
+    const saved = await service.saveAgent({
+      agentId: created.agentId,
+      expectedRevision: created.currentRevision,
+      draft: { ...draft, name: "Dependency fixer v2" },
+    });
+
+    expect(saved.currentRevision).toBe(2);
+    expect(assertSelectable).toHaveBeenCalledTimes(1);
+  });
+
+  test("exports the current safe definition and removes its active trigger", async () => {
+    const service = createService();
+    const created = await service.createAgent(draft);
+    const trigger = service.createTrigger({
+      agentId: created.agentId,
+      expectedRevision: created.currentRevision,
+      kind: "github",
+      config: { event: "pull_request", actions: ["synchronize"] },
+    });
+
+    expect(service.exportAgentDefinition(created.agentId)).toMatchObject({
+      format: "shipwright.agent",
+      version: 1,
+      revision: 1,
+      configuration: draft,
+      triggers: [
+        {
+          kind: "github",
+          event: "pull_request",
+          actions: ["synchronize"],
+          legacy: false,
+        },
+      ],
+    });
+
+    expect(
+      service.removeTrigger({
+        agentId: created.agentId,
+        expectedRevision: created.currentRevision,
+        triggerId: trigger.triggerId,
+      }).triggerId,
+    ).toBe(trigger.triggerId);
+    expect(service.getAgent(created.agentId)?.triggers).toHaveLength(0);
+    expect(service.getAgent(created.agentId)?.audit[0]).toMatchObject({
+      action: "trigger_removed",
+      triggerId: trigger.triggerId,
+    });
   });
 });

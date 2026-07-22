@@ -26,6 +26,8 @@ export interface QueueEnqueueInput {
   target: ExecutionRequestInput["target"];
   scheduledAt?: string;
   priority?: number;
+  /** UI-only dry-run proof may be queued before activation. Never honor for trigger traffic. */
+  allowDisabledAgentForTest?: boolean;
 }
 
 export interface QueueEnqueueResult {
@@ -102,7 +104,9 @@ export class QueueDispatcher {
     input: QueueEnqueueInput,
   ): QueueEnqueueResult {
     const agent = this.requireAgent(snapshot, input.agentId);
-    if (!agent.enabled) {
+    const isExplicitDisabledAgentTest =
+      input.source === "test" && input.allowDisabledAgentForTest === true;
+    if (!agent.enabled && !isExplicitDisabledAgentTest) {
       throw new Error(
         `Agent ${agent.agentId} is disabled and cannot enqueue work.`,
       );

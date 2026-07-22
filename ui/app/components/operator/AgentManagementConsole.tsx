@@ -1,10 +1,14 @@
 import { useActionMutation, useActionQuery } from "@agent-native/core/client";
 import {
   IconAlertTriangle,
+  IconArchive,
+  IconArrowsExchange,
   IconBolt,
+  IconBrandGithub,
   IconCheck,
   IconCircle,
   IconClock,
+  IconCopy,
   IconPlayerPause,
   IconPlayerPlay,
   IconPlus,
@@ -12,6 +16,7 @@ import {
   IconSearch,
   IconShieldCheck,
   IconPlayerStop,
+  IconTrash,
 } from "@tabler/icons-react";
 import { useEffect, useState, type FormEvent } from "react";
 
@@ -33,11 +38,23 @@ import type {
   AgentDefinition,
   AgentTrigger,
 } from "../../../shared/agent-definition";
+import {
+  GITHUB_TRIGGER_CHOICES,
+  type GithubTriggerChoiceId,
+} from "../../../shared/agent-definition";
 import type {
+  AgentDefinitionExport,
   AgentDetailView,
   AgentListItem,
   AgentListFilter,
+  AgentTriggerView,
 } from "../../../shared/agent-management";
+import {
+  buildRepositoryPickerView,
+  canSaveRepositorySelection,
+  type AgentRepositoryCatalogResult,
+  type RepositoryPickerOption,
+} from "../../../shared/repository-catalog";
 
 const DEFAULT_DRAFT: AgentDraft = {
   name: "",
@@ -154,10 +171,15 @@ export function AgentManagementConsole() {
   const [triggerKind, setTriggerKind] = useState<"github" | "schedule">(
     "github",
   );
-  const [githubEvent, setGithubEvent] = useState<"issues" | "pull_request">(
-    "issues",
-  );
-  const [githubActions, setGithubActions] = useState("opened");
+  const [githubChoiceId, setGithubChoiceId] =
+    useState<GithubTriggerChoiceId>("issue_created");
+  const [replacementTriggerId, setReplacementTriggerId] = useState<
+    string | null
+  >(null);
+  const [triggerToRemove, setTriggerToRemove] =
+    useState<AgentTriggerView | null>(null);
+  const [createRepositoryQuery, setCreateRepositoryQuery] = useState("");
+  const [draftRepositoryQuery, setDraftRepositoryQuery] = useState("");
   const [schedule, setSchedule] = useState("*/5 * * * *");
   const [timezone, setTimezone] = useState("UTC");
   const [triggerTargetKind, setTriggerTargetKind] = useState<"issue" | "pull">(
@@ -181,9 +203,19 @@ export function AgentManagementConsole() {
     { agentId: selectedId ?? "" },
     { enabled: selectedId !== null, refetchInterval: 5_000 },
   );
+  const repositoryQuery = useActionQuery("list-agent-repositories", {}, {
+    refetchInterval: 60_000,
+  });
+  const exportQuery = useActionQuery(
+    "export-agent-definition",
+    { agentId: selectedId ?? "" },
+    { enabled: selectedId !== null },
+  );
   const createAgent = useActionMutation("create-agent");
   const saveAgent = useActionMutation("save-agent");
   const createTrigger = useActionMutation("create-agent-trigger");
+  const replaceTrigger = useActionMutation("replace-agent-trigger");
+  const removeTrigger = useActionMutation("remove-agent-trigger");
   const setEnabled = useActionMutation("set-agent-enabled");
   const setSchedulePaused = useActionMutation("set-schedule-trigger-paused");
   const stopAgent = useActionMutation("emergency-stop-agent");
@@ -191,10 +223,15 @@ export function AgentManagementConsole() {
 
   const agents = (listQuery.data as AgentListItem[] | undefined) ?? [];
   const detail = detailQuery.data as AgentDetailView | undefined;
+  const repositoryCatalog = repositoryQuery.data as
+    | AgentRepositoryCatalogResult
+    | undefined;
   const busy =
     createAgent.isPending ||
     saveAgent.isPending ||
     createTrigger.isPending ||
+    replaceTrigger.isPending ||
+    removeTrigger.isPending ||
     setEnabled.isPending ||
     setSchedulePaused.isPending ||
     stopAgent.isPending ||
@@ -208,7 +245,10 @@ export function AgentManagementConsole() {
   }, [agents, selectedId]);
 
   useEffect(() => {
-    if (detail) setDraftForm(toDraftForm(detail.config));
+    if (detail) {
+      setDraftForm(toDraftForm(detail.config));
+      setReplacementTriggerId(null);
+    }
   }, [detail?.agentId, detail?.currentRevision]);
 
   async function refresh() {
@@ -225,6 +265,7 @@ export function AgentManagementConsole() {
       setSelectedId(created.agentId);
       setCreateOpen(false);
       setCreateForm(toDraftForm(DEFAULT_DRAFT));
+      setCreateRepositoryQuery("");
       setMessage(
         "Disabled draft created. Add and validate a trigger before enabling it.",
       );
@@ -258,33 +299,95 @@ export function AgentManagementConsole() {
     if (!detail) return;
     setMessage(null);
     try {
-      const config =
-        triggerKind === "github"
-          ? {
-              event: githubEvent,
-              actions: githubActions
-                .split(",")
-                .map((item) => item.trim())
-                .filter(Boolean),
-            }
-          : {
-              schedule,
-              timezone,
-              target: {
-                kind: triggerTargetKind,
-                number: Number(triggerTargetNumber),
-              },
-            };
-      await createTrigger.mutateAsync({
-        agentId: detail.agentId,
-        expectedRevision: detail.currentRevision,
-        kind: triggerKind,
-        config,
-      });
-      setMessage("Validated trigger added and pinned to the current revision.");
+      if (triggerKind === "github") {
+        const choice =
+          GITHUB_TRIGGER_CHOICES.find(
+            (item) => item.id === githubChoiceId,
+          ) ?? GITHUB_TRIGGER_CHOICES[0];
+        const config = { event: choice.event, actions: [choice.action] };
+        if (replacementTriggerId) {
+          await replaceTrigger.mutateAsync({
+            agentId: detail.agentId,
+            expectedRevision: detail.currentRevision,
+            triggerId: replacementTriggerId,
+            kind: "github",
+            config,
+          });
+          setReplacementTriggerId(null);
+          setMessage("Trigger replaced atomically on the current revision.");
+        } else {
+          await createTrigger.mutateAsync({
+            agentId: detail.agentId,
+            expectedRevision: detail.currentRevision,
+            kind: "github",
+            config,
+          });
+          setMessage(
+            "Validated trigger added and pinned to the current revision.",
+          );
+        }
+      } else {
+        await createTrigger.mutateAsync({
+          agentId: detail.agentId,
+          expectedRevision: detail.currentRevision,
+          kind: "schedule",
+          config: {
+            schedule,
+            timezone,
+            target: {
+              kind: triggerTargetKind,
+              number: Number(triggerTargetNumber),
+            },
+          },
+        });
+        setMessage("Validated trigger added and pinned to the current revision.");
+      }
       await refresh();
     } catch (error) {
       setMessage(mutationMessage(error, "Could not create trigger."));
+    }
+  }
+
+  async function handleRemoveTrigger() {
+    if (!detail || !triggerToRemove) return;
+    setMessage(null);
+    try {
+      await removeTrigger.mutateAsync({
+        agentId: detail.agentId,
+        expectedRevision: detail.currentRevision,
+        triggerId: triggerToRemove.triggerId,
+      });
+      setTriggerToRemove(null);
+      setMessage("Trigger removed. Historical run evidence remains intact.");
+      await refresh();
+    } catch (error) {
+      setTriggerToRemove(null);
+      setMessage(mutationMessage(error, "Could not remove trigger."));
+    }
+  }
+
+  function prepareReplacement(trigger: AgentTriggerView) {
+    if (trigger.kind !== "github") return;
+    setTriggerKind("github");
+    setGithubChoiceId(trigger.choiceId ?? "issue_created");
+    setReplacementTriggerId(trigger.triggerId);
+    document.getElementById("trigger-editor")?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+  }
+
+  async function handleCopyDefinition() {
+    if (!detail) return;
+    setMessage(null);
+    try {
+      const result = await exportQuery.refetch();
+      const document = result.data as AgentDefinitionExport | undefined;
+      if (!document) throw new Error("Agent definition is unavailable.");
+      await navigator.clipboard.writeText(JSON.stringify(document, null, 2));
+      setMessage("Current agent definition copied as versioned JSON.");
+    } catch (error) {
+      setMessage(mutationMessage(error, "Could not copy agent JSON."));
     }
   }
 
@@ -549,6 +652,14 @@ export function AgentManagementConsole() {
               <div className="flex flex-wrap gap-2 sm:justify-end">
                 <Button
                   type="button"
+                  variant="ghost"
+                  disabled={busy || exportQuery.isFetching}
+                  onClick={() => void handleCopyDefinition()}
+                >
+                  <IconCopy className="size-4" /> Copy as JSON
+                </Button>
+                <Button
+                  type="button"
                   variant="outline"
                   disabled={busy}
                   onClick={handleQueueTestRun}
@@ -609,9 +720,24 @@ export function AgentManagementConsole() {
                 form={draftForm}
                 onChange={setDraftForm}
                 disabled={busy}
+                repositoryCatalog={repositoryCatalog}
+                repositoryQuery={draftRepositoryQuery}
+                onRepositoryQueryChange={setDraftRepositoryQuery}
+                originalRepository={detail.repository}
+                onRefreshRepositories={() => void repositoryQuery.refetch()}
               />
               <div className="flex justify-end">
-                <Button type="submit" disabled={busy}>
+                <Button
+                  type="submit"
+                  disabled={
+                    busy ||
+                    !canSaveRepositorySelection(
+                      repositoryCatalog,
+                      detail.repository,
+                      draftForm.repository,
+                    )
+                  }
+                >
                   Save revision
                 </Button>
               </div>
@@ -637,11 +763,14 @@ export function AgentManagementConsole() {
                         trigger={trigger}
                         busy={busy}
                         onPause={() => void handleSchedulePause(trigger)}
+                        onReplace={() => prepareReplacement(trigger)}
+                        onRemove={() => setTriggerToRemove(trigger)}
                       />
                     ))
                   )}
                 </ul>
                 <form
+                  id="trigger-editor"
                   onSubmit={handleCreateTrigger}
                   className="space-y-3 border-t border-border pt-4"
                 >
@@ -651,9 +780,15 @@ export function AgentManagementConsole() {
                       id="trigger-kind"
                       value={triggerKind}
                       onChange={(event) =>
-                        setTriggerKind(
-                          event.target.value as "github" | "schedule",
-                        )
+                        setTriggerKind(() => {
+                          const next = event.target.value as
+                            | "github"
+                            | "schedule";
+                          if (next === "schedule") {
+                            setReplacementTriggerId(null);
+                          }
+                          return next;
+                        })
                       }
                       className="h-9 rounded-md border border-input bg-transparent px-2 text-sm"
                     >
@@ -662,32 +797,23 @@ export function AgentManagementConsole() {
                     </select>
                   </div>
                   {triggerKind === "github" ? (
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <Field label="Event">
-                        <select
-                          value={githubEvent}
-                          onChange={(event) =>
-                            setGithubEvent(
-                              event.target.value as "issues" | "pull_request",
-                            )
-                          }
-                          className="input-shell"
-                        >
-                          <option value="issues">issues</option>
-                          <option value="pull_request">pull_request</option>
-                        </select>
-                      </Field>
-                      <Field label="Actions">
-                        <Input
-                          value={githubActions}
-                          onChange={(event) =>
-                            setGithubActions(event.target.value)
-                          }
-                          placeholder="opened, edited"
-                          required
-                        />
-                      </Field>
-                    </div>
+                    <Field label="GitHub activity">
+                      <select
+                        value={githubChoiceId}
+                        onChange={(event) =>
+                          setGithubChoiceId(
+                            event.target.value as GithubTriggerChoiceId,
+                          )
+                        }
+                        className="input-shell"
+                      >
+                        {GITHUB_TRIGGER_CHOICES.map((choice) => (
+                          <option key={choice.id} value={choice.id}>
+                            {choice.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
                   ) : (
                     <div className="grid gap-3">
                       <Field label="Cron schedule">
@@ -735,9 +861,23 @@ export function AgentManagementConsole() {
                       </div>
                     </div>
                   )}
-                  <Button type="submit" variant="outline" disabled={busy}>
-                    Validate and add trigger
-                  </Button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button type="submit" variant="outline" disabled={busy}>
+                      {replacementTriggerId
+                        ? "Replace trigger"
+                        : "Validate and add trigger"}
+                    </Button>
+                    {replacementTriggerId ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => setReplacementTriggerId(null)}
+                      >
+                        Cancel replacement
+                      </Button>
+                    ) : null}
+                  </div>
                 </form>
               </div>
 
@@ -877,9 +1017,24 @@ export function AgentManagementConsole() {
               form={createForm}
               onChange={setCreateForm}
               disabled={busy}
+              repositoryCatalog={repositoryCatalog}
+              repositoryQuery={createRepositoryQuery}
+              onRepositoryQueryChange={setCreateRepositoryQuery}
+              originalRepository=""
+              onRefreshRepositories={() => void repositoryQuery.refetch()}
             />
             <SheetFooter className="mt-6">
-              <Button type="submit" disabled={busy}>
+              <Button
+                type="submit"
+                disabled={
+                  busy ||
+                  !canSaveRepositorySelection(
+                    repositoryCatalog,
+                    "",
+                    createForm.repository,
+                  )
+                }
+              >
                 <IconPlus className="size-4" />
                 Create disabled draft
               </Button>
@@ -920,6 +1075,38 @@ export function AgentManagementConsole() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
+
+      <Sheet
+        open={triggerToRemove !== null}
+        onOpenChange={(open) => !open && setTriggerToRemove(null)}
+      >
+        <SheetContent className="sm:max-w-md">
+          <SheetHeader>
+            <SheetTitle>Remove this trigger?</SheetTitle>
+            <SheetDescription>
+              {triggerToRemove?.label}. New deliveries will stop matching this
+              trigger; historical run evidence remains intact.
+            </SheetDescription>
+          </SheetHeader>
+          <SheetFooter className="mt-6">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setTriggerToRemove(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={busy}
+              onClick={() => void handleRemoveTrigger()}
+            >
+              Remove trigger
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
@@ -956,10 +1143,20 @@ function DraftFields({
   form,
   onChange,
   disabled,
+  repositoryCatalog,
+  repositoryQuery,
+  onRepositoryQueryChange,
+  originalRepository,
+  onRefreshRepositories,
 }: {
   form: DraftForm;
   onChange: (next: DraftForm) => void;
   disabled: boolean;
+  repositoryCatalog: AgentRepositoryCatalogResult | undefined;
+  repositoryQuery: string;
+  onRepositoryQueryChange: (next: string) => void;
+  originalRepository: string;
+  onRefreshRepositories: () => void;
 }) {
   const update = <Key extends keyof DraftForm>(
     key: Key,
@@ -996,15 +1193,22 @@ function DraftFields({
         />
       </Field>
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Repository scope">
-          <Input
-            value={form.repository}
-            disabled={disabled}
-            onChange={(event) => update("repository", event.target.value)}
-            placeholder="owner/repository"
-            required
-          />
-        </Field>
+        <RepositoryPicker
+          catalog={repositoryCatalog}
+          query={repositoryQuery}
+          onQueryChange={onRepositoryQueryChange}
+          value={form.repository}
+          originalRepository={originalRepository}
+          disabled={disabled}
+          onRefresh={onRefreshRepositories}
+          onSelect={(option) =>
+            onChange({
+              ...form,
+              repository: option.repository,
+              branch: option.defaultBranch || form.branch,
+            })
+          }
+        />
         <Field label="Branch scope">
           <Input
             value={form.branch}
@@ -1076,35 +1280,149 @@ function DraftFields({
   );
 }
 
+function RepositoryPicker({
+  catalog,
+  query,
+  onQueryChange,
+  value,
+  originalRepository,
+  disabled,
+  onRefresh,
+  onSelect,
+}: {
+  catalog: AgentRepositoryCatalogResult | undefined;
+  query: string;
+  onQueryChange: (next: string) => void;
+  value: string;
+  originalRepository: string;
+  disabled: boolean;
+  onRefresh: () => void;
+  onSelect: (option: RepositoryPickerOption) => void;
+}) {
+  const view = buildRepositoryPickerView(catalog, query, originalRepository);
+  const selectedAvailable = canSaveRepositorySelection(
+    catalog,
+    originalRepository,
+    value,
+  );
+  return (
+    <div className="grid gap-1.5 text-sm font-medium sm:col-span-2">
+      <div className="flex items-center justify-between gap-3">
+        <span>Repository scope</span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={disabled}
+          onClick={onRefresh}
+        >
+          <IconRefresh className="size-4" /> Refresh
+        </Button>
+      </div>
+      <div className="overflow-hidden rounded-md border border-input bg-background">
+        <div className="relative border-b border-border">
+          <IconSearch className="pointer-events-none absolute start-3 top-2.5 size-4 text-muted-foreground" />
+          <Input
+            aria-label="Search available repositories"
+            className="border-0 ps-9 shadow-none focus-visible:ring-0"
+            value={query}
+            disabled={disabled}
+            onChange={(event) => onQueryChange(event.target.value)}
+            placeholder="Search available repositories"
+          />
+        </div>
+        <div
+          role="listbox"
+          aria-label="Available repositories"
+          className="max-h-40 overflow-y-auto p-1"
+        >
+          {view.options.map((option) => (
+            <button
+              key={option.repository}
+              type="button"
+              role="option"
+              aria-selected={option.repository === value}
+              disabled={disabled || !option.selectable}
+              onClick={() => onSelect(option)}
+              className={`flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left text-sm transition-[color,background-color] disabled:cursor-not-allowed disabled:opacity-55 ${option.repository === value ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+            >
+              {option.archived ? (
+                <IconArchive className="size-4 shrink-0" />
+              ) : (
+                <IconBrandGithub className="size-4 shrink-0" />
+              )}
+              <span className="min-w-0 flex-1 truncate">
+                {option.repository}
+              </span>
+              {option.repository === value ? (
+                <IconCheck className="size-4 shrink-0" />
+              ) : option.unavailable ? (
+                <span className="text-[11px]">Unavailable</span>
+              ) : null}
+            </button>
+          ))}
+          {view.state === "loading" ? (
+            <p className="px-2 py-3 text-xs text-muted-foreground">
+              Loading repositories…
+            </p>
+          ) : view.state === "empty" ? (
+            <p className="px-2 py-3 text-xs text-muted-foreground">
+              No repositories match this search.
+            </p>
+          ) : null}
+        </div>
+      </div>
+      {view.state === "error" ? (
+        <p className="flex items-start gap-1.5 text-xs font-normal text-destructive">
+          <IconAlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+          {view.message} An unchanged repository scope remains savable, but new
+          selections are blocked.
+        </p>
+      ) : !selectedAvailable && value ? (
+        <p className="text-xs font-normal text-destructive">
+          Select an available repository before saving.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function TriggerRow({
   trigger,
   busy,
   onPause,
+  onReplace,
+  onRemove,
 }: {
-  trigger: AgentTrigger;
+  trigger: AgentTriggerView;
   busy: boolean;
   onPause: () => void;
+  onReplace: () => void;
+  onRemove: () => void;
 }) {
   const scheduleTrigger =
     trigger.kind === "schedule" && "schedule" in trigger.config;
-  const description =
-    trigger.kind === "schedule" && "schedule" in trigger.config
-      ? `${trigger.config.schedule} · ${trigger.config.timezone} · next ${formatTime(trigger.nextFireAt)}`
-      : "Event trigger";
   return (
     <li className="rounded-md border border-border px-3 py-2">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium">
-            {trigger.kind === "github" ? "GitHub event" : "Schedule"} · r
-            {trigger.agentRevision}
-          </p>
+        <div className="min-w-0">
+          <p className="text-sm font-medium">{trigger.label}</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            {description}
+            Revision {trigger.agentRevision}
+            {scheduleTrigger
+              ? ` · next ${formatTime(trigger.nextFireAt)}`
+              : ""}
             {trigger.pausedAt ? " · paused" : ""}
           </p>
+          {trigger.legacy ? (
+            <p className="mt-1 flex items-center gap-1 text-xs text-amber-700 dark:text-amber-300">
+              <IconAlertTriangle className="size-3.5" /> Legacy trigger; replace
+              it with a supported activity.
+            </p>
+          ) : null}
         </div>
-        {scheduleTrigger ? (
+        <div className="flex shrink-0 flex-wrap justify-end gap-1">
+          {scheduleTrigger ? (
           <Button
             type="button"
             size="sm"
@@ -1114,7 +1432,28 @@ function TriggerRow({
           >
             {trigger.pausedAt ? "Resume" : "Pause"}
           </Button>
-        ) : null}
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={onReplace}
+            >
+              <IconArrowsExchange className="size-4" /> Replace
+            </Button>
+          )}
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            disabled={busy}
+            onClick={onRemove}
+            aria-label={`Remove ${trigger.label}`}
+          >
+            <IconTrash className="size-4" />
+          </Button>
+        </div>
       </div>
     </li>
   );

@@ -3,6 +3,7 @@ import {
   authorizeIssue,
   authorizePullRequest,
   buildInstallationAuthOptions,
+  collectAccessibleRepositories,
   extractInstallationToken,
   validateInstallationRepositories,
   type GitHubTransport,
@@ -64,9 +65,48 @@ test("installation auth rejects repository access outside the operator allowlist
   )).not.toThrow();
 });
 
+test("collects safe repository metadata from every GitHub App installation", async () => {
+  async function* repositories() {
+    yield {
+      repository: {
+        full_name: "DallasCrilley/Shipwright",
+        default_branch: "main",
+        visibility: "private",
+        private: true,
+        archived: false,
+      },
+    };
+    yield {
+      repository: {
+        full_name: "DallasCrilleyMarTech/JCS-Production-OS",
+        default_branch: "develop",
+        visibility: undefined,
+        private: false,
+        archived: true,
+      },
+    };
+  }
+
+  await expect(collectAccessibleRepositories(repositories())).resolves.toEqual([
+    {
+      fullName: "DallasCrilley/Shipwright",
+      defaultBranch: "main",
+      visibility: "private",
+      archived: false,
+    },
+    {
+      fullName: "DallasCrilleyMarTech/JCS-Production-OS",
+      defaultBranch: "develop",
+      visibility: "public",
+      archived: true,
+    },
+  ]);
+});
+
 test("authorizeIssue scopes authentication and returns immutable issue context", async () => {
   const calls: unknown[] = [];
   const transport: GitHubTransport = {
+    async listAccessibleRepositories() { return []; },
     async resolveInstallation(ref) { calls.push(["installation", ref]); return 42; },
     async createRepositoryClient(input) {
       calls.push(["client", input]);
@@ -116,6 +156,7 @@ test("authorizeIssue scopes authentication and returns immutable issue context",
 
 test("authorizePullRequest returns exact same-repository head and review context", async () => {
   const transport: GitHubTransport = {
+    async listAccessibleRepositories() { return []; },
     async resolveInstallation() { return 9; },
     async createRepositoryClient() {
       return {
@@ -151,6 +192,7 @@ test("authorizePullRequest returns exact same-repository head and review context
 
 test("authorizePullRequest rejects fork heads", async () => {
   const transport: GitHubTransport = {
+    async listAccessibleRepositories() { return []; },
     async resolveInstallation() { return 9; },
     async createRepositoryClient() {
       return {
@@ -182,6 +224,7 @@ test("authorizePullRequest rejects fork heads", async () => {
 test("authorizeIssue rejects repositories outside the allowlist before API access", async () => {
   let called = false;
   const transport: GitHubTransport = {
+    async listAccessibleRepositories() { return []; },
     async resolveInstallation() { called = true; return 1; },
     async createRepositoryClient() { throw new Error("unreachable"); },
   };

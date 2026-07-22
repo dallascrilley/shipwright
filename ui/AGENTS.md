@@ -49,6 +49,11 @@ the shared agent conversation surface.
   publishing requires explicit confirmation, and only one run may be active.
 - `get-shipwright-run` returns a named run or the latest durable run for
   browser-refresh recovery.
+- Agent management uses UI-only actions: `list-agent-repositories` for the
+  host-authorized picker, `create-agent-trigger` / `remove-agent-trigger` for
+  curated trigger lifecycle, and `export-agent-definition` for the safe
+  versioned JSON projection. Never reintroduce browser-side repository or raw
+  webhook-action input.
 - Keep GitHub App credentials, git publication, verification, and policy in the
   root host pipeline. Never add browser-side GitHub or push logic.
 - The registry is durable and single-operator. A restart reconciles an active

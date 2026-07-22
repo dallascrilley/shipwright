@@ -15,19 +15,24 @@ import {
 } from "../shared/agent-definition";
 import {
   agentListFilterSchema,
+  buildAgentDefinitionDocument,
   buildAgentDetail,
   buildAgentList,
+  type AgentDefinitionExport,
   type AgentDetailView,
   type AgentListFilter,
   type AgentListItem,
 } from "../shared/agent-management";
 import type { OperatorRunRecord } from "../shared/operator-run";
+import type { AgentRepositoryOption } from "../shared/repository-catalog";
 import {
   AgentControlPlane,
   JsonFileAgentControlPlaneStore,
   MemoryAgentControlPlaneStore,
   type AgentControlPlaneStore,
   type CreateTriggerInput,
+  type RemoveTriggerInput,
+  type ReplaceTriggerInput,
 } from "./agent-control-plane";
 import { getOperatorRunRegistry, isOperatorDemoMode } from "./operator-runs";
 import {
@@ -36,13 +41,19 @@ import {
 } from "./control-plane-runtime";
 import { QueueDispatcher } from "./queue-dispatcher";
 import { operatorPipelineQueueRunner } from "./queue-runner";
+import { getAgentRepositoryCatalog } from "./repository-catalog";
 import { ScheduleLifecycleService, ScheduleScheduler } from "./schedule-runner";
+
+export interface RepositorySelectionGuard {
+  assertSelectable(repository: string): Promise<AgentRepositoryOption>;
+}
 
 export interface AgentManagementDependencies {
   store?: AgentControlPlaneStore;
   createId?: () => string;
   now?: () => string;
   operatorRuns?: () => readonly OperatorRunRecord[];
+  repositoryCatalog?: RepositorySelectionGuard;
 }
 
 export interface AgentRevisionSaveInput {
@@ -77,6 +88,7 @@ export class AgentManagementService {
   readonly #createId: () => string;
   readonly #now: () => string;
   readonly #operatorRuns: () => readonly OperatorRunRecord[];
+  readonly #repositoryCatalog: RepositorySelectionGuard;
 
   constructor(dependencies: AgentManagementDependencies = {}) {
     this.#store = dependencies.store ?? createDefaultControlPlaneStore();
@@ -85,6 +97,8 @@ export class AgentManagementService {
     this.#now = dependencies.now ?? (() => new Date().toISOString());
     this.#operatorRuns =
       dependencies.operatorRuns ?? (() => getOperatorRunRegistry().list(200));
+    this.#repositoryCatalog =
+      dependencies.repositoryCatalog ?? getAgentRepositoryCatalog();
     this.#controlPlane = new AgentControlPlane(
       this.#store,
       this.#createId,
@@ -110,20 +124,68 @@ export class AgentManagementService {
     );
   }
 
-  createAgent(input: AgentDraftInput): AgentDefinition {
-    return this.#controlPlane.createAgent(agentDraftSchema.parse(input));
+  async createAgent(input: AgentDraftInput): Promise<AgentDefinition> {
+    const draft = agentDraftSchema.parse(input);
+    const repository = await this.#repositoryCatalog.assertSelectable(
+      draft.targetScope.repository,
+    );
+    return this.#controlPlane.createAgent({
+      ...draft,
+      targetScope: {
+        ...draft.targetScope,
+        repository: repository.repository,
+      },
+    });
   }
 
-  saveAgent(input: AgentRevisionSaveInput): AgentDefinition {
+  async saveAgent(input: AgentRevisionSaveInput): Promise<AgentDefinition> {
+    const draft = agentDraftSchema.parse(input.draft);
+    const snapshot = this.#store.load();
+    const agent = requireAgent(snapshot, input.agentId);
+    const currentRevision = snapshot.revisions.find(
+      (revision) =>
+        revision.agentId === agent.agentId &&
+        revision.revision === agent.currentRevision,
+    );
+    if (!currentRevision) {
+      throw new Error(
+        `Missing revision ${agent.currentRevision} for ${agent.agentId}.`,
+      );
+    }
+    const currentRepository = currentRevision.draft.targetScope.repository
+      .trim()
+      .toLowerCase();
+    const requestedRepository = draft.targetScope.repository.trim().toLowerCase();
+    const repository =
+      currentRepository === requestedRepository
+        ? requestedRepository
+        : (
+            await this.#repositoryCatalog.assertSelectable(requestedRepository)
+          ).repository;
     return this.#controlPlane.updateAgent(
       input.agentId,
       input.expectedRevision,
-      agentDraftSchema.parse(input.draft),
+      {
+        ...draft,
+        targetScope: { ...draft.targetScope, repository },
+      },
     );
   }
 
   createTrigger(input: CreateTriggerInput): AgentTrigger {
     return this.#controlPlane.createTrigger(input);
+  }
+
+  removeTrigger(input: RemoveTriggerInput): AgentTrigger {
+    return this.#controlPlane.removeTrigger(input);
+  }
+
+  replaceTrigger(input: ReplaceTriggerInput): AgentTrigger {
+    return this.#controlPlane.replaceTrigger(input);
+  }
+
+  exportAgentDefinition(agentId: string): AgentDefinitionExport {
+    return buildAgentDefinitionDocument(this.#store.load(), agentId);
   }
 
   setAgentEnabled(input: AgentEnableInput): AgentDefinition {
@@ -175,6 +237,7 @@ export class AgentManagementService {
     return this.#dispatcher.enqueue({
       agentId: agent.agentId,
       source: "test",
+      allowDisabledAgentForTest: true,
       idempotencyKey: `test:${agent.agentId}:${agent.currentRevision}:${this.#createId()}`,
       target: { ...input.target, owner, repo },
     });

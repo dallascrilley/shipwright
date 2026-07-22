@@ -105,6 +105,14 @@ The command refuses a dirty checkout, uploads the exact current commit to a new 
 
 Before the first deploy, create `/etc/shipwright/shipwright.env` from `deploy/shipwright.env.example` and write the GitHub App key to `/etc/shipwright/github-app.pem`. Retrieve values from the existing 1Password items without printing them. Both files must be owned by `root:shipwright` with mode `0640`; `/etc/shipwright` is `root:shipwright` with mode `0750`, so the service can read but cannot rewrite its own credentials.
 
+The repository policy should remain owner-bound:
+
+```dotenv
+GITHUB_REPOSITORY_ALLOWLIST=dallascrilley/*,DallasCrilleyMarTech/*
+```
+
+This allowlist is only a Shipwright guardrail. The configured GitHub App must also be installed on both owners with access to the intended repositories. Leave `GITHUB_APP_INSTALLATION_ID` empty when the selector should enumerate repositories across every installation of that App; each run still resolves and verifies its repository installation before work starts.
+
 Production must set a random `BETTER_AUTH_SECRET` of at least 32 characters. Do not set `AUTH_DISABLED`. In Tailscale-only mode the tailnet is an additional network boundary; in public HTTPS mode Better Auth is the *sole* access control, so the secret strength and account hygiene matter even more. Authentication is never a function of the network path.
 
 ## Private access
