@@ -22,3 +22,7 @@
 - Repository permissions: metadata read, issues read, contents read/write, and pull requests read/write. OAuth, device flow, and webhooks are disabled.
 - Private key: stored in 1Password's `Private` vault as item `qco4aporpanrmwxvnxcdtbpvhu` (`Shipwright DCM GitHub App`). The item is the authoritative secret store; never commit or print its credential value.
 - Local invocation: read the App ID from `op://Private/Shipwright DCM GitHub App/username` and the private key from `op://Private/Shipwright DCM GitHub App/credential`; set `GITHUB_APP_INSTALLATION_ID=147693967` and `GITHUB_REPOSITORY_ALLOWLIST=DallasCrilleyMarTech/.hub`.
+
+## Repository allowlist format
+
+`GITHUB_REPOSITORY_ALLOWLIST` accepts a comma-separated mix of exact `owner/repo` entries and owner scopes written `owner/*`, which permit every repository under that owner (for example `dallascrilley/*, DallasCrilleyMarTech/*`). A bare `*` or `*/*` is rejected — scopes are always owner-bound. The GitHub App installation must also grant access to the repositories a scope is meant to cover; Shipwright's own guardrail never widens what the installation can reach.

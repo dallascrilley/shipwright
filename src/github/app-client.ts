@@ -1,6 +1,6 @@
 import { App } from "@octokit/app";
 import { Octokit } from "@octokit/rest";
-import type { GitHubConfig } from "../config/github.js";
+import { isRepositoryAllowed, type GitHubConfig } from "../config/github.js";
 import type {
   IssueContext,
   IssueRef,
@@ -52,7 +52,7 @@ export function extractInstallationToken(
 
 export function validateInstallationRepositories(
   repositoryNames: string[],
-  allowedRepositories: ReadonlySet<string>,
+  isAllowed: (repository: string) => boolean,
   requestedRepository: string,
 ): void {
   const canonicalNames = repositoryNames.map((name) => name.toLowerCase());
@@ -60,7 +60,7 @@ export function validateInstallationRepositories(
   if (!canonicalNames.includes(requestedName)) {
     throw new Error("GitHub App installation token cannot access the requested repository");
   }
-  if (canonicalNames.some((name) => !allowedRepositories.has(name))) {
+  if (canonicalNames.some((name) => !isAllowed(name))) {
     throw new Error("GitHub App installation token exposes a repository outside the GitHub repository allowlist");
   }
 }
@@ -125,7 +125,7 @@ export async function authorizePullRequest(
   config: GitHubConfig,
   transport: GitHubTransport,
 ): Promise<AuthorizedPullRequest> {
-  if (!config.allowedRepositories.has(`${ref.owner}/${ref.repo}`.toLowerCase())) {
+  if (!isRepositoryAllowed(config, `${ref.owner}/${ref.repo}`)) {
     throw new Error("repository is not in the GitHub repository allowlist");
   }
   const installationId = config.installationId ?? (await transport.resolveInstallation(ref));
@@ -138,7 +138,7 @@ export async function authorizePullRequest(
   const repositoryClient = repositorySession.client;
   const repository = await repositoryClient.getRepository();
   const canonicalName = `${repository.owner}/${repository.name}`.toLowerCase();
-  if (!config.allowedRepositories.has(canonicalName)) {
+  if (!isRepositoryAllowed(config, canonicalName)) {
     throw new Error("canonical repository is not in the GitHub repository allowlist");
   }
   const pullRequest = await repositoryClient.getPullRequest(ref.number);
@@ -175,7 +175,7 @@ export async function authorizeIssue(
   config: GitHubConfig,
   transport: GitHubTransport,
 ): Promise<AuthorizedIssue> {
-  if (!config.allowedRepositories.has(`${ref.owner}/${ref.repo}`.toLowerCase())) {
+  if (!isRepositoryAllowed(config, `${ref.owner}/${ref.repo}`)) {
     throw new Error("repository is not in the GitHub repository allowlist");
   }
   const installationId = config.installationId ?? (await transport.resolveInstallation(ref));
@@ -187,7 +187,7 @@ export async function authorizeIssue(
   });
   const repositoryClient = repositorySession.client;
   const repository = await repositoryClient.getRepository();
-  if (!config.allowedRepositories.has(`${repository.owner}/${repository.name}`.toLowerCase())) {
+  if (!isRepositoryAllowed(config, `${repository.owner}/${repository.name}`)) {
     throw new Error("canonical repository is not in the GitHub repository allowlist");
   }
   const issue = await repositoryClient.getIssue(ref.number);
@@ -229,7 +229,7 @@ export function createOctokitTransport(config: GitHubConfig): GitHubTransport {
       );
       validateInstallationRepositories(
         repositories.map((repository) => repository.full_name),
-        config.allowedRepositories,
+        (name) => isRepositoryAllowed(config, name),
         `${input.owner}/${input.repo}`,
       );
       const client: RepositoryClient & PullRequestApi & ReviewApi = {

@@ -7,7 +7,7 @@ import {
   validateInstallationRepositories,
   type GitHubTransport,
 } from "../../src/github/app-client.js";
-import type { GitHubConfig } from "../../src/config/github.js";
+import { isRepositoryAllowed, type GitHubConfig } from "../../src/config/github.js";
 
 const requiredPermissions = {
   contents: "write",
@@ -15,6 +15,13 @@ const requiredPermissions = {
   pull_requests: "write",
   metadata: "read",
 } as const;
+
+const allow = (repositories: string[], owners: string[] = []) =>
+  (name: string) =>
+    isRepositoryAllowed(
+      { allowedRepositories: new Set(repositories), allowedOwners: new Set(owners) },
+      name,
+    );
 
 test("installation auth avoids GitHub's broken dot-repository token narrowing", () => {
   expect(buildInstallationAuthOptions({
@@ -40,15 +47,21 @@ test("installation auth accepts only the exact required permission set", () => {
 test("installation auth rejects repository access outside the operator allowlist", () => {
   expect(() => validateInstallationRepositories(
     ["DallasCrilleyMarTech/.hub"],
-    new Set(["dallascrilleymartech/.hub"]),
+    allow(["dallascrilleymartech/.hub"]),
     "DallasCrilleyMarTech/.hub",
   )).not.toThrow();
 
   expect(() => validateInstallationRepositories(
     ["DallasCrilleyMarTech/.hub", "DallasCrilleyMarTech/other"],
-    new Set(["dallascrilleymartech/.hub"]),
+    allow(["dallascrilleymartech/.hub"]),
     "DallasCrilleyMarTech/.hub",
   )).toThrow("outside the GitHub repository allowlist");
+
+  expect(() => validateInstallationRepositories(
+    ["DallasCrilleyMarTech/.hub", "DallasCrilleyMarTech/other"],
+    allow([], ["dallascrilleymartech"]),
+    "DallasCrilleyMarTech/.hub",
+  )).not.toThrow();
 });
 
 test("authorizeIssue scopes authentication and returns immutable issue context", async () => {
@@ -80,6 +93,7 @@ test("authorizeIssue scopes authentication and returns immutable issue context",
     appId: 1,
     privateKey: "key",
     allowedRepositories: new Set(["acme/widget"]),
+    allowedOwners: new Set(),
   };
 
   const authorized = await authorizeIssue(
@@ -124,7 +138,7 @@ test("authorizePullRequest returns exact same-repository head and review context
       };
     },
   };
-  const config: GitHubConfig = { appId: 1, privateKey: "key", allowedRepositories: new Set(["acme/widget"]) };
+  const config: GitHubConfig = { appId: 1, privateKey: "key", allowedRepositories: new Set(["acme/widget"]), allowedOwners: new Set() };
   const authorized = await authorizePullRequest(
     { owner: "acme", repo: "widget", number: 4, url: "https://github.com/acme/widget/pull/4" },
     config,
@@ -157,7 +171,7 @@ test("authorizePullRequest rejects fork heads", async () => {
       };
     },
   };
-  const config: GitHubConfig = { appId: 1, privateKey: "key", allowedRepositories: new Set(["acme/widget"]) };
+  const config: GitHubConfig = { appId: 1, privateKey: "key", allowedRepositories: new Set(["acme/widget"]), allowedOwners: new Set() };
   await expect(authorizePullRequest(
     { owner: "acme", repo: "widget", number: 4, url: "https://github.com/acme/widget/pull/4" },
     config,
@@ -171,7 +185,7 @@ test("authorizeIssue rejects repositories outside the allowlist before API acces
     async resolveInstallation() { called = true; return 1; },
     async createRepositoryClient() { throw new Error("unreachable"); },
   };
-  const config: GitHubConfig = { appId: 1, privateKey: "key", allowedRepositories: new Set(["other/repo"]) };
+  const config: GitHubConfig = { appId: 1, privateKey: "key", allowedRepositories: new Set(["other/repo"]), allowedOwners: new Set() };
   await expect(authorizeIssue(
     { owner: "acme", repo: "widget", number: 3, url: "https://github.com/acme/widget/issues/3" },
     config,

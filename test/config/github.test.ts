@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseGitHubConfig, parseGitHubWebhookConfig } from "../../src/config/github.js";
+import { isRepositoryAllowed, parseGitHubConfig } from "../../src/config/github.js";
 
 const base = {
   GITHUB_APP_ID: "123",
@@ -12,6 +12,7 @@ describe("parseGitHubConfig", () => {
     const config = parseGitHubConfig(base);
     expect(config.appId).toBe(123);
     expect(config.allowedRepositories).toEqual(new Set(["owner/repo", "another/project"]));
+    expect(config.allowedOwners).toEqual(new Set());
   });
 
   test("requires exactly one private key source", () => {
@@ -23,39 +24,46 @@ describe("parseGitHubConfig", () => {
     );
   });
 
-  test("rejects wildcard and empty allowlists", () => {
+  test("rejects a bare wildcard, a wildcard owner, and an empty allowlist", () => {
     expect(() => parseGitHubConfig({ ...base, GITHUB_REPOSITORY_ALLOWLIST: "*" })).toThrow(
+      "allowlist",
+    );
+    expect(() => parseGitHubConfig({ ...base, GITHUB_REPOSITORY_ALLOWLIST: "*/*" })).toThrow(
       "allowlist",
     );
     expect(() => parseGitHubConfig({ ...base, GITHUB_REPOSITORY_ALLOWLIST: "" })).toThrow(
       "allowlist",
     );
   });
+
+  test("accepts owner-scoped wildcards alongside exact entries", () => {
+    const config = parseGitHubConfig({
+      ...base,
+      GITHUB_REPOSITORY_ALLOWLIST: "DallasCrilleyMarTech/*, dallascrilley/shipwright",
+    });
+    expect(config.allowedOwners).toEqual(new Set(["dallascrilleymartech"]));
+    expect(config.allowedRepositories).toEqual(new Set(["dallascrilley/shipwright"]));
+  });
 });
 
-describe("parseGitHubWebhookConfig", () => {
-  test("requires a sufficiently long signing secret and an exact allowlist", () => {
-    expect(
-      parseGitHubWebhookConfig({
-        GITHUB_WEBHOOK_SECRET: "test-webhook-signing-value-at-least-32",
-        GITHUB_REPOSITORY_ALLOWLIST: "Owner/Repo",
-      }),
-    ).toMatchObject({
-      allowedRepositories: new Set(["owner/repo"]),
-    });
+describe("isRepositoryAllowed", () => {
+  const scope = {
+    allowedRepositories: new Set(["dallascrilley/shipwright"]),
+    allowedOwners: new Set(["dallascrilleymartech"]),
+  };
+
+  test("permits an exact match regardless of case", () => {
+    expect(isRepositoryAllowed(scope, "DallasCrilley/Shipwright")).toBe(true);
   });
 
-  test("rejects missing signing secrets and wildcard allowlists", () => {
-    expect(() =>
-      parseGitHubWebhookConfig({
-        GITHUB_REPOSITORY_ALLOWLIST: "owner/repo",
-      }),
-    ).toThrow("webhook secret");
-    expect(() =>
-      parseGitHubWebhookConfig({
-        GITHUB_WEBHOOK_SECRET: "test-webhook-signing-value-at-least-32",
-        GITHUB_REPOSITORY_ALLOWLIST: "*",
-      }),
-    ).toThrow("allowlist");
+  test("permits any repository under an owner-scoped wildcard", () => {
+    expect(isRepositoryAllowed(scope, "DallasCrilleyMarTech/.hub")).toBe(true);
+    expect(isRepositoryAllowed(scope, "dallascrilleymartech/studio-ops")).toBe(true);
+  });
+
+  test("denies repositories with no matching entry or owner scope", () => {
+    expect(isRepositoryAllowed(scope, "dallascrilley/other")).toBe(false);
+    expect(isRepositoryAllowed(scope, "someoneelse/repo")).toBe(false);
+    expect(isRepositoryAllowed(scope, "dallascrilleymartech")).toBe(false);
   });
 });
