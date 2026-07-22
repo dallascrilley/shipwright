@@ -2,6 +2,10 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type { AgentSkillProjection } from "../agent/runner.js";
 import { buildReviewPrompt, REVIEW_OUTCOME_PATH } from "../agent/review-prompt.js";
+import {
+  isProviderCapacityError,
+  PROVIDER_CAPACITY_ERROR_CODE,
+} from "../config/provider.js";
 import type { AuthorizedPullRequest } from "../github/app-client.js";
 import { parsePullRequestUrl } from "../github/pull-request-ref.js";
 import { findMarkedReply, reviewRunMarker, unresolvedCurrentThreads } from "../github/review-client.js";
@@ -15,27 +19,13 @@ import { type ReviewRunPhase, type ReviewRunReceipt, writeReviewReceipt } from "
 /**
  * Coding-provider quota/usage-limit exhaustion (e.g. an HTTP 403 "usage limit"
  * from Kimi) is an operator billing condition, not an agent or code defect. We
- * classify it distinctly so operators and automation can tell "the provider is
- * out of quota — wait for the cycle, upgrade, or add a fallback provider" apart
- * from a genuine agent failure. Automatic fallback to a second provider is left
- * to the operator: it needs a configured secondary provider and a spend
- * decision, so it is not attempted here.
+ * classify it distinctly so operators and automation can tell "the configured
+ * provider chain is out of capacity" apart from a genuine agent failure.
  */
-export const PROVIDER_QUOTA_ERROR_CODE = "provider_quota_exhausted";
-
-const PROVIDER_QUOTA_SIGNATURES: readonly RegExp[] = [
-  /usage limit/i,
-  /\bquota\b/i,
-  /billing cycle/i,
-  /upgrade your plan/i,
-  /purchase extra usage/i,
-  /insufficient (?:credit|quota|balance)/i,
-  /out of credits?/i,
-  /exceeded your (?:usage|credit)/i,
-];
+export const PROVIDER_QUOTA_ERROR_CODE = PROVIDER_CAPACITY_ERROR_CODE;
 
 export function isProviderQuotaError(message: string): boolean {
-  return PROVIDER_QUOTA_SIGNATURES.some((pattern) => pattern.test(message));
+  return isProviderCapacityError(message);
 }
 
 export interface ReviewWorkspacePort {

@@ -16,8 +16,14 @@ export type RunPhase =
 export interface AgentExecution {
   readonly runtime: "agentos";
   readonly software: "pi";
-  readonly provider: ProviderConfig["name"];
-  readonly model: string;
+  provider: ProviderConfig["name"];
+  model: string;
+  fallbackUsed?: boolean;
+  attempts?: Array<{
+    provider: ProviderConfig["name"];
+    model: string;
+    outcome: "capacity_failed" | "failed" | "succeeded";
+  }>;
 }
 
 export interface DemoExecution {

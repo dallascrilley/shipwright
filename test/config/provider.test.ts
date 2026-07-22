@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveProvider } from "../../src/config/provider.js";
+import { resolveProvider, resolveProviderChain } from "../../src/config/provider.js";
 
 describe("resolveProvider", () => {
   test("selects an explicitly requested configured provider", () => {
@@ -33,5 +33,26 @@ describe("resolveProvider", () => {
   test("fails clearly when no configured provider exists", () => {
     expect(() => resolveProvider({})).toThrow("API_KEY");
     expect(() => resolveProvider({ AGENTOS_PROVIDER: "openai" })).toThrow("AGENTOS_PROVIDER");
+  });
+
+  test("builds an explicit OpenAI Codex fallback after Kimi", () => {
+    expect(resolveProviderChain({
+      AGENTOS_PROVIDER: "kimi",
+      AGENTOS_MODEL: "k3",
+      KIMI_API_KEY: "kimi-key",
+      AGENTOS_FALLBACK_PROVIDER: "openai-codex",
+      AGENTOS_FALLBACK_MODEL: "gpt-5.4",
+      OPENAI_API_KEY: "openai-key",
+    })).toEqual([
+      { name: "kimi", model: "k3", env: { KIMI_API_KEY: "kimi-key" } },
+      { name: "openai-codex", model: "gpt-5.4", env: { OPENAI_API_KEY: "openai-key" } },
+    ]);
+  });
+
+  test("requires the fallback provider credential", () => {
+    expect(() => resolveProviderChain({
+      KIMI_API_KEY: "kimi-key",
+      AGENTOS_FALLBACK_PROVIDER: "openai-codex",
+    })).toThrow("AGENTOS_FALLBACK_PROVIDER");
   });
 });
