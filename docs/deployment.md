@@ -102,9 +102,13 @@ deploy/control-plane-state.sh backup /var/lib/shipwright /var/lib/shipwright/bac
 deploy/control-plane-state.sh restore /var/lib/shipwright/backups/agent-control-plane.json.<stamp> /var/lib/shipwright
 ```
 
-Restore validates the JSON parses as a version-1 snapshot before atomically
-replacing live state. A nightly cron `backup` run with 30-day retention is
-sufficient; test restore quarterly.
+Restore validates the JSON parses as a version-1 snapshot, writes mode `0600`,
+and preserves the existing live snapshot's numeric owner and group before
+atomically replacing it. If no live snapshot exists, restore uses the state
+directory owner and group. An operator may set `SHIPWRIGHT_STATE_OWNER=<uid>:<gid>`
+for a deliberate numeric override. A nightly cron `backup` run with 30-day
+retention is sufficient; test restore quarterly and confirm `/readyz` remains
+HTTP 200 after the service restarts.
 
 ## Provision
 
