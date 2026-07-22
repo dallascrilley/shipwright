@@ -6,6 +6,7 @@ import {
   createAndRunPiAgent,
   PiAgentOutputError,
   runPiAgent,
+  runSandboxPiAgent,
   type AgentVm,
   type AgentOsRuntime,
 } from "../../src/agent/runner.js";
@@ -96,6 +97,126 @@ test("runPiAgent rejects Codex auth files readable by other users", async () => 
       name: "openai-codex",
       model: "gpt-5.4",
     }, "fix it")).rejects.toThrow("unreadable, invalid, or not owner-only");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("createAndRunPiAgent routes Codex through Pi in the existing disposable workspace", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "shipwright-codex-auth-"));
+  const authFile = join(directory, "auth.json");
+  const expires = Math.floor(Date.now() / 1000) + 3600;
+  const access = `header.${Buffer.from(JSON.stringify({ exp: expires })).toString("base64url")}.signature`;
+  writeFileSync(authFile, JSON.stringify({
+    tokens: {
+      id_token: "must-not-be-projected",
+      access_token: access,
+      refresh_token: "refresh-token",
+      account_id: "account-id",
+    },
+  }), { mode: 0o600 });
+  const writes = new Map<string, string>();
+  const runs: Array<{ command: string; args?: string[]; env?: Record<string, string> }> = [];
+  const success = {
+    exitCode: 0,
+    stdout: "done\n",
+    stderr: "",
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    timedOut: false,
+    durationMs: 12,
+  };
+  const workspace = {
+    client: {
+      async writeFsFile({ path }: { path: string }, content: string) {
+        writes.set(path, content);
+      },
+    },
+    async runOrThrow(_label: string, request: { command: string; args?: string[] }) {
+      runs.push(request);
+      return success;
+    },
+    async run(request: { command: string; args?: string[]; env?: Record<string, string> }) {
+      runs.push(request);
+      return success;
+    },
+  };
+
+  try {
+    await expect(createAndRunPiAgent(
+      workspace as never,
+      { authFile, env: {}, name: "openai-codex", model: "gpt-5.4" },
+      "fix it",
+      5_000,
+      [{ name: "fix-review-findings", content: "skill body" }],
+      {
+        async createSidecar() { throw new Error("AgentOS must not start for Codex"); },
+        async create() { throw new Error("AgentOS must not start for Codex"); },
+      },
+    )).resolves.toBe("done\n");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+
+  const projected = writes.get("/tmp/shipwright-pi-agent/auth.json")!;
+  expect(JSON.parse(projected)).toEqual({
+    "openai-codex": {
+      type: "oauth",
+      access,
+      refresh: "refresh-token",
+      expires: expires * 1000,
+      accountId: "account-id",
+    },
+  });
+  expect(projected).not.toContain("must-not-be-projected");
+  expect(writes.get("/tmp/shipwright-pi-agent/skills/fix-review-findings/SKILL.md")).toBe("skill body");
+  const prompt = runs.find((run) => run.command === "node")!;
+  expect(prompt.args).toContain("/opt/shipwright/node_modules/@mariozechner/pi-coding-agent/dist/cli.js");
+  expect(prompt.args).toContain("fix it");
+  expect(prompt.env).toEqual({
+    HOME: "/tmp/shipwright-pi-home",
+    PI_CODING_AGENT_DIR: "/tmp/shipwright-pi-agent",
+  });
+  expect(JSON.stringify(prompt)).not.toContain("refresh-token");
+  expect(runs.at(-1)).toMatchObject({
+    command: "rm",
+    args: ["-rf", "--", "/tmp/shipwright-pi-agent", "/tmp/shipwright-pi-home"],
+  });
+});
+
+test("runSandboxPiAgent normalizes Codex CLI failures without leaking stderr", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "shipwright-codex-auth-"));
+  const authFile = join(directory, "auth.json");
+  const access = `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url")}.signature`;
+  writeFileSync(authFile, JSON.stringify({
+    tokens: { access_token: access, refresh_token: "refresh-token", account_id: "account-id" },
+  }), { mode: 0o600 });
+  const result = {
+    exitCode: 1,
+    stdout: "",
+    stderr: "401 unauthorized bearer sensitive-upstream-value",
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    timedOut: false,
+    durationMs: 12,
+  };
+  const workspace = {
+    client: { async writeFsFile() {} },
+    async runOrThrow() { return { ...result, exitCode: 0, stderr: "" }; },
+    async run(request: { command: string }) {
+      return request.command === "node" ? result : { ...result, exitCode: 0, stderr: "" };
+    },
+  };
+
+  try {
+    const run = runSandboxPiAgent(
+      workspace as never,
+      { authFile, env: {}, name: "openai-codex", model: "gpt-5.4" },
+      "fix it",
+      5_000,
+    );
+    await expect(run).rejects.toThrow("OpenAI Codex OAuth authentication failed");
+    await expect(run).rejects.not.toThrow("sensitive-upstream-value");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

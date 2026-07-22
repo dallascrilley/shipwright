@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createHostDirBackend, type ToolKit } from "@rivet-dev/agentos-core";
 import { SandboxAgent, type ProcessRunRequest, type ProcessRunResponse } from "sandbox-agent";
@@ -11,7 +12,8 @@ import { z } from "zod";
 
 const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
-const SANDBOX_WORKSPACE = "/home/sandbox/workspace";
+export const SANDBOX_WORKSPACE = "/home/sandbox/workspace";
+export const SANDBOX_PI_NODE_MODULES = "/opt/shipwright/node_modules";
 export const AGENT_WORKSPACE = "/workspace";
 export const DEFAULT_SANDBOX_IMAGE =
   "rivetdev/sandbox-agent@sha256:640cfb725a94b8a47967e0c2ec153d3ab267244f517f700e8f82f1e4d55b2ea2";
@@ -72,6 +74,12 @@ export function resolveSandboxContainerUser(
   return platform === "linux" && uid !== undefined && gid !== undefined ? `${uid}:${gid}` : undefined;
 }
 
+export function resolvePiNodeModulesDirectory(): string {
+  const entryPath = fileURLToPath(import.meta.resolve("@mariozechner/pi-coding-agent"));
+  const packageRoot = dirname(dirname(entryPath));
+  return dirname(dirname(packageRoot));
+}
+
 export function requireSuccessfulCommand(label: string, result: ProcessRunResponse): ProcessRunResponse {
   if (result.timedOut) throw new Error(`${label} timed out`);
   if (result.stdoutTruncated || result.stderrTruncated) {
@@ -101,7 +109,10 @@ export class SandboxWorkspace {
       const client = await SandboxAgent.start({
         sandbox: docker({
           image: resolveSandboxImage(process.env.SHIPWRIGHT_SANDBOX_IMAGE),
-          binds: [`${hostWorkspace}:${SANDBOX_WORKSPACE}`],
+          binds: [
+            `${hostWorkspace}:${SANDBOX_WORKSPACE}`,
+            `${resolvePiNodeModulesDirectory()}:${SANDBOX_PI_NODE_MODULES}:ro`,
+          ],
           createContainerOptions: containerUser ? { User: containerUser } : undefined,
         }),
       });
