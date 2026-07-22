@@ -5,6 +5,7 @@ import { parseIssueUrl } from "../github/issue-ref.js";
 import { openOrReusePullRequest, pullRequestBody } from "../github/publisher.js";
 import type { PullRequestResult } from "../github/types.js";
 import { buildProgrammingPrompt } from "../agent/prompt.js";
+import { PI_AGENT_OUTPUT_ERROR_CODE, PiAgentOutputError } from "../agent/runner.js";
 import {
   isProviderCapacityError,
   PROVIDER_CAPACITY_ERROR_CODE,
@@ -170,9 +171,11 @@ export async function runShipwright(request: RunRequest, deps: PipelineDependenc
         ? error
         : new PipelineError(
             receipt.phase,
-            receipt.phase === "agent" && isProviderCapacityError(message)
-              ? PROVIDER_CAPACITY_ERROR_CODE
-              : `${receipt.phase}_failed`,
+            receipt.phase === "agent" && error instanceof PiAgentOutputError
+              ? PI_AGENT_OUTPUT_ERROR_CODE
+              : receipt.phase === "agent" && isProviderCapacityError(message)
+                ? PROVIDER_CAPACITY_ERROR_CODE
+                : `${receipt.phase}_failed`,
             message,
             { cause: error },
           );
