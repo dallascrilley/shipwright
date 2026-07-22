@@ -21,7 +21,7 @@ Existing trigger records with no conditions continue to match exactly as they do
 - [x] (2026-07-22 23:30Z) Grounded the plan in the approved R1-R13 requirements, current shared schemas, management service, operator console, signed webhook route, queue idempotency, and tests.
 - [x] (2026-07-22 23:34Z) Resolved compatibility, export versioning, evaluator placement, multi-trigger convergence, evidence, and normalization as planning decisions.
 - [x] (2026-07-22 23:38Z) Imported epic `td-18bac8` with U1 `td-049b5b`, U2 `td-adf814`, U3 `td-97bc77`, and U4 `td-f806ac`; verified the import receipt.
-- [ ] U1: Define typed trigger conditions and versioned export.
+- [x] (2026-07-22 23:45Z) U1: Added strict typed condition schemas, event-aware validation, bounded normalization, readable summaries, version-1 export compatibility, and current version-2 output; 133 UI tests and typecheck pass.
 - [ ] U2: Evaluate signed webhook conditions before queueing.
 - [ ] U3: Add the readable event-aware condition editor.
 - [ ] U4: Prove the public route, UI, safety, regressions, and documentation.
@@ -54,7 +54,7 @@ Existing trigger records with no conditions continue to match exactly as they do
 
 ## Decision Log
 
-- Decision: Keep the durable control-plane snapshot at version 1 and add `conditions` as an optional field normalized to an empty array. Rationale: absence already has the correct unconditional meaning, so no snapshot migration or rewrite is needed. Date/Author: 2026-07-22 / Codex.
+- Decision: Keep the durable control-plane snapshot at version 1 and add `conditions` as an optional field. Preserve absence when parsing legacy records, treat absence as an empty array in all consumers, and emit an explicit array in version-2 exports. Rationale: absence already has the correct unconditional meaning, so no snapshot migration or rewrite is needed, and old persisted objects retain their original shape. Date/Author: 2026-07-22 / Codex.
 - Decision: Model conditions as a strict discriminated union keyed by `field`, with only the operators and value shapes allowed for that field. Add event-aware refinement at the curated GitHub trigger boundary. Rationale: invalid combinations fail before persistence and downstream code remains exhaustive. Date/Author: 2026-07-22 / Codex.
 - Decision: Preserve both `agentDefinitionExportV1Schema` and `agentDefinitionExportV2Schema`, expose a union for compatibility, and make the current exporter emit version 2 with normalized conditions. Rationale: Copy-as-JSON is versioned public output even though import is out of scope. Date/Author: 2026-07-22 / Codex.
 - Decision: Trim configured membership values and remove exact duplicates while preserving first-entered casing and order. Perform actor/label case folding only during evaluation; compare base branches exactly. Rationale: deterministic exports stay readable without changing specified comparison behavior. Date/Author: 2026-07-22 / Codex.

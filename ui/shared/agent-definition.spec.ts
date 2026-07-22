@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  GITHUB_TRIGGER_CONDITION_LIMITS,
   GITHUB_TRIGGER_CHOICES,
   agentControlPlaneSnapshotSchema,
   agentDraftSchema,
@@ -8,6 +9,7 @@ import {
   curatedGithubTriggerConfigSchema,
   executionRequestSchema,
   findGithubTriggerChoice,
+  githubTriggerConditionSchema,
   lifecycleEventSchema,
   queueEntrySchema,
 } from "./agent-definition";
@@ -74,6 +76,128 @@ describe("agentDefinition contracts", () => {
     });
     if (!("event" in legacy.config)) throw new Error("expected GitHub config");
     expect(findGithubTriggerChoice(legacy.config)).toBeUndefined();
+  });
+
+  test("accepts and normalizes typed event-aware GitHub conditions", () => {
+    const issueConfig = curatedGithubTriggerConfigSchema.parse({
+      event: "issues",
+      actions: ["opened"],
+      conditions: [
+        {
+          field: "actor",
+          operator: "is_one_of",
+          values: [" Alice ", "alice", "BOB", "BOB "],
+        },
+        {
+          field: "labels",
+          operator: "include_all",
+          values: [" Bug ", "bug", "Urgent"],
+        },
+      ],
+    });
+
+    expect(issueConfig.conditions).toEqual([
+      {
+        field: "actor",
+        operator: "is_one_of",
+        values: ["Alice", "BOB"],
+      },
+      {
+        field: "labels",
+        operator: "include_all",
+        values: ["Bug", "Urgent"],
+      },
+    ]);
+
+    const pullRequestConfig = curatedGithubTriggerConfigSchema.parse({
+      event: "pull_request",
+      actions: ["opened"],
+      conditions: [
+        {
+          field: "base_branch",
+          operator: "is_not_one_of",
+          values: ["main", "Main", "main"],
+        },
+        { field: "draft_state", operator: "is_not_draft" },
+      ],
+    });
+
+    expect(pullRequestConfig.conditions).toEqual([
+      {
+        field: "base_branch",
+        operator: "is_not_one_of",
+        values: ["main", "Main"],
+      },
+      { field: "draft_state", operator: "is_not_draft" },
+    ]);
+  });
+
+  test("rejects unsupported condition combinations and out-of-bound values", () => {
+    expect(
+      curatedGithubTriggerConfigSchema.safeParse({
+        event: "issues",
+        actions: ["opened"],
+        conditions: [
+          {
+            field: "base_branch",
+            operator: "is_one_of",
+            values: ["main"],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      githubTriggerConditionSchema.safeParse({
+        field: "labels",
+        operator: "is_one_of",
+        values: ["bug"],
+      }).success,
+    ).toBe(false);
+    expect(
+      githubTriggerConditionSchema.safeParse({
+        field: "draft_state",
+        operator: "is_draft",
+        values: ["true"],
+      }).success,
+    ).toBe(false);
+    expect(
+      curatedGithubTriggerConfigSchema.safeParse({
+        event: "issues",
+        actions: ["opened"],
+        conditions: Array.from(
+          { length: GITHUB_TRIGGER_CONDITION_LIMITS.rows + 1 },
+          () => ({
+            field: "actor",
+            operator: "is_one_of",
+            values: ["octocat"],
+          }),
+        ),
+      }).success,
+    ).toBe(false);
+    expect(
+      githubTriggerConditionSchema.safeParse({
+        field: "actor",
+        operator: "is_one_of",
+        values: Array.from(
+          { length: GITHUB_TRIGGER_CONDITION_LIMITS.values + 1 },
+          (_, index) => `user-${index}`,
+        ),
+      }).success,
+    ).toBe(false);
+    expect(
+      githubTriggerConditionSchema.safeParse({
+        field: "base_branch",
+        operator: "is_one_of",
+        values: ["x".repeat(GITHUB_TRIGGER_CONDITION_LIMITS.valueLength + 1)],
+      }).success,
+    ).toBe(false);
+    expect(
+      githubTriggerConditionSchema.safeParse({
+        field: "labels",
+        operator: "include_any",
+        values: ["   "],
+      }).success,
+    ).toBe(false);
   });
 
   test("accepts an allowlisted dry-run draft", () => {

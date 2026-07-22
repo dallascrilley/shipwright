@@ -134,10 +134,128 @@ export const GITHUB_TRIGGER_CHOICES = [
 export type GithubTriggerChoice = (typeof GITHUB_TRIGGER_CHOICES)[number];
 export type GithubTriggerChoiceId = GithubTriggerChoice["id"];
 
+export const GITHUB_TRIGGER_CONDITION_LIMITS = {
+  rows: 10,
+  values: 25,
+  valueLength: 100,
+} as const;
+
+const githubTriggerConditionValueSchema = safeText(
+  GITHUB_TRIGGER_CONDITION_LIMITS.valueLength,
+);
+
+function membershipValuesSchema(caseInsensitive: boolean) {
+  return z
+    .array(githubTriggerConditionValueSchema)
+    .min(1)
+    .max(GITHUB_TRIGGER_CONDITION_LIMITS.values)
+    .transform((values) => {
+      const seen = new Set<string>();
+      return values.filter((value) => {
+        const key = caseInsensitive ? value.toLowerCase() : value;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    });
+}
+
+const actorConditionSchema = z
+  .object({
+    field: z.literal("actor"),
+    operator: z.enum(["is_one_of", "is_not_one_of"]),
+    values: membershipValuesSchema(true),
+  })
+  .strict();
+
+const labelsConditionSchema = z
+  .object({
+    field: z.literal("labels"),
+    operator: z.enum(["include_any", "include_all", "include_none"]),
+    values: membershipValuesSchema(true),
+  })
+  .strict();
+
+const baseBranchConditionSchema = z
+  .object({
+    field: z.literal("base_branch"),
+    operator: z.enum(["is_one_of", "is_not_one_of"]),
+    values: membershipValuesSchema(false),
+  })
+  .strict();
+
+const draftStateConditionSchema = z
+  .object({
+    field: z.literal("draft_state"),
+    operator: z.enum(["is_draft", "is_not_draft"]),
+  })
+  .strict();
+
+export const githubTriggerConditionSchema = z.discriminatedUnion("field", [
+  actorConditionSchema,
+  labelsConditionSchema,
+  baseBranchConditionSchema,
+  draftStateConditionSchema,
+]);
+
+export type GithubTriggerCondition = z.output<
+  typeof githubTriggerConditionSchema
+>;
+export type GithubTriggerConditionInput = z.input<
+  typeof githubTriggerConditionSchema
+>;
+
+export const GITHUB_TRIGGER_CONDITION_CATALOG = [
+  {
+    field: "actor",
+    label: "Event actor",
+    events: ["issues", "pull_request"],
+    operators: [
+      { id: "is_one_of", label: "is one of" },
+      { id: "is_not_one_of", label: "is not one of" },
+    ],
+  },
+  {
+    field: "labels",
+    label: "Labels",
+    events: ["issues", "pull_request"],
+    operators: [
+      { id: "include_any", label: "include any" },
+      { id: "include_all", label: "include all" },
+      { id: "include_none", label: "include none" },
+    ],
+  },
+  {
+    field: "base_branch",
+    label: "Base branch",
+    events: ["pull_request"],
+    operators: [
+      { id: "is_one_of", label: "is one of" },
+      { id: "is_not_one_of", label: "is not one of" },
+    ],
+  },
+  {
+    field: "draft_state",
+    label: "Draft state",
+    events: ["pull_request"],
+    operators: [
+      { id: "is_draft", label: "is draft" },
+      { id: "is_not_draft", label: "is not draft" },
+    ],
+  },
+] as const;
+
+export type GithubTriggerConditionField =
+  (typeof GITHUB_TRIGGER_CONDITION_CATALOG)[number]["field"];
+
 export const githubTriggerConfigSchema = z
   .object({
     event: z.enum(["issues", "pull_request"]),
     actions: z.array(identifierSchema).min(1).max(16),
+    conditions: z
+      .array(githubTriggerConditionSchema)
+      .max(GITHUB_TRIGGER_CONDITION_LIMITS.rows)
+      .optional(),
   })
   .strict();
 
@@ -153,10 +271,30 @@ export function findGithubTriggerChoice(
   );
 }
 
-export const curatedGithubTriggerConfigSchema = githubTriggerConfigSchema.refine(
-  (config) => findGithubTriggerChoice(config) !== undefined,
-  "Choose one supported GitHub trigger action.",
-);
+export const curatedGithubTriggerConfigSchema =
+  githubTriggerConfigSchema.superRefine((config, context) => {
+    if (findGithubTriggerChoice(config) === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["actions"],
+        message: "Choose one supported GitHub trigger action.",
+      });
+    }
+    if (config.event === "issues") {
+      for (const [index, condition] of (config.conditions ?? []).entries()) {
+        if (
+          condition.field === "base_branch" ||
+          condition.field === "draft_state"
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["conditions", index, "field"],
+            message: `${condition.field} is only available for pull request triggers.`,
+          });
+        }
+      }
+    }
+  });
 
 export const scheduleTriggerConfigSchema = z
   .object({
