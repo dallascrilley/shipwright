@@ -124,6 +124,34 @@ ssh "$target" bash -s -- "$release_path" <<'REMOTE'
 
   trap - ERR
   rm -f "$previous_unit"
+
+  # Optional public HTTPS edge. The release is already healthy on loopback, so
+  # the app-rollback trap is intentionally cleared above; a Caddy failure fails
+  # the deploy without reverting a healthy service.
+  if [[ -n "${SHIPWRIGHT_PUBLIC_HOST:-}" ]]; then
+    if ! command -v caddy >/dev/null 2>&1; then
+      apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
+      curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
+        | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+      curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
+        -o /etc/apt/sources.list.d/caddy-stable.list
+      apt-get update
+      apt-get install -y caddy
+    fi
+    install -d -m 755 /etc/caddy
+    sed "s|%%PUBLIC_HOST%%|${SHIPWRIGHT_PUBLIC_HOST}|g" \
+      "$release_path/deploy/Caddyfile" > /etc/caddy/Caddyfile
+    caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
+    if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active'; then
+      ufw allow 80/tcp
+      ufw allow 443/tcp
+    fi
+    systemctl enable --now caddy
+    systemctl reload caddy || systemctl restart caddy
+    printf 'Caddy public edge configured for %s.\n' "$SHIPWRIGHT_PUBLIC_HOST"
+  else
+    printf 'SHIPWRIGHT_PUBLIC_HOST unset; public edge not configured (Tailscale-only).\n'
+  fi
 REMOTE
 
 printf 'Shipwright deployed and healthy at commit %s.\n' "$release_id"

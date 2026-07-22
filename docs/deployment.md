@@ -1,6 +1,6 @@
 # Shipwright Deployment
 
-Shipwright runs on a dedicated Ubuntu 24.04 x86 VM. It is not placed on a shared Docker host because its sandbox runner has Docker daemon authority. The application binds to loopback, Tailscale provides the private HTTPS boundary, and Agent Native authentication remains enabled in production.
+Shipwright runs on a dedicated Ubuntu 24.04 x86 VM. It is not placed on a shared Docker host because its sandbox runner has Docker daemon authority. The application binds to loopback and Agent Native authentication remains enabled in production. Access is either Tailscale-only (default) or a public HTTPS edge fronted by Caddy; in both cases the service itself is never bound to a public interface.
 
 ## Target and cost
 
@@ -9,7 +9,7 @@ Shipwright runs on a dedicated Ubuntu 24.04 x86 VM. It is not placed on a shared
 - Class: CX33 or equivalent x86 shared instance
 - Operating ceiling: about USD $11/month before tax, including IPv4, with no backups or add-on volumes
 - Review: reassess size and retention after 30 days
-- Teardown: export `/var/lib/shipwright`, remove the Tailscale node, then delete the server and firewall
+- Teardown: export `/var/lib/shipwright`, remove the Tailscale node and any public DNS record, then delete the server and firewall
 
 ## Host layout
 
@@ -105,7 +105,7 @@ The command refuses a dirty checkout, uploads the exact current commit to a new 
 
 Before the first deploy, create `/etc/shipwright/shipwright.env` from `deploy/shipwright.env.example` and write the GitHub App key to `/etc/shipwright/github-app.pem`. Retrieve values from the existing 1Password items without printing them. Both files must be owned by `root:shipwright` with mode `0640`; `/etc/shipwright` is `root:shipwright` with mode `0750`, so the service can read but cannot rewrite its own credentials.
 
-Production must set a random `BETTER_AUTH_SECRET` of at least 32 characters. Do not set `AUTH_DISABLED`; Tailscale is an additional network boundary, not a substitute for application authentication.
+Production must set a random `BETTER_AUTH_SECRET` of at least 32 characters. Do not set `AUTH_DISABLED`. In Tailscale-only mode the tailnet is an additional network boundary; in public HTTPS mode Better Auth is the *sole* access control, so the secret strength and account hygiene matter even more. Authentication is never a function of the network path.
 
 ## Private access
 
@@ -129,6 +129,49 @@ tailscale ssh shipwright@TAILSCALE_HOSTNAME_OR_IP
 Use the HTTPS URL reported by `tailscale serve status`. On first visit, create the single operator account through Agent Native's normal Better Auth flow.
 
 Optional break-glass: temporarily allow SSH from a single trusted source IP on the cloud firewall, complete the repair, then remove the rule so public SSH stays closed.
+
+## Public HTTPS access (optional)
+
+This path removes the Tailscale requirement for operators: anyone with the URL
+and a valid account can reach the console over public HTTPS. The service still
+binds only to loopback — Caddy is the sole public listener and terminates TLS.
+
+Weigh the tradeoff before enabling it. The sandbox runner holds Docker daemon
+authority (root-equivalent on this host), so the public edge makes Better Auth
+the only thing standing between the internet and that authority. Keep
+`BETTER_AUTH_SECRET` strong and never set `AUTH_DISABLED`.
+
+Operator steps:
+
+1. **DNS** — create an `A` (and optional `AAAA`) record for your chosen name,
+   e.g. `shipwright.example.com`, pointing at the VM's public IP. If you use a
+   CDN, set the record to DNS-only (grey cloud) so Caddy can complete the
+   Let's Encrypt challenge and see the real client.
+2. **Firewall** — open inbound `80/tcp` and `443/tcp` on the Hetzner cloud
+   firewall. Port 80 is required for the ACME HTTP challenge and the HTTPS
+   redirect; 443 serves the app. SSH may stay closed (use Tailscale SSH).
+3. **Config** — set `SHIPWRIGHT_PUBLIC_HOST` in `/etc/shipwright/shipwright.env`
+   to the exact DNS name, then run `deploy/deploy.sh <ssh-target>`.
+
+The deploy renders `deploy/Caddyfile` to `/etc/caddy/Caddyfile` with the name
+substituted, validates it, opens host `ufw` 80/443 when `ufw` is active, and
+enables Caddy. The unauthenticated observability endpoints (`/healthz`,
+`/readyz`, `/metrics`) are answered `404` at the public edge and remain
+reachable only over loopback/tailnet for scrapers.
+
+Verify from off-tailnet:
+
+```sh
+curl -fsS https://shipwright.example.com/healthz   # expect 404 at the edge
+curl -fsSI https://shipwright.example.com/          # expect 200 with a valid cert
+```
+
+On the host: `systemctl status caddy --no-pager` and
+`journalctl -u caddy -n 50 --no-pager` show certificate issuance. First-cert
+issuance can take a few seconds after DNS resolves.
+
+To return to Tailscale-only, clear `SHIPWRIGHT_PUBLIC_HOST`, run
+`systemctl disable --now caddy`, and close firewall 80/443.
 
 ## Verify
 
