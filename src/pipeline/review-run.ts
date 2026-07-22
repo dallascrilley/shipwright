@@ -12,6 +12,32 @@ import { parseReviewOutcomes, type ReviewOutcome } from "./review-outcomes.js";
 import { redactSecrets, truncateTail, type AgentExecution } from "./receipt.js";
 import { type ReviewRunPhase, type ReviewRunReceipt, writeReviewReceipt } from "./review-receipt.js";
 
+/**
+ * Coding-provider quota/usage-limit exhaustion (e.g. an HTTP 403 "usage limit"
+ * from Kimi) is an operator billing condition, not an agent or code defect. We
+ * classify it distinctly so operators and automation can tell "the provider is
+ * out of quota — wait for the cycle, upgrade, or add a fallback provider" apart
+ * from a genuine agent failure. Automatic fallback to a second provider is left
+ * to the operator: it needs a configured secondary provider and a spend
+ * decision, so it is not attempted here.
+ */
+export const PROVIDER_QUOTA_ERROR_CODE = "provider_quota_exhausted";
+
+const PROVIDER_QUOTA_SIGNATURES: readonly RegExp[] = [
+  /usage limit/i,
+  /\bquota\b/i,
+  /billing cycle/i,
+  /upgrade your plan/i,
+  /purchase extra usage/i,
+  /insufficient (?:credit|quota|balance)/i,
+  /out of credits?/i,
+  /exceeded your (?:usage|credit)/i,
+];
+
+export function isProviderQuotaError(message: string): boolean {
+  return PROVIDER_QUOTA_SIGNATURES.some((pattern) => pattern.test(message));
+}
+
 export interface ReviewWorkspacePort {
   clonePullRequest(input: { owner: string; repo: string; headBranch: string; headSha: string; token: string }): Promise<void>;
   prepareForAgent(): Promise<void>;
@@ -231,9 +257,13 @@ export async function runReviewAgent(
     await deps.writeReceipt(receiptPath, receipt);
     return receipt;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     receipt.phase = phase;
-    receipt.errorCode = `${phase}_failed`;
-    receipt.errorMessage = redactSecrets(error instanceof Error ? error.message : String(error));
+    receipt.errorCode =
+      phase === "agent" && isProviderQuotaError(message)
+        ? PROVIDER_QUOTA_ERROR_CODE
+        : `${phase}_failed`;
+    receipt.errorMessage = redactSecrets(message);
     await emitProgress();
     await deps.writeReceipt(receiptPath, receipt);
     throw error;

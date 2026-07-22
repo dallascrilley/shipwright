@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { runReviewAgent, type ReviewPipelineDependencies, type ReviewWorkspacePort } from "../../src/pipeline/review-run.js";
+import { isProviderQuotaError, PROVIDER_QUOTA_ERROR_CODE, runReviewAgent, type ReviewPipelineDependencies, type ReviewWorkspacePort } from "../../src/pipeline/review-run.js";
 import type { AuthorizedPullRequest } from "../../src/github/app-client.js";
 
 function fixture(options: {
@@ -170,4 +170,30 @@ test("missing outcome artifact surfaces the agent response and redacts secrets",
   expect(failed.errorMessage).toContain("Could not authenticate to provider");
   expect(failed.errorMessage).toContain("[REDACTED]");
   expect(failed.errorMessage).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz012345");
+});
+
+test("quota-exhausted provider failure is classified distinctly", async () => {
+  const { deps, events, receipts } = fixture({
+    artifactMissing: true,
+    agentResponse:
+      '403 {"error":{"type":"permission_error","message":"You\'ve reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle. To continue now, purchase extra usage or upgrade your plan."}}',
+  });
+  await expect(runReviewAgent(request, deps)).rejects.toThrow(
+    "review agent finished without writing",
+  );
+  expect(events).not.toContain("verify");
+  const failed = receipts.at(-1) as { phase?: string; errorCode?: string; errorMessage?: string };
+  expect(failed.phase).toBe("agent");
+  expect(failed.errorCode).toBe(PROVIDER_QUOTA_ERROR_CODE);
+  expect(failed.errorMessage).toContain("usage limit");
+});
+
+test("isProviderQuotaError matches quota exhaustion but not agent or verify failures", () => {
+  expect(isProviderQuotaError("You've reached your usage limit for this billing cycle")).toBe(true);
+  expect(isProviderQuotaError("Your quota will be refreshed in the next cycle")).toBe(true);
+  expect(isProviderQuotaError("purchase extra usage or upgrade your plan")).toBe(true);
+  expect(isProviderQuotaError("insufficient credit balance")).toBe(true);
+  expect(isProviderQuotaError("Could not authenticate to provider")).toBe(false);
+  expect(isProviderQuotaError("independent verification failed")).toBe(false);
+  expect(isProviderQuotaError("")).toBe(false);
 });
