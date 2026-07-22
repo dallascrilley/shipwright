@@ -61,6 +61,15 @@ The fallback remains bounded to one retry and runs only for recognized provider 
 
 Copy the current signed-in local Codex auth file to `/var/lib/shipwright/codex-auth.json`, then set owner `shipwright:shipwright` and mode `0600`. Do not place it in Git, a release directory, or a deployment artifact. When local Codex rotates the OAuth session, refresh the production copy if the fallback begins returning an authentication failure.
 
+## Verification
+
+Production release `5da38ce` passed two fresh checks:
+
+- Shipwright's own `SandboxWorkspace` and `createAndRunPiAgent` path returned exactly `OK` from `openai-codex/gpt-5.4` inside a new disposable Docker workspace within the two-minute bound.
+- No-publish review receipt `9c2abc5b9e781680` recorded `kimi/k3` as `capacity_failed`, `openai-codex/gpt-5.4` as `succeeded`, and `fallbackUsed: true`. The run then reached the independent verification phase and failed separately because the selected target command was `bun test` while that repository sandbox did not provide `bun` (`exit 127`). The authorized pull-request head and its two unresolved current review threads remained unchanged.
+
+This distinguishes provider recovery from repository verification: the fallback is working even when a later host-controlled gate rejects the run.
+
 ## Prevention
 
 Treat API-key OpenAI and ChatGPT OAuth as separate provider credentials even when they select the same model family. Validate the credential at the adapter boundary, project the least data needed by the sandbox, and compare the framework path with the smallest direct provider probe before assigning a silent timeout to credentials or capacity.
