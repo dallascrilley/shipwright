@@ -60,28 +60,6 @@ test("runPiAgent configures Pi's Kimi K3 catalog", async () => {
   });
 });
 
-test("runPiAgent projects an API key credential for the OpenAI Codex provider", async () => {
-  const writes = new Map<string, string>();
-  const vm: AgentVm = {
-    async mkdir() {},
-    async writeFile(path, content) { writes.set(path, String(content)); },
-    async createSession() { return { sessionId: "s1" }; },
-    async prompt() { return { text: "done" }; },
-    closeSession() {},
-    async dispose() {},
-  };
-
-  await runPiAgent(vm, {
-    env: { OPENAI_API_KEY: "test-key" },
-    name: "openai-codex",
-    model: "gpt-5.4",
-  }, "fix it");
-
-  expect(JSON.parse(writes.get("/home/agentos/.pi/agent/auth.json")!)).toEqual({
-    "openai-codex": { type: "api_key", key: "test-key" },
-  });
-});
-
 test("runPiAgent projects a canonical skill before creating the session", async () => {
   const events: string[] = [];
   const writes = new Map<string, string>();

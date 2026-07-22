@@ -5,7 +5,7 @@ import type { AgentExecution } from "../../src/pipeline/receipt.js";
 
 const providers: ProviderConfig[] = [
   { name: "kimi", model: "k3", env: { KIMI_API_KEY: "kimi-key" } },
-  { name: "openai-codex", model: "gpt-5.4", env: { OPENAI_API_KEY: "openai-key" } },
+  { name: "openai", model: "gpt-5.4", env: { OPENAI_API_KEY: "openai-key" } },
 ];
 
 function execution(): AgentExecution {
@@ -21,12 +21,12 @@ test("falls back once when Pi returns a provider quota response", async () => {
 
   expect(result).toBe("done");
   expect(state).toMatchObject({
-    provider: "openai-codex",
+    provider: "openai",
     model: "gpt-5.4",
     fallbackUsed: true,
     attempts: [
       { provider: "kimi", model: "k3", outcome: "capacity_failed" },
-      { provider: "openai-codex", model: "gpt-5.4", outcome: "succeeded" },
+      { provider: "openai", model: "gpt-5.4", outcome: "succeeded" },
     ],
   });
 });

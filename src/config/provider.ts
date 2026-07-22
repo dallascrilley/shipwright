@@ -1,6 +1,6 @@
 export interface ProviderConfig {
   env: Record<string, string>;
-  name: "anthropic" | "openrouter" | "openai" | "openai-codex" | "google" | "kimi";
+  name: "anthropic" | "openrouter" | "openai" | "google" | "kimi";
   model: string;
 }
 
@@ -50,12 +50,6 @@ function configuredProviders(env: Environment): Record<string, ProviderConfig | 
       "openai/gpt-5.1-codex",
     ),
     openai: configuredProvider(env.OPENAI_API_KEY, "OPENAI_API_KEY", "openai", "gpt-4.1-mini"),
-    "openai-codex": configuredProvider(
-      env.OPENAI_API_KEY,
-      "OPENAI_API_KEY",
-      "openai-codex",
-      "gpt-5.4",
-    ),
     google: configuredProvider(env.GEMINI_API_KEY, "GEMINI_API_KEY", "google", "gemini-2.5-flash"),
     kimi: configuredProvider(env.KIMI_API_KEY, "KIMI_API_KEY", "kimi", "kimi-for-coding"),
   };
