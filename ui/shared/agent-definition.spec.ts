@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   GITHUB_TRIGGER_CONDITION_LIMITS,
+  GITHUB_TRIGGER_CONDITION_CATALOG,
   GITHUB_TRIGGER_CHOICES,
   agentControlPlaneSnapshotSchema,
   agentDraftSchema,
@@ -129,6 +130,21 @@ describe("agentDefinition contracts", () => {
         values: ["main", "Main"],
       },
       { field: "draft_state", operator: "is_not_draft" },
+    ]);
+  });
+
+  test("publishes only event-applicable condition fields", () => {
+    const fieldsFor = (event: "issues" | "pull_request") =>
+      GITHUB_TRIGGER_CONDITION_CATALOG.filter((item) =>
+        (item.events as readonly string[]).includes(event),
+      ).map((item) => item.field);
+
+    expect(fieldsFor("issues")).toEqual(["actor", "labels"]);
+    expect(fieldsFor("pull_request")).toEqual([
+      "actor",
+      "labels",
+      "base_branch",
+      "draft_state",
     ]);
   });
 
