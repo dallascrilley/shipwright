@@ -271,7 +271,7 @@ describe("AgentManagementService", () => {
 
     expect(service.exportAgentDefinition(created.agentId)).toMatchObject({
       format: "shipwright.agent",
-      version: 1,
+      version: 2,
       revision: 1,
       configuration: draft,
       triggers: [
@@ -279,6 +279,7 @@ describe("AgentManagementService", () => {
           kind: "github",
           event: "pull_request",
           actions: ["synchronize"],
+          conditions: [],
           legacy: false,
         },
       ],
@@ -296,5 +297,89 @@ describe("AgentManagementService", () => {
       action: "trigger_removed",
       triggerId: trigger.triggerId,
     });
+  });
+
+  test("persists normalized conditions through create and atomic replace", async () => {
+    const service = createService();
+    const created = await service.createAgent(draft);
+    const trigger = service.createTrigger({
+      agentId: created.agentId,
+      expectedRevision: created.currentRevision,
+      kind: "github",
+      config: {
+        event: "issues",
+        actions: ["opened"],
+        conditions: [
+          {
+            field: "actor",
+            operator: "is_one_of",
+            values: [" Alice ", "alice", "Bob"],
+          },
+        ],
+      },
+    });
+
+    expect(trigger.config).toMatchObject({
+      conditions: [
+        {
+          field: "actor",
+          operator: "is_one_of",
+          values: ["Alice", "Bob"],
+        },
+      ],
+    });
+
+    const replacement = service.replaceTrigger({
+      agentId: created.agentId,
+      expectedRevision: created.currentRevision,
+      triggerId: trigger.triggerId,
+      kind: "github",
+      config: {
+        event: "pull_request",
+        actions: ["opened"],
+        conditions: [
+          {
+            field: "base_branch",
+            operator: "is_one_of",
+            values: ["main"],
+          },
+          { field: "draft_state", operator: "is_not_draft" },
+        ],
+      },
+    });
+
+    expect(service.getAgent(created.agentId)?.triggers).toHaveLength(1);
+    expect(replacement.config).toMatchObject({
+      conditions: [
+        {
+          field: "base_branch",
+          operator: "is_one_of",
+          values: ["main"],
+        },
+        { field: "draft_state", operator: "is_not_draft" },
+      ],
+    });
+    expect(service.getAgent(created.agentId)?.triggers[0]?.label).toContain(
+      "when base branch is one of main and draft state is not draft",
+    );
+
+    expect(() =>
+      service.createTrigger({
+        agentId: created.agentId,
+        expectedRevision: created.currentRevision,
+        kind: "github",
+        config: {
+          event: "issues",
+          actions: ["opened"],
+          conditions: [
+            {
+              field: "base_branch",
+              operator: "is_one_of",
+              values: ["main"],
+            },
+          ],
+        },
+      }),
+    ).toThrow(/only available for pull request/i);
   });
 });
