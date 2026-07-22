@@ -24,7 +24,7 @@ Existing trigger records with no conditions continue to match exactly as they do
 - [x] (2026-07-22 23:45Z) U1: Added strict typed condition schemas, event-aware validation, bounded normalization, readable summaries, version-1 export compatibility, and current version-2 output; 133 UI tests and typecheck pass.
 - [x] (2026-07-22 23:52Z) U2: Added pure fail-closed condition evaluation, verified-payload field extraction, deterministic alternative grouping, one dispatch per agent revision and delivery, and capped reason-code-only ingress decisions; 20 focused tests and typecheck pass.
 - [x] (2026-07-22 23:59Z) U3: Added a bounded event-aware condition editor with repeatable exact-value inputs, visible removal of inapplicable rows, atomic create/replace state, readable saved summaries, and version-2 copy proof; desktop and 390 px browser checks pass.
-- [ ] U4: Prove the public route, UI, safety, regressions, and documentation.
+- [x] (2026-07-23 00:36Z) U4: Proved conditioned deliveries through the mounted signed HTTP route, including match/nonmatch, missing/malformed fields, alternative convergence, replay, receipt bounds, redaction, and pinned dry-run policy; updated operator/developer docs and captured the reusable pattern. The final gate passed 272 root tests, 146 UI tests, both typechecks, and the production build.
 
 ## Surprises & Discoveries
 
@@ -244,7 +244,26 @@ No blocking questions remain. Future condition types must run a new requirements
 
 ## Outcomes & Retrospective
 
-Planning is complete. The approved requirements are traced to four independently verifiable units with a dependency graph. Implementation outcomes, unexpected behavior, final proof, and residual risks will be recorded here as each unit lands.
+All R1-R13 requirements are implemented. Existing condition-free snapshots remain
+unconditional, while current Copy-as-JSON output is explicitly version 2. The
+signed webhook narrows eligible work through a pure typed evaluator, converges
+multiple matching trigger alternatives to one execution per agent revision and
+delivery, and returns only capped reason-code evidence. The operator console
+uses event-aware fields and repeatable exact-value inputs, avoiding a comma
+escaping format that would corrupt valid GitHub labels.
+
+Verification completed at the mounted route, shared/service boundaries, live
+desktop and 390 px UI, and repository gate. The final `bun run verify` passed
+272 root tests (8 environment-dependent skips), 146 UI tests, root and UI
+typechecks, and the production build. The build retained pre-existing
+non-failing Agent Native warnings for demo-only environment reads, optional AI
+provider imports, and large chunks. No migration, dependency, import surface,
+or publication authority was added.
+
+The implementation is split into four scoped commits so contract, ingress,
+editor, and end-to-end proof can be reviewed independently. The reusable
+signed-filter ordering and redaction pattern is captured in
+`docs/solutions/architecture-patterns/typed-github-trigger-condition-filtering.md`.
 
 ## Artifacts and Notes
 
@@ -260,3 +279,4 @@ Planning is complete. The approved requirements are traced to four independently
 ## Revision History
 
 - 2026-07-22: Initial full plan grounded in approved R1-R13 requirements and current implementation; imported U1-U4 into td.
+- 2026-07-23: Recorded completed U1-U4 implementation, browser proof, signed public-route proof, documentation, and final repository verification.

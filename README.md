@@ -76,6 +76,21 @@ SHIPWRIGHT_UI_DEMO=1 bun run dev
 
 Run records persist atomically under `SHIPWRIGHT_STATE_DIR`. Completed history survives restarts; an unfinished run is marked interrupted rather than silently resumed.
 
+Agent automations can target any GitHub App-accessible repository allowed by
+`GITHUB_REPOSITORY_ALLOWLIST`, select one of the curated issue or pull-request
+events, and provide agent instructions. An optional condition editor narrows
+GitHub triggers by event actor, labels, pull-request base branch, and
+pull-request draft state. Conditions within one trigger use AND; separate
+triggers for the same agent revision are OR alternatives and still queue at
+most one execution per GitHub delivery. Missing or malformed event data fails
+closed. **Copy as JSON** emits the version-2 condition contract; version-1
+documents remain readable, but JSON import is not supported.
+
+GitHub webhook executions retain the agent revision's publication policy;
+conditions never grant publish authority. Accepted webhook responses contain
+only bounded match counts, trigger IDs, and reason codes—not raw payloads or
+delivered condition values.
+
 ## Verification
 
 ```sh

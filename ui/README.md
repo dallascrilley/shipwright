@@ -37,8 +37,8 @@ All actions in this section are UI-only and unavailable to the in-app model, MCP
 - `list-agents` / `get-agent`: return a searchable safe projection of agent status, configuration, triggers, queue history, redacted receipt evidence, and audit events. The list intentionally excludes instructions.
 - `list-agent-repositories`: returns only GitHub App-accessible repositories that pass the host allowlist; archived repositories remain visible but unavailable.
 - `create-agent` / `save-agent`: create a disabled draft and explicitly save later immutable revisions. Agent draft validation rejects secret-like values before they enter control-plane state or action responses.
-- `create-agent-trigger` / `replace-agent-trigger` / `remove-agent-trigger`: add one of the four curated GitHub events or a validated schedule, atomically replace a GitHub trigger, or remove one active trigger at the expected revision. Persisted legacy GitHub actions remain readable, replaceable, and removable.
-- `export-agent-definition`: returns the deterministic version-1, secret-free current configuration and trigger document used by **Copy as JSON**.
+- `create-agent-trigger` / `replace-agent-trigger` / `remove-agent-trigger`: add one of the four curated GitHub events with optional typed conditions or a validated schedule, atomically replace a GitHub trigger, or remove one active trigger at the expected revision. Persisted legacy GitHub actions remain readable, replaceable, and removable.
+- `export-agent-definition`: returns the deterministic version-2, secret-free current configuration and trigger document used by **Copy as JSON**. The parser retains version-1 compatibility; import is not supported.
 - `set-agent-enabled`, `set-schedule-trigger-paused`, and `emergency-stop-agent`: UI-only actions with explicit UI confirmation for agent enable, disable, and stop. Enabling requires an enabled, valid trigger.
 - `queue-agent-test-run`: queues a dry-run test against the current revision and repository scope. It never activates a worker or publication path.
 
@@ -62,9 +62,38 @@ The dispatcher enforces each revision's repository scope at enqueue and immediat
 before pipeline invocation. Issue/PR execution targets do not carry a ref, so branch
 matching belongs to the U3/U4 trigger ingress that supplies one.
 
-`ui/server/github-webhook.ts` verifies GitHub HMAC signatures before parsing and
-queues only bounded issue/PR target data for enabled, scoped triggers. It remains
-library-only until U6 supplies the durable store and deploys the webhook endpoint.
+`ui/server/routes/api/github/webhook.post.ts` is the public GitHub callback.
+`ui/server/github-webhook.ts` enforces the body limit and verifies the GitHub
+HMAC before parsing. It then applies repository scope and enabled-state checks,
+extracts only the bounded issue/PR target plus condition fields, and evaluates
+conditions before queueing.
+
+### GitHub trigger conditions
+
+| Field | Events | Operators | Comparison |
+| --- | --- | --- | --- |
+| Event actor | Issues and pull requests | is one of, is not one of | Case-insensitive |
+| Labels | Issues and pull requests | include any, include all, include none | Case-insensitive |
+| Base branch | Pull requests | is one of, is not one of | Exact |
+| Draft state | Pull requests | is draft, is not draft | Boolean |
+
+All rows on one trigger must match (AND). Multiple triggers for the same agent
+revision are alternatives (OR), but the ingress chooses one deterministic
+matching trigger and queues at most one execution per GitHub delivery and agent
+revision. A configured field that is absent or malformed is a non-match.
+
+Definitions allow at most 10 condition rows, 25 exact values per membership
+row, and 100 characters per value. The webhook response reports aggregate
+matched/filtered counts and at most 20 decisions containing only trigger IDs and
+reason codes, plus a truncation count. Raw bodies and observed actor, label,
+branch, or draft values do not enter the control-plane snapshot or response.
+Conditions only narrow eligibility; repository authorization, activation,
+idempotency, queue bounds, verification, and the pinned publication policy
+remain independent gates.
+
+Raw expressions, nested boolean groups, regex, changed-file filters, title/body
+matching, schedule conditions, JSON import, and additional GitHub event types
+remain deliberately out of scope.
 
 `ScheduleScheduler` accepts five-field cron schedules with a valid IANA timezone
 and a five-minute minimum interval, including across forward timezone changes.
