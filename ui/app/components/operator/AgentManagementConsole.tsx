@@ -348,6 +348,17 @@ export function AgentManagementConsole() {
     setMessage(null);
     try {
       if (triggerKind === "github") {
+        const invalidConditionIndex = githubConditions.findIndex(
+          (condition) =>
+            condition.field !== "draft_state" &&
+            condition.values.some((value) => value.trim().length === 0),
+        );
+        if (invalidConditionIndex >= 0) {
+          setMessage(
+            `Condition ${invalidConditionIndex + 1} has a blank value. Enter a value or remove it.`,
+          );
+          return;
+        }
         const choice =
           GITHUB_TRIGGER_CHOICES.find((item) => item.id === githubChoiceId) ??
           GITHUB_TRIGGER_CHOICES[0];
@@ -860,17 +871,16 @@ export function AgentManagementConsole() {
                     <select
                       id="trigger-kind"
                       value={triggerKind}
-                      onChange={(event) =>
-                        setTriggerKind(() => {
-                          const next = event.target.value as
-                            | "github"
-                            | "schedule";
-                          if (next === "schedule") {
-                            setReplacementTriggerId(null);
-                          }
-                          return next;
-                        })
-                      }
+                      onChange={(event) => {
+                        const next = event.target.value as
+                          | "github"
+                          | "schedule";
+                        setTriggerKind(next);
+                        if (next === "schedule") {
+                          setReplacementTriggerId(null);
+                          setGithubConditions([]);
+                        }
+                      }}
                       className="h-9 rounded-md border border-input bg-transparent px-2 text-sm"
                     >
                       <option value="github">GitHub event</option>
