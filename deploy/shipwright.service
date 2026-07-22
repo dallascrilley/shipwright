@@ -23,7 +23,7 @@ ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths=/var/lib/shipwright /tmp
 LockPersonality=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target
