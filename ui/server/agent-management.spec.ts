@@ -271,7 +271,7 @@ describe("AgentManagementService", () => {
 
     expect(service.exportAgentDefinition(created.agentId)).toMatchObject({
       format: "shipwright.agent",
-      version: 1,
+      version: 2,
       revision: 1,
       configuration: draft,
       triggers: [
@@ -279,6 +279,7 @@ describe("AgentManagementService", () => {
           kind: "github",
           event: "pull_request",
           actions: ["synchronize"],
+          conditions: [],
           legacy: false,
         },
       ],
