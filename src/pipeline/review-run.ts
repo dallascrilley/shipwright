@@ -96,7 +96,7 @@ export async function runReviewAgent(
 
     phase = receipt.phase = "agent";
     await emitProgress();
-    await abortable(deps.runAgent(
+    const agentResponse = await abortable(deps.runAgent(
       workspace,
       buildReviewPrompt({
         pullRequest: authorized.pullRequest,
@@ -107,7 +107,18 @@ export async function runReviewAgent(
       request.timeoutMinutes * 60_000,
       [{ name: deps.skill.name, content: deps.skill.content }],
     ), deps.signal);
-    const serializedOutcomes = await workspace.readAndRemoveArtifact(REVIEW_OUTCOME_PATH);
+    let serializedOutcomes: string;
+    try {
+      serializedOutcomes = await workspace.readAndRemoveArtifact(REVIEW_OUTCOME_PATH);
+    } catch (readError) {
+      // The agent finished without writing the required outcome artifact. Surface its own
+      // response (redacted) so the real cause is legible instead of a bare `cat` error.
+      const original = readError instanceof Error ? readError.message : String(readError);
+      const detail = redactSecrets(truncateTail(agentResponse)).trim() || "(no agent output)";
+      throw new Error(
+        `review agent finished without writing ${REVIEW_OUTCOME_PATH} (${original}); agent response: ${detail}`,
+      );
+    }
     const expectedThreadIds = threads.map((thread) => thread.id);
     parseReviewOutcomes(serializedOutcomes, expectedThreadIds);
 
