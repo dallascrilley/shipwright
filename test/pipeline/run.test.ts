@@ -3,6 +3,7 @@ import { runShipwright, type PipelineDependencies, type WorkspacePort } from "..
 import type { AuthorizedIssue } from "../../src/github/app-client.js";
 
 function fixture(options: {
+  agentError?: string;
   verifyExit?: number;
   protectedFile?: boolean;
   publish?: boolean;
@@ -55,7 +56,11 @@ function fixture(options: {
     execution: { runtime: "agentos", software: "pi", provider: "kimi", model: "kimi-for-coding" },
     async authorize() { events.push("authorize"); return authorized; },
     async createWorkspace() { events.push("workspace"); return workspace; },
-    async runAgent() { events.push("agent"); return "done"; },
+    async runAgent() {
+      events.push("agent");
+      if (options.agentError) throw new Error(options.agentError);
+      return "done";
+    },
     async openPullRequest() { events.push("pr"); return { number: 5, url: "https://example/pr/5" }; },
     async writeReceipt(_path, receipt) {
       events.push(`receipt:${receipt.phase}`);
@@ -64,6 +69,22 @@ function fixture(options: {
   };
   return { deps, events, receipts };
 }
+
+test("capacity-exhausted provider chain is classified distinctly", async () => {
+  const { deps, events, receipts } = fixture({
+    agentError: "provider fallback capacity exhausted after 2 attempts",
+  });
+
+  await expect(runShipwright({
+    issueUrl: "https://github.com/acme/widget/issues/2",
+    verifyCommand: "bun test",
+    publish: false,
+    timeoutMinutes: 2,
+  }, deps)).rejects.toThrow("provider fallback capacity exhausted");
+
+  expect(events).not.toContain("verify");
+  expect(receipts.at(-1)?.errorCode).toBe("provider_quota_exhausted");
+});
 
 test("dry run verifies and applies policy without publishing", async () => {
   const { deps, events } = fixture();
