@@ -11,6 +11,7 @@ const config: GitHubConfig = {
   appId: 1,
   privateKey: "test-key",
   allowedRepositories: new Set(["dallascrilley/example"]),
+  allowedOwners: new Set(),
 };
 
 let savedDemoEnv: string | undefined;

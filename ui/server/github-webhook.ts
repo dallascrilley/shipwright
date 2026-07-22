@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { targetMatchesScope, type ExecutionRequest } from "../shared/agent-definition";
 import type { AgentControlPlaneStore } from "./agent-control-plane";
 import { QueueDispatcher } from "./queue-dispatcher";
+import { isRepositoryAllowed } from "../../src/config/github.js";
 
 const DELIVERY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const ACTION_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,199}$/;
@@ -31,6 +32,7 @@ export type GitHubWebhookResult =
 export type GitHubWebhookIngressOptions = {
   webhookSecret: string;
   allowedRepositories: ReadonlySet<string>;
+  allowedOwners: ReadonlySet<string>;
   store: AgentControlPlaneStore;
   dispatcher: QueueDispatcher;
 };
@@ -55,7 +57,7 @@ export class GitHubWebhookIngress {
     const event = this.parseEvent(input.event);
     const webhook = event ? this.parseTarget(event, input.rawBody) : undefined;
     if (!webhook) return { status: "rejected", reason: "invalid_payload" };
-    if (!this.options.allowedRepositories.has(webhook.repository)) {
+    if (!isRepositoryAllowed(this.options, webhook.repository)) {
       return { status: "accepted", matched: 0 };
     }
 
