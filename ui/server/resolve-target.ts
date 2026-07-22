@@ -1,4 +1,4 @@
-import { parseGitHubConfig, type GitHubConfig } from "../../src/config/github.js";
+import { isRepositoryAllowed, parseGitHubConfig, type GitHubConfig } from "../../src/config/github.js";
 import {
   authorizeIssue,
   authorizePullRequest,
@@ -153,7 +153,7 @@ async function resolvePullRequestHead(
   transport: GitHubTransport,
 ): Promise<ResolveTargetResult> {
   const repoKey = `${parsed.owner}/${parsed.repo}`.toLowerCase();
-  if (!config.allowedRepositories.has(repoKey)) {
+  if (!isRepositoryAllowed(config, repoKey)) {
     return fromParsed(parsed, {
       allowed: false,
       denyReason: "repository is not in the GitHub repository allowlist",
@@ -181,7 +181,7 @@ async function resolvePullRequestHead(
   });
   const repository = await session.client.getRepository();
   const canonicalName = `${repository.owner}/${repository.name}`.toLowerCase();
-  if (!config.allowedRepositories.has(canonicalName)) {
+  if (!isRepositoryAllowed(config, canonicalName)) {
     return fromParsed(parsed, {
       allowed: false,
       denyReason: "canonical repository is not in the GitHub repository allowlist",

@@ -27,6 +27,7 @@ function createFixture() {
   const ingress = new GitHubWebhookIngress({
     webhookSecret: WEBHOOK_SECRET,
     allowedRepositories: new Set(["dallascrilley/shipwright"]),
+    allowedOwners: new Set(),
     store,
     dispatcher,
   });
