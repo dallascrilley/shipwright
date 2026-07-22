@@ -7,6 +7,8 @@ function fixture(options: {
   verifyExit?: number;
   movedHead?: boolean;
   outcome?: "fixed" | "rejected" | "needs-human";
+  artifactMissing?: boolean;
+  agentResponse?: string;
 } = {}) {
   const events: string[] = [];
   const changes = options.changes ?? ["src/a.ts"];
@@ -57,6 +59,9 @@ function fixture(options: {
     async prepareReviewArtifact() { events.push("reserve-artifact"); },
     async readAndRemoveArtifact() {
       events.push("artifact");
+      if (options.artifactMissing) {
+        throw new Error("review outcome artifact failed: cat: .agentos-review-resolution.json: No such file or directory");
+      }
       return JSON.stringify({ threads: [{ threadId: "thread-1", outcome, summary: "Handled", evidence: "src/a.ts:4" }] });
     },
     async verify() { events.push("verify"); return { exitCode: options.verifyExit ?? 0 }; },
@@ -74,7 +79,7 @@ function fixture(options: {
     runId: "run-1",
     async authorize() { events.push("authorize"); return authorized; },
     async createWorkspace() { events.push("workspace"); return workspace; },
-    async runAgent() { events.push("agent"); return "done"; },
+    async runAgent() { events.push("agent"); return options.agentResponse ?? "done"; },
     async writeReceipt(_path, receipt) {
       events.push(`receipt:${receipt.phase}`);
       receipts.push(structuredClone(receipt) as unknown as Record<string, unknown>);
@@ -145,4 +150,24 @@ test("dry run verifies but performs no remote writes", async () => {
   expect(events).not.toContain("commit");
   expect(events).not.toContain("push");
   expect(events).not.toContain("reply");
+});
+
+test("missing outcome artifact surfaces the agent response and redacts secrets", async () => {
+  const { deps, events, receipts } = fixture({
+    artifactMissing: true,
+    agentResponse: "Could not authenticate to provider. token=ghp_abcdefghijklmnopqrstuvwxyz012345",
+  });
+  await expect(runReviewAgent(request, deps)).rejects.toThrow(
+    "review agent finished without writing .agentos-review-resolution.json",
+  );
+  expect(events).not.toContain("verify");
+  expect(events).not.toContain("commit");
+  expect(events).not.toContain("push");
+  expect(events).not.toContain("reply");
+  expect(events.at(-1)).toBe("destroy");
+  const failed = receipts.at(-1) as { errorCode?: string; errorMessage?: string };
+  expect(failed.errorCode).toBe("agent_failed");
+  expect(failed.errorMessage).toContain("Could not authenticate to provider");
+  expect(failed.errorMessage).toContain("[REDACTED]");
+  expect(failed.errorMessage).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz012345");
 });
