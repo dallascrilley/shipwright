@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
+import type { GitHubWebhookConfig } from "../../src/config/github.js";
 import { resolveShipwrightStateDirectory } from "../../src/config/state.js";
-
 import {
   agentDraftSchema,
   agentTriggerSchema,
@@ -34,11 +34,16 @@ import {
   type RemoveTriggerInput,
   type ReplaceTriggerInput,
 } from "./agent-control-plane";
-import { getOperatorRunRegistry, isOperatorDemoMode } from "./operator-runs";
 import {
   ControlPlaneRuntime,
   resolveRolloutStage,
 } from "./control-plane-runtime";
+import {
+  GitHubWebhookIngress,
+  type GitHubWebhookInput,
+  type GitHubWebhookResult,
+} from "./github-webhook";
+import { getOperatorRunRegistry, isOperatorDemoMode } from "./operator-runs";
 import { QueueDispatcher } from "./queue-dispatcher";
 import { operatorPipelineQueueRunner } from "./queue-runner";
 import { getAgentRepositoryCatalog } from "./repository-catalog";
@@ -155,13 +160,14 @@ export class AgentManagementService {
     const currentRepository = currentRevision.draft.targetScope.repository
       .trim()
       .toLowerCase();
-    const requestedRepository = draft.targetScope.repository.trim().toLowerCase();
+    const requestedRepository = draft.targetScope.repository
+      .trim()
+      .toLowerCase();
     const repository =
       currentRepository === requestedRepository
         ? requestedRepository
-        : (
-            await this.#repositoryCatalog.assertSelectable(requestedRepository)
-          ).repository;
+        : (await this.#repositoryCatalog.assertSelectable(requestedRepository))
+            .repository;
     return this.#controlPlane.updateAgent(
       input.agentId,
       input.expectedRevision,
@@ -260,6 +266,18 @@ export class AgentManagementService {
   /** Read-only snapshot for observability endpoints and tests. */
   getSnapshot(): AgentControlPlaneSnapshot {
     return this.#store.load();
+  }
+
+  /** Route authenticated GitHub deliveries through the shared durable queue. */
+  receiveGitHubWebhook(
+    input: GitHubWebhookInput,
+    config: GitHubWebhookConfig,
+  ): Promise<GitHubWebhookResult> {
+    return new GitHubWebhookIngress({
+      ...config,
+      store: this.#store,
+      dispatcher: this.#dispatcher,
+    }).receive(input);
   }
 
   /**
