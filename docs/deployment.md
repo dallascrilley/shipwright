@@ -44,6 +44,23 @@ on every deploy.
 GitHub webhook processing stays inactive until the operator configures a
 callback; `GITHUB_WEBHOOK_SECRET` lives only in the host environment.
 
+Configure the GitHub App webhook with:
+
+- URL: `https://<SHIPWRIGHT_PUBLIC_HOST>/api/github/webhook`
+- Content type: `application/json`
+- Secret: the same value stored as `GITHUB_WEBHOOK_SECRET`
+- Events: Issues and Pull requests
+
+`POST /api/github/webhook` is intentionally outside session authentication
+because GitHub cannot hold a Shipwright session. The route authenticates every
+delivery with `X-Hub-Signature-256` before parsing JSON, requires bounded
+`X-GitHub-Event` and `X-GitHub-Delivery` values, rejects bodies larger than
+1 MiB, and stores only the existing redacted trigger and queue records. A
+valid delivery returns `202`; invalid signatures return `401`; invalid payloads
+return `400`; unavailable host configuration or durable state returns `503`.
+Keep the endpoint behind the existing HTTPS edge and never place the webhook
+secret in a URL, repository file, fixture, receipt, or command history.
+
 ## Observability
 
 The service exposes three unauthenticated loopback endpoints (added to the
