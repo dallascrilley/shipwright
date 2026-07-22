@@ -49,6 +49,25 @@ describe("resolveProvider", () => {
     ]);
   });
 
+  test("builds an OpenAI Codex OAuth fallback from an auth file", () => {
+    expect(resolveProviderChain({
+      AGENTOS_PROVIDER: "kimi",
+      AGENTOS_MODEL: "k3",
+      KIMI_API_KEY: "kimi-key",
+      AGENTOS_FALLBACK_PROVIDER: "openai-codex",
+      AGENTOS_FALLBACK_MODEL: "gpt-5.4",
+      AGENTOS_CODEX_AUTH_FILE: "/secure/codex-auth.json",
+    })).toEqual([
+      { name: "kimi", model: "k3", env: { KIMI_API_KEY: "kimi-key" } },
+      {
+        name: "openai-codex",
+        model: "gpt-5.4",
+        env: {},
+        authFile: "/secure/codex-auth.json",
+      },
+    ]);
+  });
+
   test("requires the fallback provider credential", () => {
     expect(() => resolveProviderChain({
       KIMI_API_KEY: "kimi-key",
