@@ -105,6 +105,8 @@ The command refuses a dirty checkout, uploads the exact current commit to a new 
 
 Before the first deploy, create `/etc/shipwright/shipwright.env` from `deploy/shipwright.env.example` and write the GitHub App key to `/etc/shipwright/github-app.pem`. Retrieve values from the existing 1Password items without printing them. Both files must be owned by `root:shipwright` with mode `0640`; `/etc/shipwright` is `root:shipwright` with mode `0750`, so the service can read but cannot rewrite its own credentials.
 
+For the optional OpenAI Codex fallback, copy the signed-in operator's local `~/.codex/auth.json` to `/var/lib/shipwright/codex-auth.json`. The production copy must be owned by `shipwright:shipwright` with mode `0600`; Shipwright deliberately rejects group/world-readable files and files owned by another user. Configure `AGENTOS_CODEX_AUTH_FILE=/var/lib/shipwright/codex-auth.json`, `AGENTOS_FALLBACK_PROVIDER=openai-codex`, and `AGENTOS_FALLBACK_MODEL=gpt-5.4`. Replace this copy when the local Codex OAuth session rotates or the fallback reports an authentication failure.
+
 The repository policy should remain owner-bound:
 
 ```dotenv

@@ -4,7 +4,7 @@ import {
   type JsonRpcResponse,
   type SessionEventHandler,
 } from "@rivet-dev/agentos-core";
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ProviderConfig } from "../config/provider.js";
@@ -97,6 +97,59 @@ function piModelsConfig(provider: ProviderConfig): string | undefined {
   });
 }
 
+function piAuthConfig(provider: ProviderConfig): string | undefined {
+  if (provider.name !== "openai-codex") return undefined;
+  if (!provider.authFile) throw new Error("OpenAI Codex auth file is not configured");
+
+  let auth: unknown;
+  try {
+    const metadata = statSync(provider.authFile);
+    const processUid = typeof process.getuid === "function" ? process.getuid() : undefined;
+    if (
+      !metadata.isFile()
+      || (metadata.mode & 0o077) !== 0
+      || (processUid !== undefined && metadata.uid !== processUid)
+    ) {
+      throw new Error("unsafe auth file");
+    }
+    auth = JSON.parse(readFileSync(provider.authFile, "utf8"));
+  } catch {
+    throw new Error("OpenAI Codex auth file is unreadable, invalid, or not owner-only");
+  }
+  const tokens = asRecord(asRecord(auth)?.tokens);
+  const access = stringField(tokens, "access_token");
+  const refresh = stringField(tokens, "refresh_token");
+  const accountId = stringField(tokens, "account_id");
+  if (!access || !refresh || !accountId) {
+    throw new Error("OpenAI Codex auth file is missing OAuth token fields");
+  }
+  const expires = jwtExpiryMs(access);
+  return JSON.stringify({
+    "openai-codex": {
+      type: "oauth",
+      access,
+      refresh,
+      expires,
+      accountId,
+    },
+  });
+}
+
+function stringField(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function jwtExpiryMs(token: string): number {
+  try {
+    const payload = asRecord(JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")));
+    if (typeof payload?.exp === "number" && Number.isFinite(payload.exp)) return payload.exp * 1000;
+  } catch {
+    // Normalize token parsing failures below without exposing token material.
+  }
+  throw new Error("OpenAI Codex auth file contains an invalid access token");
+}
+
 export async function runPiAgent(
   vm: AgentVm,
   provider: ProviderConfig,
@@ -113,6 +166,8 @@ export async function runPiAgent(
       "/home/agentos/.pi/agent/settings.json",
       JSON.stringify({ defaultProvider: provider.name, defaultModel: provider.model }),
     );
+    const authConfig = piAuthConfig(provider);
+    if (authConfig) await vm.writeFile("/home/agentos/.pi/agent/auth.json", authConfig);
     const modelsConfig = piModelsConfig(provider);
     if (modelsConfig) await vm.writeFile("/home/agentos/.pi/agent/models.json", modelsConfig);
     if (skills.length > 0) {

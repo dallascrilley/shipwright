@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { statSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createAndRunPiAgent,
   PiAgentOutputError,
@@ -23,6 +25,80 @@ test("runPiAgent configures Pi, prompts once, and always cleans up", async () =>
 
   expect(result).toBe("done");
   expect(events).toEqual(["mkdir", "settings", "session", "prompt", "close-session", "dispose"]);
+});
+
+test("runPiAgent projects local Codex OAuth without unrelated auth fields", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "shipwright-codex-auth-"));
+  const authFile = join(directory, "auth.json");
+  const expires = Math.floor(Date.now() / 1000) + 3600;
+  const access = `header.${Buffer.from(JSON.stringify({ exp: expires })).toString("base64url")}.signature`;
+  writeFileSync(authFile, JSON.stringify({
+    auth_mode: "chatgpt",
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: "must-not-be-projected",
+      access_token: access,
+      refresh_token: "refresh-token",
+      account_id: "account-id",
+    },
+    last_refresh: new Date().toISOString(),
+  }), { mode: 0o600 });
+  const writes = new Map<string, string>();
+  const vm: AgentVm = {
+    async mkdir() {},
+    async writeFile(path, content) { writes.set(path, String(content)); },
+    async createSession() { return { sessionId: "s1" }; },
+    async prompt() { return { text: "done" }; },
+    closeSession() {},
+    async dispose() {},
+  };
+
+  try {
+    await runPiAgent(vm, {
+      authFile,
+      env: {},
+      name: "openai-codex",
+      model: "gpt-5.4",
+    }, "fix it");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+
+  expect(JSON.parse(writes.get("/home/agentos/.pi/agent/auth.json")!)).toEqual({
+    "openai-codex": {
+      type: "oauth",
+      access,
+      refresh: "refresh-token",
+      expires: expires * 1000,
+      accountId: "account-id",
+    },
+  });
+  expect(writes.get("/home/agentos/.pi/agent/auth.json")).not.toContain("must-not-be-projected");
+});
+
+test("runPiAgent rejects Codex auth files readable by other users", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "shipwright-codex-auth-"));
+  const authFile = join(directory, "auth.json");
+  writeFileSync(authFile, JSON.stringify({ tokens: {} }), { mode: 0o644 });
+  const vm: AgentVm = {
+    async mkdir() {},
+    async writeFile() {},
+    async createSession() { return { sessionId: "s1" }; },
+    async prompt() { return { text: "done" }; },
+    closeSession() {},
+    async dispose() {},
+  };
+
+  try {
+    await expect(runPiAgent(vm, {
+      authFile,
+      env: {},
+      name: "openai-codex",
+      model: "gpt-5.4",
+    }, "fix it")).rejects.toThrow("unreadable, invalid, or not owner-only");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("runPiAgent rejects an ACP prompt error instead of accepting empty output", async () => {

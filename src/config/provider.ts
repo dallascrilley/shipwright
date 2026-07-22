@@ -1,6 +1,7 @@
 export interface ProviderConfig {
+  authFile?: string;
   env: Record<string, string>;
-  name: "anthropic" | "openrouter" | "openai" | "google" | "kimi";
+  name: "anthropic" | "openrouter" | "openai" | "openai-codex" | "google" | "kimi";
   model: string;
 }
 
@@ -36,6 +37,7 @@ function configuredProvider(
 }
 
 function configuredProviders(env: Environment): Record<string, ProviderConfig | undefined> {
+  const codexAuthFile = env.AGENTOS_CODEX_AUTH_FILE?.trim();
   return {
     anthropic: configuredProvider(
       env.ANTHROPIC_API_KEY,
@@ -50,6 +52,9 @@ function configuredProviders(env: Environment): Record<string, ProviderConfig | 
       "openai/gpt-5.1-codex",
     ),
     openai: configuredProvider(env.OPENAI_API_KEY, "OPENAI_API_KEY", "openai", "gpt-4.1-mini"),
+    "openai-codex": codexAuthFile
+      ? { authFile: codexAuthFile, env: {}, name: "openai-codex", model: "gpt-5.4" }
+      : undefined,
     google: configuredProvider(env.GEMINI_API_KEY, "GEMINI_API_KEY", "google", "gemini-2.5-flash"),
     kimi: configuredProvider(env.KIMI_API_KEY, "KIMI_API_KEY", "kimi", "kimi-for-coding"),
   };
@@ -69,8 +74,8 @@ export function resolveProvider(env: Environment = process.env): ProviderConfig 
   if (!provider) {
     throw new Error(
       requested
-        ? `AGENTOS_PROVIDER=${requested} is not configured with a matching API key`
-        : "ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or KIMI_API_KEY is required",
+        ? `AGENTOS_PROVIDER=${requested} is not configured with a matching credential`
+        : "ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, AGENTOS_CODEX_AUTH_FILE, GEMINI_API_KEY, or KIMI_API_KEY is required",
     );
   }
   const model = env.AGENTOS_MODEL?.trim();
@@ -85,7 +90,7 @@ export function resolveProviderChain(env: Environment = process.env): ProviderCo
   const fallback = configuredProviders(env)[requestedFallback];
   if (!fallback) {
     throw new Error(
-      `AGENTOS_FALLBACK_PROVIDER=${requestedFallback} is not configured with a matching API key`,
+      `AGENTOS_FALLBACK_PROVIDER=${requestedFallback} is not configured with a matching credential`,
     );
   }
   const fallbackModel = env.AGENTOS_FALLBACK_MODEL?.trim();
