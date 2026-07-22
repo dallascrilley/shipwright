@@ -152,6 +152,11 @@ Operator steps:
    redirect; 443 serves the app. SSH may stay closed (use Tailscale SSH).
 3. **Config** — set `SHIPWRIGHT_PUBLIC_HOST` in `/etc/shipwright/shipwright.env`
    to the exact DNS name, then run `deploy/deploy.sh <ssh-target>`.
+4. **Free port 443** — if the host was previously in Tailscale-only mode,
+   `tailscale serve` is bound to `:443` and Caddy cannot start
+   (`listen tcp :443: bind: address already in use`). Retire it with
+   `tailscale serve reset` on the VM, then `systemctl restart caddy`.
+   Tailscale SSH is unaffected and stays available for administration.
 
 The deploy renders `deploy/Caddyfile` to `/etc/caddy/Caddyfile` with the name
 substituted, validates it, opens host `ufw` 80/443 when `ufw` is active, and
