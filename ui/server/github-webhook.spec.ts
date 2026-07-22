@@ -1,6 +1,8 @@
 import { createHmac } from "node:crypto";
+
 import { describe, expect, test } from "vitest";
 
+import type { GithubTriggerCondition } from "../shared/agent-definition";
 import {
   AgentControlPlane,
   MemoryAgentControlPlaneStore,
@@ -34,7 +36,7 @@ function createFixture() {
   return { controlPlane, dispatcher, ingress, store };
 }
 
-function createEnabledIssueTrigger() {
+function createEnabledIssueTrigger(conditions: GithubTriggerCondition[] = []) {
   const fixture = createFixture();
   const agent = fixture.controlPlane.createAgent({
     name: "Issue triage",
@@ -46,13 +48,13 @@ function createEnabledIssueTrigger() {
     publicationPolicy: "dry_run",
   });
   fixture.controlPlane.setEnabled(agent.agentId, agent.currentRevision, true);
-  fixture.controlPlane.createTrigger({
+  const trigger = fixture.controlPlane.createTrigger({
     agentId: agent.agentId,
     expectedRevision: agent.currentRevision,
     kind: "github",
-    config: { event: "issues", actions: ["opened"] },
+    config: { event: "issues", actions: ["opened"], conditions },
   });
-  return fixture;
+  return { ...fixture, agent, trigger };
 }
 
 function signedInput(
@@ -72,8 +74,19 @@ function signedInput(
 const issuePayload = {
   action: "opened",
   repository: { full_name: "dallascrilley/shipwright" },
-  issue: { number: 42 },
+  sender: { login: "Alice" },
+  issue: { number: 42, labels: [{ name: "bug" }, { name: "urgent" }] },
 };
+
+function accepted(matched: number) {
+  return {
+    status: "accepted" as const,
+    matched,
+    conditionFiltered: 0,
+    decisions: [],
+    decisionsTruncated: 0,
+  };
+}
 
 describe("GitHubWebhookIngress", () => {
   test("rejects an invalid signature before parsing the payload", async () => {
@@ -122,13 +135,25 @@ describe("GitHubWebhookIngress", () => {
     const fixture = createEnabledIssueTrigger();
     const input = await signedInput("issues", "delivery-1", issuePayload);
 
-    await expect(fixture.ingress.receive(input)).resolves.toEqual({
-      status: "accepted",
-      matched: 1,
+    await expect(fixture.ingress.receive(input)).resolves.toMatchObject({
+      ...accepted(1),
+      decisions: [
+        {
+          triggerId: fixture.trigger.triggerId,
+          decision: "matched",
+          reasonCodes: [],
+        },
+      ],
     });
-    await expect(fixture.ingress.receive(input)).resolves.toEqual({
-      status: "accepted",
-      matched: 1,
+    await expect(fixture.ingress.receive(input)).resolves.toMatchObject({
+      ...accepted(1),
+      decisions: [
+        {
+          triggerId: fixture.trigger.triggerId,
+          decision: "matched",
+          reasonCodes: [],
+        },
+      ],
     });
     expect(fixture.dispatcher.list()).toMatchObject([
       {
@@ -159,8 +184,10 @@ describe("GitHubWebhookIngress", () => {
     });
 
     await expect(
-      disabled.ingress.receive(await signedInput("issues", "delivery-2", issuePayload)),
-    ).resolves.toEqual({ status: "accepted", matched: 0 });
+      disabled.ingress.receive(
+        await signedInput("issues", "delivery-2", issuePayload),
+      ),
+    ).resolves.toEqual(accepted(0));
     await expect(
       disabled.ingress.receive(
         await signedInput("issues", "delivery-3", {
@@ -168,7 +195,7 @@ describe("GitHubWebhookIngress", () => {
           repository: { full_name: "dallascrilley/other-repository" },
         }),
       ),
-    ).resolves.toEqual({ status: "accepted", matched: 0 });
+    ).resolves.toEqual(accepted(0));
     expect(disabled.dispatcher.list()).toEqual([]);
   });
 
@@ -197,11 +224,229 @@ describe("GitHubWebhookIngress", () => {
       pull_request: { title: "raw-payload-marker" },
     };
 
-    await fixture.ingress.receive(await signedInput("pull_request", "delivery-4", payload));
+    await fixture.ingress.receive(
+      await signedInput("pull_request", "delivery-4", payload),
+    );
 
     expect(fixture.dispatcher.list()).toMatchObject([
       { executionId: expect.any(String), state: "queued" },
     ]);
-    expect(JSON.stringify(fixture.store.load())).not.toContain("raw-payload-marker");
+    expect(JSON.stringify(fixture.store.load())).not.toContain(
+      "raw-payload-marker",
+    );
+  });
+
+  test("extracts pull request base branch and draft state after signature verification", async () => {
+    const fixture = createFixture();
+    const agent = fixture.controlPlane.createAgent({
+      name: "Ready pull requests",
+      instructions: "Triage ready pull requests targeting main.",
+      skillId: "fix-review-findings",
+      allowedTools: ["github"],
+      targetScope: { repository: "dallascrilley/shipwright" },
+      verification: { presetId: "bun-test" },
+      publicationPolicy: "dry_run",
+    });
+    fixture.controlPlane.setEnabled(agent.agentId, agent.currentRevision, true);
+    const trigger = fixture.controlPlane.createTrigger({
+      agentId: agent.agentId,
+      expectedRevision: agent.currentRevision,
+      kind: "github",
+      config: {
+        event: "pull_request",
+        actions: ["opened"],
+        conditions: [
+          {
+            field: "base_branch",
+            operator: "is_one_of",
+            values: ["main"],
+          },
+          { field: "draft_state", operator: "is_not_draft" },
+        ],
+      },
+    });
+    const payload = {
+      action: "opened",
+      repository: issuePayload.repository,
+      sender: { login: "Alice" },
+      number: 7,
+      pull_request: {
+        number: 7,
+        base: { ref: "main" },
+        draft: false,
+        labels: [],
+      },
+    };
+
+    await expect(
+      fixture.ingress.receive(
+        await signedInput("pull_request", "delivery-pr-condition", payload),
+      ),
+    ).resolves.toMatchObject({
+      matched: 1,
+      conditionFiltered: 0,
+      decisions: [
+        {
+          triggerId: trigger.triggerId,
+          decision: "matched",
+          reasonCodes: [],
+        },
+      ],
+    });
+
+    await expect(
+      fixture.ingress.receive(
+        await signedInput("pull_request", "delivery-pr-malformed", {
+          ...payload,
+          pull_request: { ...payload.pull_request, base: { ref: 42 } },
+        }),
+      ),
+    ).resolves.toMatchObject({
+      matched: 0,
+      conditionFiltered: 1,
+      decisions: [
+        {
+          triggerId: trigger.triggerId,
+          decision: "filtered",
+          reasonCodes: ["base_branch_malformed"],
+        },
+      ],
+    });
+  });
+
+  test("matches typed actor and label conditions and fails closed on mismatch or missing data", async () => {
+    const fixture = createEnabledIssueTrigger([
+      { field: "actor", operator: "is_one_of", values: ["alice"] },
+      { field: "labels", operator: "include_all", values: ["BUG", "urgent"] },
+    ]);
+
+    await expect(
+      fixture.ingress.receive(
+        await signedInput("issues", "delivery-conditions-match", issuePayload),
+      ),
+    ).resolves.toMatchObject({
+      matched: 1,
+      conditionFiltered: 0,
+      decisions: [
+        {
+          triggerId: fixture.trigger.triggerId,
+          decision: "matched",
+          reasonCodes: [],
+        },
+      ],
+    });
+
+    await expect(
+      fixture.ingress.receive(
+        await signedInput("issues", "delivery-conditions-mismatch", {
+          ...issuePayload,
+          issue: { number: 42, labels: [{ name: "bug" }] },
+        }),
+      ),
+    ).resolves.toMatchObject({
+      matched: 0,
+      conditionFiltered: 1,
+      decisions: [
+        {
+          triggerId: fixture.trigger.triggerId,
+          decision: "filtered",
+          reasonCodes: ["labels_mismatch"],
+        },
+      ],
+    });
+
+    await expect(
+      fixture.ingress.receive(
+        await signedInput("issues", "delivery-conditions-missing", {
+          action: "opened",
+          repository: issuePayload.repository,
+          issue: issuePayload.issue,
+        }),
+      ),
+    ).resolves.toMatchObject({
+      matched: 0,
+      conditionFiltered: 1,
+      decisions: [
+        {
+          triggerId: fixture.trigger.triggerId,
+          decision: "filtered",
+          reasonCodes: ["actor_missing"],
+        },
+      ],
+    });
+    expect(fixture.dispatcher.list()).toHaveLength(1);
+  });
+
+  test("dispatches once when multiple trigger alternatives match the same revision", async () => {
+    const fixture = createEnabledIssueTrigger([
+      { field: "actor", operator: "is_one_of", values: ["alice"] },
+    ]);
+    const second = fixture.controlPlane.createTrigger({
+      agentId: fixture.agent.agentId,
+      expectedRevision: fixture.agent.currentRevision,
+      kind: "github",
+      config: {
+        event: "issues",
+        actions: ["opened"],
+        conditions: [
+          { field: "labels", operator: "include_any", values: ["bug"] },
+        ],
+      },
+    });
+    const input = await signedInput(
+      "issues",
+      "delivery-overlapping-alternatives",
+      issuePayload,
+    );
+
+    const result = await fixture.ingress.receive(input);
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      matched: 1,
+      conditionFiltered: 0,
+      decisionsTruncated: 0,
+    });
+    if (result.status !== "accepted") throw new Error("expected acceptance");
+    expect(result.decisions).toHaveLength(2);
+    expect(
+      result.decisions.map((decision) => decision.triggerId).sort(),
+    ).toEqual([fixture.trigger.triggerId, second.triggerId].sort());
+    expect(
+      result.decisions.every((decision) => decision.decision === "matched"),
+    ).toBe(true);
+    expect(fixture.dispatcher.list()).toHaveLength(1);
+    expect(fixture.store.load().executions[0]?.triggerId).toBe(
+      [fixture.trigger.triggerId, second.triggerId].sort()[0],
+    );
+
+    await fixture.ingress.receive(input);
+    expect(fixture.dispatcher.list()).toHaveLength(1);
+  });
+
+  test("caps decision evidence without limiting trigger evaluation", async () => {
+    const fixture = createEnabledIssueTrigger();
+    for (let index = 0; index < 21; index += 1) {
+      fixture.controlPlane.createTrigger({
+        agentId: fixture.agent.agentId,
+        expectedRevision: fixture.agent.currentRevision,
+        kind: "github",
+        config: { event: "issues", actions: ["opened"], conditions: [] },
+      });
+    }
+
+    const result = await fixture.ingress.receive(
+      await signedInput("issues", "delivery-capped-decisions", issuePayload),
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      matched: 1,
+      conditionFiltered: 0,
+      decisionsTruncated: 2,
+    });
+    if (result.status !== "accepted") throw new Error("expected acceptance");
+    expect(result.decisions).toHaveLength(20);
+    expect(fixture.dispatcher.list()).toHaveLength(1);
   });
 });

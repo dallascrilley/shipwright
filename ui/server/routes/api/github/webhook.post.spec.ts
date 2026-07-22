@@ -95,6 +95,9 @@ describe("POST /api/github/webhook", () => {
     const receive = vi.fn(async () => ({
       status: "accepted" as const,
       matched: 1,
+      conditionFiltered: 0,
+      decisions: [],
+      decisionsTruncated: 0,
     }));
     const app = new H3().post(
       "/api/github/webhook",
@@ -116,6 +119,9 @@ describe("POST /api/github/webhook", () => {
     await expect(response.json()).resolves.toEqual({
       status: "accepted",
       matched: 1,
+      conditionFiltered: 0,
+      decisions: [],
+      decisionsTruncated: 0,
     });
     expect(receive).toHaveBeenCalledWith(
       {
