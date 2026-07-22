@@ -15,19 +15,19 @@ importers:
     dependencies:
       '@agent-native/core':
         specifier: 0.109.4
-        version: 0.109.4(3f059923d9472d8b88b76dfe8aea46c1)
+        version: 0.109.4(5733cad117e2b5093459c3b70dea6883)
       '@agent-native/toolkit':
         specifier: 0.5.0
         version: 0.5.0(@floating-ui/dom@1.8.0)(@tiptap/extension-code-block@3.28.0(@tiptap/core@3.28.0(@tiptap/pm@3.28.0))(@tiptap/pm@3.28.0))(@tiptap/extension-list@3.28.0(@tiptap/core@3.28.0(@tiptap/pm@3.28.0))(@tiptap/pm@3.28.0))(@tiptap/extensions@3.28.0(@tiptap/core@3.28.0(@tiptap/pm@3.28.0))(@tiptap/pm@3.28.0))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(prosemirror-model@1.25.11)(prosemirror-state@1.4.4)(prosemirror-view@1.42.1)(react-dom@19.2.7(react@19.2.7))(react-is@19.2.7)(react@19.2.7)(redux@5.0.1)
-      '@ai-sdk/openai':
-        specifier: ^3.0.53
-        version: 3.0.86(zod@4.4.3)
       '@fontsource-variable/inter':
         specifier: ^5.2.8
         version: 5.2.8
       '@libsql/client':
         specifier: ^0.15.8
         version: 0.15.15
+      '@openrouter/ai-sdk-provider':
+        specifier: ^2.9.1
+        version: 2.10.0(ai@6.0.231(zod@4.4.3))(zod@4.4.3)
       '@react-router/dev':
         specifier: 8.1.0
         version: 8.1.0(react-router@8.1.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(typescript@7.0.2)(vite@8.1.0(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1))
@@ -1375,6 +1375,13 @@ packages:
 
   '@nodable/entities@3.0.0':
     resolution: {integrity: sha512-8L9xFeTYKhm49xfIypoe2W5wV1m/3Z58kT+7kR9A8OyFxcPduI4VmxaUMQyKYrRjUoLLSXv6EKKID5Tvj9cUVw==}
+
+  '@openrouter/ai-sdk-provider@2.10.0':
+    resolution: {integrity: sha512-FMsAEjLUt5pWuRE2LDC/LCvVrFjLlrEzUITH5+5SZtfq7KZ2wrOHjQVxzz92sju8S9ltpzW87CLW8/b0oBXVCw==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      ai: ^6.0.0
+      zod: ^3.25.0 || ^4.0.0
 
   '@opentelemetry/api-logs@0.214.0':
     resolution: {integrity: sha512-40lSJeqYO8Uz2Yj7u94/SJWE/wONa7rmMKjI1ZcIjgf3MHNHv1OZUCrCETGuaRF62d5pQD1wKIW+L4lmSMTzZA==}
@@ -6156,7 +6163,7 @@ packages:
 
 snapshots:
 
-  '@agent-native/core@0.109.4(3f059923d9472d8b88b76dfe8aea46c1)':
+  '@agent-native/core@0.109.4(5733cad117e2b5093459c3b70dea6883)':
     dependencies:
       '@agent-native/recap-cli': 0.4.4
       '@agent-native/toolkit': 0.5.0(@floating-ui/dom@1.8.0)(@tiptap/extension-code-block@3.28.0(@tiptap/core@3.28.0(@tiptap/pm@3.28.0))(@tiptap/pm@3.28.0))(@tiptap/extension-list@3.28.0(@tiptap/core@3.28.0(@tiptap/pm@3.28.0))(@tiptap/pm@3.28.0))(@tiptap/extensions@3.28.0(@tiptap/core@3.28.0(@tiptap/pm@3.28.0))(@tiptap/pm@3.28.0))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(prosemirror-model@1.25.11)(prosemirror-state@1.4.4)(prosemirror-view@1.42.1)(react-dom@19.2.7(react@19.2.7))(react-is@19.2.7)(react@19.2.7)(redux@5.0.1)
@@ -6255,6 +6262,7 @@ snapshots:
       zod: 4.4.3
     optionalDependencies:
       '@ai-sdk/openai': 3.0.86(zod@4.4.3)
+      '@openrouter/ai-sdk-provider': 2.10.0(ai@6.0.231(zod@4.4.3))(zod@4.4.3)
       '@opentelemetry/api': 1.9.1
       '@tabler/icons-react': 3.45.0(react@19.2.7)
       '@tailwindcss/typography': 0.5.20(tailwindcss@4.3.3)
@@ -6474,6 +6482,7 @@ snapshots:
       '@ai-sdk/provider': 3.0.14
       '@ai-sdk/provider-utils': 4.0.40(zod@4.4.3)
       zod: 4.4.3
+    optional: true
 
   '@ai-sdk/provider-utils@4.0.40(zod@4.4.3)':
     dependencies:
@@ -7509,6 +7518,11 @@ snapshots:
 
   '@nodable/entities@3.0.0':
     optional: true
+
+  '@openrouter/ai-sdk-provider@2.10.0(ai@6.0.231(zod@4.4.3))(zod@4.4.3)':
+    dependencies:
+      ai: 6.0.231(zod@4.4.3)
+      zod: 4.4.3
 
   '@opentelemetry/api-logs@0.214.0':
     dependencies:
