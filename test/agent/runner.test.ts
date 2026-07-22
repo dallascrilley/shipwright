@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { statSync } from "node:fs";
 import { createAndRunPiAgent, runPiAgent, type AgentVm, type AgentOsRuntime } from "../../src/agent/runner.js";
 
 test("runPiAgent configures Pi, prompts once, and always cleans up", async () => {
@@ -152,6 +153,13 @@ test("createAndRunPiAgent gives its explicit sidecar a deadline beyond the Pi de
     },
     async create(options) {
       expect(options?.sidecar).toEqual({ kind: "explicit", handle: sidecar });
+      expect(options?.defaultSoftware).toBe(false);
+      const packagePaths = (options?.software ?? [])
+        .flatMap((software) => Array.isArray(software) ? software : [software])
+        .map((software) => (software as { packagePath: string }).packagePath);
+      expect(packagePaths).toHaveLength(9);
+      expect(new Set(packagePaths).size).toBe(packagePaths.length);
+      expect(packagePaths.every((packagePath) => statSync(packagePath).isFile())).toBe(true);
       expect(options?.limits?.jsRuntime).toEqual({
         cpuTimeLimitMs: 65_000,
         wallClockLimitMs: 65_000,
