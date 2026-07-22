@@ -64,6 +64,9 @@ ssh "$target" bash -s -- "$release_path" <<'REMOTE'
   runuser -u shipwright -- /usr/local/bin/mise install -C "$release_path"
   runuser -u shipwright -- /usr/local/bin/mise exec -C "$release_path" -- corepack enable
   runuser -u shipwright -- /usr/local/bin/mise exec -C "$release_path" -- bun install --frozen-lockfile
+  runuser --preserve-environment -u shipwright -- \
+    env HOME=/var/lib/shipwright \
+    /usr/local/bin/mise exec -C "$release_path" -- bun run provision:sandbox-bun
   runuser -u shipwright -- /usr/local/bin/mise exec -C "$release_path/ui" -- pnpm install --frozen-lockfile
   runuser -u shipwright -- /usr/local/bin/mise exec -C "$release_path/ui" -- pnpm build
   runuser --preserve-environment -u shipwright -- \
