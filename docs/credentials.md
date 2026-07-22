@@ -15,11 +15,13 @@
 - 1Password: use `op://Private/Kimi for Coding API Credentials/credential` from item `63t77dfdpvb6xeckdsxjyosrwa`; it is the authoritative key store and must not be committed or printed.
 - Local invocation: use `op run` to inject `KIMI_API_KEY`, set `AGENTOS_PROVIDER=kimi`, and set `AGENTOS_MODEL=k3`. The agent writes the compatible Pi model catalog inside its sandbox at runtime.
 
-## OpenAI API fallback
+## OpenAI Codex OAuth fallback
 
-- Provider/model: `openai/gpt-5.4`, used only after the primary coding provider returns a recognized quota, rate-limit, or capacity failure. Pi's `openai-codex` transport requires ChatGPT OAuth and is not compatible with this API-key credential.
-- 1Password: item `7k7i5cdnov6twm6qvl5cq5gake` (`OPENAI_API_KEY`) in the `Private` vault is the authoritative key store; never commit or print its credential value. The older `OpenAI API Key - Org Verified` item is not valid for production use.
-- Configuration: inject the item credential as `OPENAI_API_KEY`, then set `AGENTOS_FALLBACK_PROVIDER=openai` and `AGENTOS_FALLBACK_MODEL=gpt-5.4`. Shipwright retries at most once and records each provider/model attempt without storing credentials or upstream error text.
+- Provider/model: `openai-codex/gpt-5.4`, used only after the primary coding provider returns a recognized quota, rate-limit, or capacity failure. This is the ChatGPT OAuth transport, not the OpenAI API-key transport.
+- Local source: `~/.codex/auth.json`, created and refreshed by a successful local Codex sign-in. Never commit, print, or copy this file into a release directory.
+- Production copy: `/var/lib/shipwright/codex-auth.json`, owned by `shipwright:shipwright` with mode `0600`. Set `AGENTOS_CODEX_AUTH_FILE` to that absolute path, `AGENTOS_FALLBACK_PROVIDER=openai-codex`, and `AGENTOS_FALLBACK_MODEL=gpt-5.4`.
+- Runtime projection: Shipwright validates the source file owner and mode, then writes only `access_token`, `refresh_token`, `account_id`, and the access-token expiry into Pi's disposable sandbox auth file. It does not project `id_token`, API keys, or unrelated Codex state, and it does not store credential values in run receipts.
+- Rotation: if the fallback reports an OAuth failure after the local Codex session changes, replace the production copy from the current local file and restore owner `shipwright:shipwright` and mode `0600` before restarting Shipwright.
 
 ## GitHub App: Shipwright DCM review agent
 
