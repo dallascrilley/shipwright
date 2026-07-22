@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { isProviderQuotaError, PROVIDER_QUOTA_ERROR_CODE, runReviewAgent, type ReviewPipelineDependencies, type ReviewWorkspacePort } from "../../src/pipeline/review-run.js";
+import {
+  isProviderQuotaError,
+  PROVIDER_QUOTA_ERROR_CODE,
+  REVIEW_OUTCOME_MISSING_ERROR_CODE,
+  runReviewAgent,
+  type ReviewPipelineDependencies,
+  type ReviewWorkspacePort,
+} from "../../src/pipeline/review-run.js";
 import type { AuthorizedPullRequest } from "../../src/github/app-client.js";
 
 function fixture(options: {
@@ -157,6 +164,9 @@ test("missing outcome artifact surfaces the agent response and redacts secrets",
     artifactMissing: true,
     agentResponse: "Could not authenticate to provider. token=ghp_abcdefghijklmnopqrstuvwxyz012345",
   });
+  deps.execution.attempts = [
+    { provider: "kimi", model: "kimi-for-coding", outcome: "succeeded" },
+  ];
   await expect(runReviewAgent(request, deps)).rejects.toThrow(
     "review agent finished without writing .agentos-review-resolution.json",
   );
@@ -166,10 +176,11 @@ test("missing outcome artifact surfaces the agent response and redacts secrets",
   expect(events).not.toContain("reply");
   expect(events.at(-1)).toBe("destroy");
   const failed = receipts.at(-1) as { errorCode?: string; errorMessage?: string };
-  expect(failed.errorCode).toBe("agent_failed");
+  expect(failed.errorCode).toBe(REVIEW_OUTCOME_MISSING_ERROR_CODE);
   expect(failed.errorMessage).toContain("Could not authenticate to provider");
   expect(failed.errorMessage).toContain("[REDACTED]");
   expect(failed.errorMessage).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz012345");
+  expect(deps.execution.attempts[0]?.outcome).toBe("failed");
 });
 
 test("quota-exhausted provider failure is classified distinctly", async () => {

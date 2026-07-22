@@ -1,6 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import type { AgentSkillProjection } from "../agent/runner.js";
+import {
+  PI_AGENT_OUTPUT_ERROR_CODE,
+  PiAgentOutputError,
+  type AgentSkillProjection,
+} from "../agent/runner.js";
 import { buildReviewPrompt, REVIEW_OUTCOME_PATH } from "../agent/review-prompt.js";
 import {
   isProviderCapacityError,
@@ -23,6 +27,14 @@ import { type ReviewRunPhase, type ReviewRunReceipt, writeReviewReceipt } from "
  * provider chain is out of capacity" apart from a genuine agent failure.
  */
 export const PROVIDER_QUOTA_ERROR_CODE = PROVIDER_CAPACITY_ERROR_CODE;
+export const REVIEW_OUTCOME_MISSING_ERROR_CODE = "agent_outcome_missing";
+
+class ReviewOutcomeMissingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReviewOutcomeMissingError";
+  }
+}
 
 export function isProviderQuotaError(message: string): boolean {
   return isProviderCapacityError(message);
@@ -131,7 +143,8 @@ export async function runReviewAgent(
       // response (redacted) so the real cause is legible instead of a bare `cat` error.
       const original = readError instanceof Error ? readError.message : String(readError);
       const detail = redactSecrets(truncateTail(agentResponse)).trim() || "(no agent output)";
-      throw new Error(
+      markLastAgentAttemptFailed(deps.execution);
+      throw new ReviewOutcomeMissingError(
         `review agent finished without writing ${REVIEW_OUTCOME_PATH} (${original}); agent response: ${detail}`,
       );
     }
@@ -250,9 +263,13 @@ export async function runReviewAgent(
     const message = error instanceof Error ? error.message : String(error);
     receipt.phase = phase;
     receipt.errorCode =
-      phase === "agent" && isProviderQuotaError(message)
-        ? PROVIDER_QUOTA_ERROR_CODE
-        : `${phase}_failed`;
+      phase === "agent" && error instanceof PiAgentOutputError
+        ? PI_AGENT_OUTPUT_ERROR_CODE
+        : phase === "agent" && isProviderQuotaError(message)
+            ? PROVIDER_QUOTA_ERROR_CODE
+            : phase === "agent" && error instanceof ReviewOutcomeMissingError
+              ? REVIEW_OUTCOME_MISSING_ERROR_CODE
+              : `${phase}_failed`;
     receipt.errorMessage = redactSecrets(message);
     await emitProgress();
     await deps.writeReceipt(receiptPath, receipt);
@@ -260,6 +277,12 @@ export async function runReviewAgent(
   } finally {
     await workspace?.destroy();
   }
+}
+
+function markLastAgentAttemptFailed(execution: AgentExecution): void {
+  const attempts = execution.attempts;
+  const attempt = attempts?.[attempts.length - 1];
+  if (attempt?.outcome === "succeeded") attempt.outcome = "failed";
 }
 
 export const defaultReviewReceiptWriter = writeReviewReceipt;

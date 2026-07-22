@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 import { statSync } from "node:fs";
-import { createAndRunPiAgent, runPiAgent, type AgentVm, type AgentOsRuntime } from "../../src/agent/runner.js";
+import {
+  createAndRunPiAgent,
+  PiAgentOutputError,
+  runPiAgent,
+  type AgentVm,
+  type AgentOsRuntime,
+} from "../../src/agent/runner.js";
 
 test("runPiAgent configures Pi, prompts once, and always cleans up", async () => {
   const events: string[] = [];
@@ -17,6 +23,130 @@ test("runPiAgent configures Pi, prompts once, and always cleans up", async () =>
 
   expect(result).toBe("done");
   expect(events).toEqual(["mkdir", "settings", "session", "prompt", "close-session", "dispose"]);
+});
+
+test("runPiAgent rejects an ACP prompt error instead of accepting empty output", async () => {
+  const vm: AgentVm = {
+    async mkdir() {},
+    async writeFile() {},
+    async createSession() { return { sessionId: "s1" }; },
+    async prompt() {
+      return {
+        text: "",
+        response: {
+          jsonrpc: "2.0" as const,
+          id: 1,
+          error: { code: -32000, message: "upstream request failed" },
+        },
+      };
+    },
+    closeSession() {},
+    async dispose() {},
+  };
+
+  await expect(
+    runPiAgent(vm, { env: {}, name: "openai", model: "gpt-test" }, "fix it"),
+  ).rejects.toThrow("Pi agent request failed (RPC -32000): upstream request failed");
+});
+
+test("runPiAgent retries one empty completed turn in the same session", async () => {
+  const prompts: string[] = [];
+  const vm: AgentVm = {
+    async mkdir() {},
+    async writeFile() {},
+    async createSession() { return { sessionId: "s1" }; },
+    async prompt(_sessionId, prompt) {
+      prompts.push(prompt);
+      return prompts.length === 1
+        ? {
+            text: "",
+            response: { jsonrpc: "2.0" as const, id: 1, result: { stopReason: "end_turn" } },
+          }
+        : {
+            text: "done",
+            response: { jsonrpc: "2.0" as const, id: 2, result: { stopReason: "end_turn" } },
+          };
+    },
+    closeSession() {},
+    async dispose() {},
+  };
+
+  await expect(
+    runPiAgent(vm, { env: {}, name: "openai", model: "gpt-test" }, "fix it"),
+  ).resolves.toBe("done");
+  expect(prompts).toHaveLength(2);
+  expect(prompts[1]).toContain("previous turn completed without a final response");
+});
+
+test("runPiAgent does not recover a canceled empty turn", async () => {
+  let prompts = 0;
+  const vm: AgentVm = {
+    async mkdir() {},
+    async writeFile() {},
+    async createSession() { return { sessionId: "s1" }; },
+    async prompt() {
+      prompts += 1;
+      return {
+        text: "",
+        response: { jsonrpc: "2.0" as const, id: 1, result: { stopReason: "cancelled" } },
+      };
+    },
+    closeSession() {},
+    async dispose() {},
+  };
+
+  await expect(
+    runPiAgent(vm, { env: {}, name: "openai", model: "gpt-test" }, "fix it"),
+  ).rejects.toThrow("without text output (stopReason=cancelled");
+  expect(prompts).toBe(1);
+});
+
+test("runPiAgent reports safe event diagnostics after two empty turns", async () => {
+  let handler: ((event: never) => void) | undefined;
+  let prompts = 0;
+  let unsubscribed = false;
+  const vm = {
+    async mkdir() {},
+    async writeFile() {},
+    async createSession() { return { sessionId: "s1" }; },
+    onSessionEvent(_sessionId: string, nextHandler: (event: never) => void) {
+      handler = nextHandler;
+      return () => { unsubscribed = true; };
+    },
+    async prompt() {
+      prompts += 1;
+      handler?.({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: { update: { sessionUpdate: "agent_thought_chunk", content: { text: "hidden" } } },
+      } as never);
+      handler?.({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: { update: { sessionUpdate: "tool_call", rawInput: { secret: "ignored" } } },
+      } as never);
+      if (prompts === 2) {
+        handler?.({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { update: { sessionUpdate: "tool_call_update", status: "failed" } },
+        } as never);
+      }
+      return {
+        text: "",
+        response: { jsonrpc: "2.0" as const, id: prompts, result: { stopReason: "end_turn" } },
+      };
+    },
+    closeSession() {},
+    async dispose() {},
+  } as AgentVm;
+
+  const run = runPiAgent(vm, { env: {}, name: "openai", model: "gpt-test" }, "fix it");
+  await expect(run).rejects.toBeInstanceOf(PiAgentOutputError);
+  await expect(run).rejects.toThrow(
+    "stopReason=end_turn; agentMessageChunks=0, agentThoughtChunks=2, toolCalls=2, toolFailures=1",
+  );
+  expect(unsubscribed).toBe(true);
 });
 
 test("runPiAgent configures Pi's Kimi K3 catalog", async () => {

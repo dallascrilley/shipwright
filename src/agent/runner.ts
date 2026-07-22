@@ -1,4 +1,9 @@
-import { AgentOs, type AgentOsSidecar } from "@rivet-dev/agentos-core";
+import {
+  AgentOs,
+  type AgentOsSidecar,
+  type JsonRpcResponse,
+  type SessionEventHandler,
+} from "@rivet-dev/agentos-core";
 import { statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,7 +14,8 @@ export interface AgentVm {
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
   writeFile(path: string, content: string | Uint8Array): Promise<void>;
   createSession(agentType: string, options?: { cwd?: string; env?: Record<string, string> }): Promise<{ sessionId: string }>;
-  prompt(sessionId: string, text: string): Promise<{ text: string }>;
+  prompt(sessionId: string, text: string): Promise<{ text: string; response?: JsonRpcResponse }>;
+  onSessionEvent?(sessionId: string, handler: SessionEventHandler): () => void;
   closeSession(sessionId: string): void;
   dispose(): Promise<void>;
 }
@@ -24,8 +30,24 @@ export interface AgentSkillProjection {
   content: string;
 }
 
+export const PI_AGENT_OUTPUT_ERROR_CODE = "agent_output_missing";
+
+export class PiAgentOutputError extends Error {
+  readonly code = PI_AGENT_OUTPUT_ERROR_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "PiAgentOutputError";
+  }
+}
+
 const DEFAULT_PI_TIMEOUT_MS = 30 * 60_000;
 const SIDECAR_FRAME_TIMEOUT_BUFFER_MS = 60_000;
+const EMPTY_TURN_RECOVERY_PROMPT = [
+  "Your previous turn completed without a final response.",
+  "Resume the original task, finish any required workspace artifact, and return the requested final response now.",
+  "Do not repeat completed edits or perform publication actions.",
+].join(" ");
 const AGENTOS_SOFTWARE_PACKAGES = [
   "@agentos-software/coreutils",
   "@agentos-software/sed",
@@ -84,6 +106,7 @@ export async function runPiAgent(
 ): Promise<string> {
   let sessionId: string | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  let unsubscribe: (() => void) | undefined;
   try {
     await vm.mkdir("/home/agentos/.pi/agent", { recursive: true });
     await vm.writeFile(
@@ -117,8 +140,10 @@ export async function runPiAgent(
         ...provider.env,
       },
     }));
+    const diagnostics = createSessionDiagnostics();
+    unsubscribe = vm.onSessionEvent?.(sessionId, diagnostics.observe);
     const result = await Promise.race([
-      vm.prompt(sessionId, prompt),
+      runPromptTurns(vm, sessionId, prompt, diagnostics.summary),
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => reject(new Error("Pi agent timed out")), timeoutMs);
       }),
@@ -126,9 +151,93 @@ export async function runPiAgent(
     return result.text;
   } finally {
     if (timeout) clearTimeout(timeout);
+    unsubscribe?.();
     if (sessionId) vm.closeSession(sessionId);
     await vm.dispose();
   }
+}
+
+async function runPromptTurns(
+  vm: AgentVm,
+  sessionId: string,
+  prompt: string,
+  diagnostics: () => string,
+): Promise<{ text: string; response?: JsonRpcResponse }> {
+  let result = await vm.prompt(sessionId, prompt);
+  assertSuccessfulPrompt(result, diagnostics());
+  if (result.text.trim()) return result;
+  if (promptStopReason(result) !== "end_turn") {
+    throw new PiAgentOutputError(
+      `Pi agent completed without text output (${promptResultSummary(result)}; ${diagnostics()})`,
+    );
+  }
+
+  result = await vm.prompt(sessionId, EMPTY_TURN_RECOVERY_PROMPT);
+  assertSuccessfulPrompt(result, diagnostics());
+  if (!result.text.trim()) {
+    throw new PiAgentOutputError(
+      `Pi agent completed twice without text output (${promptResultSummary(result)}; ${diagnostics()})`,
+    );
+  }
+  return result;
+}
+
+function assertSuccessfulPrompt(
+  result: { response?: JsonRpcResponse },
+  diagnostics: string,
+): void {
+  const error = result.response?.error;
+  if (!error) return;
+  throw new Error(
+    `Pi agent request failed (RPC ${error.code}): ${error.message} (${diagnostics})`,
+  );
+}
+
+function promptResultSummary(result: { response?: JsonRpcResponse }): string {
+  return `stopReason=${promptStopReason(result)}`;
+}
+
+function promptStopReason(result: { response?: JsonRpcResponse }): string {
+  const responseResult = asRecord(result.response?.result);
+  return typeof responseResult?.stopReason === "string"
+    ? responseResult.stopReason
+    : "unknown";
+}
+
+function createSessionDiagnostics(): {
+  observe: SessionEventHandler;
+  summary: () => string;
+} {
+  let agentMessageChunks = 0;
+  let agentThoughtChunks = 0;
+  let toolCalls = 0;
+  let toolFailures = 0;
+  return {
+    observe(event) {
+      const params = asRecord(event.params);
+      const update = asRecord(params?.update);
+      switch (update?.sessionUpdate) {
+        case "agent_message_chunk": agentMessageChunks += 1; break;
+        case "agent_thought_chunk": agentThoughtChunks += 1; break;
+        case "tool_call": toolCalls += 1; break;
+        case "tool_call_update":
+          if (update.status === "failed") toolFailures += 1;
+          break;
+      }
+    },
+    summary: () => [
+      `agentMessageChunks=${agentMessageChunks}`,
+      `agentThoughtChunks=${agentThoughtChunks}`,
+      `toolCalls=${toolCalls}`,
+      `toolFailures=${toolFailures}`,
+    ].join(", "),
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 export async function createAndRunPiAgent(
