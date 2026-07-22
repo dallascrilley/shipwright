@@ -5,6 +5,10 @@ import { parseIssueUrl } from "../github/issue-ref.js";
 import { openOrReusePullRequest, pullRequestBody } from "../github/publisher.js";
 import type { PullRequestResult } from "../github/types.js";
 import { buildProgrammingPrompt } from "../agent/prompt.js";
+import {
+  isProviderCapacityError,
+  PROVIDER_CAPACITY_ERROR_CODE,
+} from "../config/provider.js";
 import { PipelineError } from "./errors.js";
 import { assertPublishableChange } from "./policy.js";
 import { redactSecrets, truncateTail, type AgentExecution, type RunReceipt, writeReceipt } from "./receipt.js";
@@ -160,13 +164,16 @@ export async function runShipwright(request: RunRequest, deps: PipelineDependenc
     await deps.writeReceipt(receiptPath, receipt);
     return receipt;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     const pipelineError =
       error instanceof PipelineError
         ? error
         : new PipelineError(
             receipt.phase,
-            `${receipt.phase}_failed`,
-            error instanceof Error ? error.message : String(error),
+            receipt.phase === "agent" && isProviderCapacityError(message)
+              ? PROVIDER_CAPACITY_ERROR_CODE
+              : `${receipt.phase}_failed`,
+            message,
             { cause: error },
           );
     receipt.phase = pipelineError.phase;

@@ -15,6 +15,12 @@
 - 1Password: use `op://Private/Kimi for Coding API Credentials/credential` from item `63t77dfdpvb6xeckdsxjyosrwa`; it is the authoritative key store and must not be committed or printed.
 - Local invocation: use `op run` to inject `KIMI_API_KEY`, set `AGENTOS_PROVIDER=kimi`, and set `AGENTOS_MODEL=k3`. The agent writes the compatible Pi model catalog inside its sandbox at runtime.
 
+## OpenAI Codex fallback
+
+- Provider/model: `openai-codex/gpt-5.4`, used only after the primary coding provider returns a recognized quota, rate-limit, or capacity failure.
+- 1Password: item `ihnfet3bphdyzixh3ak5lolafa` (`OpenAI API Key - Org Verified`) in the `Private` vault is the authoritative key store; never commit or print its credential value.
+- Configuration: inject the item credential as `OPENAI_API_KEY`, then set `AGENTOS_FALLBACK_PROVIDER=openai-codex` and `AGENTOS_FALLBACK_MODEL=gpt-5.4`. Shipwright retries at most once and records each provider/model attempt without storing credentials or upstream error text.
+
 ## GitHub App: Shipwright DCM review agent
 
 - Product name: Shipwright; GitHub registration: `shipwright-dcm` (App ID `4342351`). GitHub reserves the exact `Shipwright` registration name for `@shipwright`.
