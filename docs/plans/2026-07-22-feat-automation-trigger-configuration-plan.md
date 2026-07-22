@@ -21,7 +21,7 @@ The manual Operator console remains unchanged. New agents remain disabled, test 
 - [x] (2026-07-22 14:49Z) Grounded the plan in current `origin/main`, the approved requirements, relevant tests, and the installed Octokit App API.
 - [x] (2026-07-22 14:49Z) Resolved repository-catalog refresh, legacy-trigger compatibility, and condition-scope questions as planning decisions.
 - [x] (2026-07-22 14:49Z) Imported epic `td-c4c766` with U1 `td-d39f87`, U2 `td-d77115`, U3 `td-997e46`, and U4 `td-137fbf`; verified the dependency graph.
-- [ ] U1: Add the allowed-and-accessible repository catalog and enforce it at agent create/save boundaries.
+- [x] (2026-07-22 15:25Z) U1: Added the GitHub App-backed allowed repository catalog, safe read action, and create/repository-changing save enforcement with unchanged-scope outage compatibility.
 - [ ] U2: Add curated GitHub trigger choices, trigger removal, legacy compatibility, and versioned JSON projection.
 - [ ] U3: Replace free-form repository/action inputs with the repository picker and readable trigger editor.
 - [ ] U4: Align deployment configuration and documentation, then prove the flow locally and in the deployed operator UI.

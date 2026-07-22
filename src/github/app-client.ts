@@ -97,6 +97,7 @@ export interface RepositorySession {
 }
 
 export interface GitHubTransport {
+  listAccessibleRepositories(): Promise<GitHubAccessibleRepository[]>;
   resolveInstallation(ref: IssueRef | PullRequestRef): Promise<number>;
   createRepositoryClient(input: {
     installationId: number;
@@ -104,6 +105,48 @@ export interface GitHubTransport {
     repo: string;
     permissions: typeof INSTALLATION_PERMISSIONS;
   }): Promise<RepositorySession>;
+}
+
+export type GitHubRepositoryVisibility = "public" | "private" | "internal";
+
+export interface GitHubAccessibleRepository {
+  fullName: string;
+  defaultBranch: string;
+  visibility: GitHubRepositoryVisibility;
+  archived: boolean;
+}
+
+interface GitHubRepositoryIteratorEntry {
+  repository: {
+    full_name: string;
+    default_branch: string;
+    visibility?: string | null;
+    private: boolean;
+    archived?: boolean;
+  };
+}
+
+export async function collectAccessibleRepositories(
+  entries: AsyncIterable<GitHubRepositoryIteratorEntry>,
+): Promise<GitHubAccessibleRepository[]> {
+  const repositories: GitHubAccessibleRepository[] = [];
+  for await (const { repository } of entries) {
+    const visibility =
+      repository.visibility === "internal" ||
+      repository.visibility === "private" ||
+      repository.visibility === "public"
+        ? repository.visibility
+        : repository.private
+          ? "private"
+          : "public";
+    repositories.push({
+      fullName: repository.full_name,
+      defaultBranch: repository.default_branch,
+      visibility,
+      archived: repository.archived ?? false,
+    });
+  }
+  return repositories;
 }
 
 export interface AuthorizedIssue {
@@ -212,6 +255,12 @@ export async function authorizeIssue(
 export function createOctokitTransport(config: GitHubConfig): GitHubTransport {
   const app = new App({ appId: config.appId, privateKey: config.privateKey, Octokit });
   return {
+    async listAccessibleRepositories() {
+      const iterator = config.installationId
+        ? app.eachRepository.iterator({ installationId: config.installationId })
+        : app.eachRepository.iterator();
+      return collectAccessibleRepositories(iterator);
+    },
     async resolveInstallation(ref) {
       const response = await app.octokit.request("GET /repos/{owner}/{repo}/installation", {
         owner: ref.owner,
