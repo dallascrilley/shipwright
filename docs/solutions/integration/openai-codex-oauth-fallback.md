@@ -5,7 +5,9 @@ category: integration
 module: agentos-provider-fallback
 tags: [agentos, pi, openai-codex, oauth, provider-fallback]
 severity: high
-related: [docs/solutions/integration/agentos-pi-empty-prompt-result.md]
+related:
+  - docs/solutions/integration/agentos-pi-empty-prompt-result.md
+  - docs/solutions/integration/sandbox-bun-verification-runtime.md
 ---
 
 # Shipwright can use local Codex OAuth as a quota fallback
@@ -66,7 +68,7 @@ Copy the current signed-in local Codex auth file to `/var/lib/shipwright/codex-a
 Production release `5da38ce` passed two fresh checks:
 
 - Shipwright's own `SandboxWorkspace` and `createAndRunPiAgent` path returned exactly `OK` from `openai-codex/gpt-5.4` inside a new disposable Docker workspace within the two-minute bound.
-- No-publish review receipt `9c2abc5b9e781680` recorded `kimi/k3` as `capacity_failed`, `openai-codex/gpt-5.4` as `succeeded`, and `fallbackUsed: true`. The run then reached the independent verification phase and failed separately because the selected target command was `bun test` while that repository sandbox did not provide `bun` (`exit 127`). The authorized pull-request head and its two unresolved current review threads remained unchanged.
+- No-publish review receipt `9c2abc5b9e781680` recorded `kimi/k3` as `capacity_failed`, `openai-codex/gpt-5.4` as `succeeded`, and `fallbackUsed: true`. The run then reached the independent verification phase and failed separately because the selected target command was `bun test` while that repository sandbox did not provide `bun` (`exit 127`). The authorized pull-request head and its two unresolved current review threads remained unchanged. Follow-up receipt `cf10b590b73e2702`, after [[sandbox-bun-verification-runtime]], preserved the same fallback result and advanced `bun test` to its real repository exit 1 without publishing or changing those threads.
 
 This distinguishes provider recovery from repository verification: the fallback is working even when a later host-controlled gate rejects the run.
 
