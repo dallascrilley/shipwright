@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   parseNulList,
   requireSuccessfulCommand,
+  resolvePiNodeModulesDirectory,
   resolveSandboxContainerUser,
   resolveSandboxImage,
 } from "../../src/sandbox/runtime.js";
@@ -59,6 +60,15 @@ describe("sandbox command helpers", () => {
     expect(resolveSandboxContainerUser("linux", 996, 988)).toBe("996:988");
     expect(resolveSandboxContainerUser("darwin", 501, 20)).toBeUndefined();
     expect(resolveSandboxContainerUser("linux", undefined, undefined)).toBeUndefined();
+  });
+
+  test("resolves the installed Pi dependency root for a read-only sandbox mount", () => {
+    const nodeModules = resolvePiNodeModulesDirectory();
+    expect(nodeModules.endsWith("/node_modules")).toBe(true);
+    expect(Bun.file(join(
+      nodeModules,
+      "@mariozechner/pi-coding-agent/dist/cli.js",
+    )).size).toBeGreaterThan(0);
   });
 
   test("host temp workspaces resolve through macOS private tmp symlinks", async () => {
