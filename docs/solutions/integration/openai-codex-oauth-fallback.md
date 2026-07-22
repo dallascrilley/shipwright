@@ -1,5 +1,5 @@
 ---
-title: AgentOS can use local Codex OAuth as a quota fallback
+title: Shipwright can use local Codex OAuth as a quota fallback
 date: 2026-07-22
 category: integration
 module: agentos-provider-fallback
@@ -8,21 +8,29 @@ severity: high
 related: [docs/solutions/integration/agentos-pi-empty-prompt-result.md]
 ---
 
-# AgentOS can use local Codex OAuth as a quota fallback
+# Shipwright can use local Codex OAuth as a quota fallback
 
 ## Problem
 
 The primary Kimi provider correctly entered the fallback lane after a capacity failure, but the configured `openai/gpt-5.4` API-key attempt remained silent until the ACP deadline. A direct Responses API probe exposed the hidden upstream result: the API project had no available quota, so changing only the model could not restore the review run.
 
+Switching the fallback to `openai-codex/gpt-5.4` and projecting ChatGPT OAuth into AgentOS removed the API-project dependency, but the AgentOS Pi adapter still timed out without model output. The same credential, model, prompt, and Pi `0.60.0` runtime completed successfully when Pi ran directly on the production host and inside the pinned disposable Docker sandbox. That isolated the remaining failure to the AgentOS ACP/V8 transport, not Codex OAuth, Pi, Docker, or the model.
+
 ## What didn't work
 
 - Reusing `OPENAI_API_KEY` still depended on the exhausted API billing project.
 - Selecting Pi's `openai-codex` provider without an OAuth record left the headless sandbox unauthenticated.
+- Running `openai-codex` through AgentOS's Pi ACP/V8 adapter remained silent until its deadline even after valid OAuth was projected.
 - The Pi package catalog did not provide the required bridge. `pi-codex-account` manages Pi's own auth store, `pi-codex-token` expects an enterprise PAT, and `pi-gpt` exposes separate ChatGPT tools rather than authenticating Pi's coding-model provider. Adding one of those packages would not remove the schema boundary and would add third-party code to the production agent.
 
 ## Root cause
 
-Codex CLI and Pi can use the same ChatGPT OAuth account, but they persist different JSON shapes. The usable local credential is in `~/.codex/auth.json`, while Pi expects an `openai-codex` OAuth entry in `~/.pi/agent/auth.json`. AgentOS creates a disposable VM for each attempt, so the required Pi auth entry must be projected into that VM before its session starts.
+There were two independent boundaries:
+
+1. Codex CLI and Pi can use the same ChatGPT OAuth account, but they persist different JSON shapes. The usable local credential is in `~/.codex/auth.json`, while Pi expects an `openai-codex` OAuth entry in its own agent directory.
+2. AgentOS `0.2.7` does not provide a working native Codex path for this deployment. Its Pi ACP/V8 adapter stalled while direct Pi succeeded with identical inputs.
+
+The fallback therefore needs both a least-privilege credential projection and a provider-specific execution path outside the failing ACP adapter.
 
 ## Solution
 
@@ -38,9 +46,14 @@ Shipwright now:
 
 1. Requires the source to be a regular file owned by the Shipwright process user with no group or world permissions.
 2. Parses only `tokens.access_token`, `tokens.refresh_token`, and `tokens.account_id`, deriving the expiry from the access token.
-3. Writes the minimal Pi `openai-codex` OAuth record inside the disposable AgentOS VM before creating the Pi session.
-4. Omits the Codex `id_token`, API-key field, and all unrelated local auth state.
-5. Keeps the host auth path and every token value out of provider-attempt receipts and normalized errors.
+3. Mounts the lockfile-pinned Pi `0.60.0` dependency tree read-only into the existing disposable Docker workspace.
+4. Writes the minimal Pi `openai-codex` OAuth record to owner-only temporary storage inside that sandbox.
+5. Runs the Codex attempt through Pi's non-interactive CLI in the same cloned workspace; Kimi and other providers continue through AgentOS.
+6. Disables package extensions, prompt templates, themes, and session persistence for the fallback attempt while retaining Pi's built-in coding tools and the selected Shipwright skill.
+7. Removes the temporary Pi home and auth projection after the attempt, whether it succeeds or fails.
+8. Omits the Codex `id_token`, API-key field, and all unrelated local auth state, and keeps paths, tokens, and raw provider errors out of receipts.
+
+No Pi extension is required. The fallback uses the already locked `@mariozechner/pi-coding-agent` package rather than downloading code at runtime.
 
 The fallback remains bounded to one retry and runs only for recognized provider quota, rate-limit, or capacity failures. Agent, verification, policy, and publication failures still do not switch providers.
 
@@ -50,6 +63,6 @@ Copy the current signed-in local Codex auth file to `/var/lib/shipwright/codex-a
 
 ## Prevention
 
-Treat API-key OpenAI and ChatGPT OAuth as separate provider credentials even when they select the same model family. Validate the credential at the adapter boundary, project the least data needed by the sandbox, and use a direct minimal provider probe before interpreting a long ACP timeout as an AgentOS failure.
+Treat API-key OpenAI and ChatGPT OAuth as separate provider credentials even when they select the same model family. Validate the credential at the adapter boundary, project the least data needed by the sandbox, and compare the framework path with the smallest direct provider probe before assigning a silent timeout to credentials or capacity.
 
-References: [Pi package catalog](https://pi.dev/packages), [pi-codex-account](https://pi.dev/packages/pi-codex-account), and [pi-gpt](https://pi.dev/packages/pi-gpt).
+References: [Pi package catalog](https://pi.dev/packages), [Pi providers and OAuth](https://pi.dev/docs/latest/providers), [AgentOS repository](https://github.com/rivet-dev/agent-os), [pi-codex-account](https://pi.dev/packages/pi-codex-account), and [pi-gpt](https://pi.dev/packages/pi-gpt).
