@@ -8,7 +8,8 @@
 # records a SHA-256 checksum. Restore verifies the checksum (when the sidecar
 # exists) and validates the document against the full snapshot schema before
 # an atomic move, so a corrupt or truncated backup never replaces live state;
-# the displaced live file is retained as agent-control-plane.json.bak.
+# the displaced live file is retained as agent-control-plane.json.bak. Restore
+# also preserves the live file owner (or state-directory owner for a new file).
 set -euo pipefail
 
 command_name="${1:-}"
@@ -17,6 +18,15 @@ state_file="agent-control-plane.json"
 usage() {
   printf 'Usage: %s backup <state_dir> <backup_dir> | restore <backup_file> <state_dir>\n' "$0" >&2
   exit 1
+}
+
+numeric_owner() {
+  local path="$1"
+  if stat -c '%u:%g' "$path" >/dev/null 2>&1; then
+    stat -c '%u:%g' "$path"
+  else
+    stat -f '%u:%g' "$path"
+  fi
 }
 
 [[ "$command_name" == "backup" || "$command_name" == "restore" ]] || usage
@@ -71,13 +81,29 @@ else
   ' "$backup_file" || { printf 'Backup %s is not a valid control-plane snapshot; live state untouched.\n' "$backup_file" >&2; exit 1; }
   mkdir -p "$state_dir"
   live="$state_dir/$state_file"
+  if [[ -n "${SHIPWRIGHT_STATE_OWNER:-}" ]]; then
+    restore_owner="$SHIPWRIGHT_STATE_OWNER"
+  elif [[ -f "$live" ]]; then
+    restore_owner="$(numeric_owner "$live")"
+  else
+    restore_owner="$(numeric_owner "$state_dir")"
+  fi
+  if [[ ! "$restore_owner" =~ ^[0-9]+:[0-9]+$ ]]; then
+    printf 'Invalid restore owner %s; expected numeric uid:gid.\n' "$restore_owner" >&2
+    exit 1
+  fi
+  temporary="$state_dir/$state_file.restore.$$"
+  trap 'rm -f -- "$temporary"' EXIT
+  cp "$backup_file" "$temporary"
+  chmod 600 "$temporary"
+  if [[ "$(numeric_owner "$temporary")" != "$restore_owner" ]]; then
+    chown "$restore_owner" "$temporary"
+  fi
   if [[ -f "$live" ]]; then
     cp "$live" "$live.bak"
     chmod 600 "$live.bak"
   fi
-  temporary="$state_dir/$state_file.restore.$$"
-  cp "$backup_file" "$temporary"
   mv "$temporary" "$live"
-  chmod 600 "$live"
+  trap - EXIT
   printf 'Restored %s into %s (previous state retained as %s.bak)\n' "$backup_file" "$live" "$live"
 fi
