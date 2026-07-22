@@ -1,5 +1,7 @@
-import pi from "@agentos-software/pi";
 import { AgentOs, type AgentOsSidecar } from "@rivet-dev/agentos-core";
+import { statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ProviderConfig } from "../config/provider.js";
 import { AGENT_WORKSPACE, type SandboxWorkspace } from "../sandbox/runtime.js";
 
@@ -24,6 +26,28 @@ export interface AgentSkillProjection {
 
 const DEFAULT_PI_TIMEOUT_MS = 30 * 60_000;
 const SIDECAR_FRAME_TIMEOUT_BUFFER_MS = 60_000;
+const AGENTOS_SOFTWARE_PACKAGES = [
+  "@agentos-software/coreutils",
+  "@agentos-software/sed",
+  "@agentos-software/grep",
+  "@agentos-software/gawk",
+  "@agentos-software/findutils",
+  "@agentos-software/diffutils",
+  "@agentos-software/tar",
+  "@agentos-software/gzip",
+  "@agentos-software/pi",
+] as const;
+
+function resolveAgentOsSoftware(): Array<{ packagePath: string }> {
+  return AGENTOS_SOFTWARE_PACKAGES.map((packageName) => {
+    const entryPath = fileURLToPath(import.meta.resolve(packageName));
+    const packagePath = join(dirname(entryPath), "package.aospkg");
+    if (!statSync(packagePath).isFile()) {
+      throw new Error(`AgentOS software archive is not a file: ${packageName}`);
+    }
+    return { packagePath };
+  });
+}
 
 function piModelsConfig(provider: ProviderConfig): string | undefined {
   if (provider.name !== "kimi") return undefined;
@@ -120,7 +144,12 @@ export async function createAndRunPiAgent(
   const sidecar = await runtime.createSidecar({ frameTimeoutMs: runtimeDeadlineMs });
   try {
     const vm = await runtime.create({
-      software: [pi],
+      // Nitro bundles every package's `new URL("./package.aospkg",
+      // import.meta.url)` into shared chunks. Those references then collide and
+      // point at missing output assets. Resolve the host-installed archives
+      // directly and opt out of AgentOS's bundled defaults.
+      defaultSoftware: false,
+      software: resolveAgentOsSoftware(),
       mounts: [workspace.createMount()],
       toolKits: [workspace.createToolkit()],
       sidecar: { kind: "explicit", handle: sidecar },
