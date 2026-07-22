@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
+import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createHostDirBackend, type ToolKit } from "@rivet-dev/agentos-core";
@@ -14,6 +15,8 @@ const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 export const SANDBOX_WORKSPACE = "/home/sandbox/workspace";
 export const SANDBOX_PI_NODE_MODULES = "/opt/shipwright/node_modules";
+export const SANDBOX_BUN_EXECUTABLE = "/usr/local/bin/bun";
+export const EXPECTED_SANDBOX_BUN_VERSION = "1.3.14";
 export const AGENT_WORKSPACE = "/workspace";
 export const DEFAULT_SANDBOX_IMAGE =
   "rivetdev/sandbox-agent@sha256:640cfb725a94b8a47967e0c2ec153d3ab267244f517f700e8f82f1e4d55b2ea2";
@@ -80,6 +83,27 @@ export function resolvePiNodeModulesDirectory(): string {
   return dirname(dirname(packageRoot));
 }
 
+export function resolveBunExecutable(
+  configured = process.env.SHIPWRIGHT_SANDBOX_BUN_PATH,
+  home = homedir(),
+): string {
+  const candidate = configured?.trim()
+    || join(home, ".shipwright", "tools", `bun-${EXPECTED_SANDBOX_BUN_VERSION}-linux`);
+  try {
+    const resolved = realpathSync(candidate);
+    if (!isAbsolute(resolved) || resolved.includes(":") || resolved.includes("\n")) {
+      throw new Error("unsafe bind path");
+    }
+    if (!statSync(resolved).isFile()) throw new Error("not a file");
+    accessSync(resolved, constants.R_OK | constants.X_OK);
+    return resolved;
+  } catch {
+    throw new Error(
+      `sandbox Bun runtime is unavailable at ${candidate}; run bun run provision:sandbox-bun`,
+    );
+  }
+}
+
 export function requireSuccessfulCommand(label: string, result: ProcessRunResponse): ProcessRunResponse {
   if (result.timedOut) throw new Error(`${label} timed out`);
   if (result.stdoutTruncated || result.stderrTruncated) {
@@ -90,6 +114,16 @@ export function requireSuccessfulCommand(label: string, result: ProcessRunRespon
     throw new Error(`${label} failed: ${detail}`);
   }
   return result;
+}
+
+export function requireExpectedBunVersion(result: ProcessRunResponse): string {
+  const version = requireSuccessfulCommand("sandbox Bun preflight", result).stdout.trim();
+  if (version !== EXPECTED_SANDBOX_BUN_VERSION) {
+    throw new Error(
+      `sandbox Bun preflight expected ${EXPECTED_SANDBOX_BUN_VERSION}, received ${version || "no version"}`,
+    );
+  }
+  return version;
 }
 
 export class SandboxWorkspace {
@@ -112,6 +146,7 @@ export class SandboxWorkspace {
           binds: [
             `${hostWorkspace}:${SANDBOX_WORKSPACE}`,
             `${resolvePiNodeModulesDirectory()}:${SANDBOX_PI_NODE_MODULES}:ro`,
+            `${resolveBunExecutable()}:${SANDBOX_BUN_EXECUTABLE}:ro`,
           ],
           createContainerOptions: containerUser ? { User: containerUser } : undefined,
         }),
@@ -136,6 +171,11 @@ export class SandboxWorkspace {
   }
 
   async initialize(): Promise<void> {
+    requireExpectedBunVersion(await this.run({
+      command: SANDBOX_BUN_EXECUTABLE,
+      args: ["--version"],
+      cwd: "/",
+    }));
     await this.runOrThrow("workspace initialization", {
       command: "sh",
       args: ["-lc", `mkdir -p ${SANDBOX_WORKSPACE} && test -r ${SANDBOX_WORKSPACE} && test -w ${SANDBOX_WORKSPACE} && test -x ${SANDBOX_WORKSPACE} && test -z "$(find ${SANDBOX_WORKSPACE} -mindepth 1 -maxdepth 1 -print -quit)"`],
