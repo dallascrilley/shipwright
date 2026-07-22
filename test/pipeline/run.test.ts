@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { PI_AGENT_OUTPUT_ERROR_CODE, PiAgentOutputError } from "../../src/agent/runner.js";
 import { runShipwright, type PipelineDependencies, type WorkspacePort } from "../../src/pipeline/run.js";
 import type { AuthorizedIssue } from "../../src/github/app-client.js";
 
@@ -84,6 +85,25 @@ test("capacity-exhausted provider chain is classified distinctly", async () => {
 
   expect(events).not.toContain("verify");
   expect(receipts.at(-1)?.errorCode).toBe("provider_quota_exhausted");
+});
+
+test("empty Pi turns are classified distinctly", async () => {
+  const { deps, events, receipts } = fixture();
+  deps.runAgent = async () => {
+    throw new PiAgentOutputError(
+      "Pi agent completed twice without text output (stopReason=end_turn; toolCalls=0)",
+    );
+  };
+
+  await expect(runShipwright({
+    issueUrl: "https://github.com/acme/widget/issues/2",
+    verifyCommand: "bun test",
+    publish: false,
+    timeoutMinutes: 2,
+  }, deps)).rejects.toThrow("completed twice without text output");
+
+  expect(events).not.toContain("verify");
+  expect(receipts.at(-1)?.errorCode).toBe(PI_AGENT_OUTPUT_ERROR_CODE);
 });
 
 test("dry run verifies and applies policy without publishing", async () => {
