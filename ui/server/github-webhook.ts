@@ -1,14 +1,17 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-import { targetMatchesScope, type ExecutionRequest } from "../shared/agent-definition";
+import { isRepositoryAllowed } from "../../src/config/github.js";
+import {
+  targetMatchesScope,
+  type ExecutionRequest,
+} from "../shared/agent-definition";
 import type { AgentControlPlaneStore } from "./agent-control-plane";
 import { QueueDispatcher } from "./queue-dispatcher";
-import { isRepositoryAllowed } from "../../src/config/github.js";
 
 const DELIVERY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const ACTION_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,199}$/;
 const REPOSITORY_PATTERN = /^[^/\s]+\/[^/\s]+$/;
-const MAX_WEBHOOK_BODY_BYTES = 1_048_576;
+export const MAX_WEBHOOK_BODY_BYTES = 1_048_576;
 
 type GitHubEvent = "issues" | "pull_request";
 
@@ -73,12 +76,19 @@ export class GitHubWebhookIngress {
       ) {
         continue;
       }
-      const agent = snapshot.agents.find((item) => item.agentId === trigger.agentId);
+      const agent = snapshot.agents.find(
+        (item) => item.agentId === trigger.agentId,
+      );
       const revision = snapshot.revisions.find(
         (item) =>
-          item.agentId === trigger.agentId && item.revision === trigger.agentRevision,
+          item.agentId === trigger.agentId &&
+          item.revision === trigger.agentRevision,
       );
-      if (!agent?.enabled || !revision || !targetMatchesScope(webhook.target, revision.draft.targetScope)) {
+      if (
+        !agent?.enabled ||
+        !revision ||
+        !targetMatchesScope(webhook.target, revision.draft.targetScope)
+      ) {
         continue;
       }
       this.options.dispatcher.enqueue({
@@ -109,14 +119,20 @@ export class GitHubWebhookIngress {
     return value === "issues" || value === "pull_request" ? value : undefined;
   }
 
-  private parseTarget(event: GitHubEvent, rawBody: string): WebhookTarget | undefined {
+  private parseTarget(
+    event: GitHubEvent,
+    rawBody: string,
+  ): WebhookTarget | undefined {
     let payload: unknown;
     try {
       payload = JSON.parse(rawBody);
     } catch {
       return undefined;
     }
-    if (!isRecord(payload) || !ACTION_PATTERN.test(stringValue(payload.action))) {
+    if (
+      !isRecord(payload) ||
+      !ACTION_PATTERN.test(stringValue(payload.action))
+    ) {
       return undefined;
     }
     const repository = isRecord(payload.repository)
@@ -130,7 +146,11 @@ export class GitHubWebhookIngress {
         : event === "pull_request"
           ? payload.number
           : undefined;
-    if (typeof number !== "number" || !Number.isSafeInteger(number) || number <= 0) {
+    if (
+      typeof number !== "number" ||
+      !Number.isSafeInteger(number) ||
+      number <= 0
+    ) {
       return undefined;
     }
     return {
