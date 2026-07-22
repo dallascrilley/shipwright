@@ -4,14 +4,22 @@ import { isRepositoryAllowed } from "../../src/config/github.js";
 import {
   targetMatchesScope,
   type ExecutionRequest,
+  type GithubTriggerCondition,
 } from "../shared/agent-definition";
 import type { AgentControlPlaneStore } from "./agent-control-plane";
+import {
+  evaluateGithubTriggerConditions,
+  type GitHubTriggerConditionContext,
+  type GitHubTriggerConditionFieldState,
+  type GitHubTriggerConditionReasonCode,
+} from "./github-trigger-conditions";
 import { QueueDispatcher } from "./queue-dispatcher";
 
 const DELIVERY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const ACTION_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,199}$/;
 const REPOSITORY_PATTERN = /^[^/\s]+\/[^/\s]+$/;
 export const MAX_WEBHOOK_BODY_BYTES = 1_048_576;
+export const MAX_WEBHOOK_DECISIONS = 20;
 
 type GitHubEvent = "issues" | "pull_request";
 
@@ -19,6 +27,20 @@ type WebhookTarget = {
   action: string;
   repository: string;
   target: ExecutionRequest["target"];
+  conditionContext: GitHubTriggerConditionContext;
+};
+
+type TriggerCandidate = {
+  triggerId: string;
+  agentId: string;
+  agentRevision: number;
+  conditions: GithubTriggerCondition[];
+};
+
+export type GitHubWebhookDecision = {
+  triggerId: string;
+  decision: "matched" | "filtered";
+  reasonCodes: GitHubTriggerConditionReasonCode[];
 };
 
 export type GitHubWebhookInput = {
@@ -29,7 +51,13 @@ export type GitHubWebhookInput = {
 };
 
 export type GitHubWebhookResult =
-  | { status: "accepted"; matched: number }
+  | {
+      status: "accepted";
+      matched: number;
+      conditionFiltered: number;
+      decisions: GitHubWebhookDecision[];
+      decisionsTruncated: number;
+    }
   | { status: "rejected"; reason: "invalid_signature" | "invalid_payload" };
 
 export type GitHubWebhookIngressOptions = {
@@ -61,11 +89,11 @@ export class GitHubWebhookIngress {
     const webhook = event ? this.parseTarget(event, input.rawBody) : undefined;
     if (!webhook) return { status: "rejected", reason: "invalid_payload" };
     if (!isRepositoryAllowed(this.options, webhook.repository)) {
-      return { status: "accepted", matched: 0 };
+      return acceptedResult(0, []);
     }
 
     const snapshot = this.options.store.load();
-    let matched = 0;
+    const candidatesByRevision = new Map<string, TriggerCandidate[]>();
     for (const trigger of snapshot.triggers) {
       if (
         trigger.kind !== "github" ||
@@ -91,16 +119,54 @@ export class GitHubWebhookIngress {
       ) {
         continue;
       }
-      this.options.dispatcher.enqueue({
-        agentId: trigger.agentId,
+      const key = `${trigger.agentId}:${trigger.agentRevision}`;
+      const candidates = candidatesByRevision.get(key) ?? [];
+      candidates.push({
         triggerId: trigger.triggerId,
+        agentId: trigger.agentId,
+        agentRevision: trigger.agentRevision,
+        conditions: structuredClone(trigger.config.conditions ?? []),
+      });
+      candidatesByRevision.set(key, candidates);
+    }
+
+    let matched = 0;
+    const decisions: GitHubWebhookDecision[] = [];
+    const candidateGroups = [...candidatesByRevision.entries()].sort(
+      ([left], [right]) => left.localeCompare(right),
+    );
+    for (const [, candidates] of candidateGroups) {
+      candidates.sort((left, right) =>
+        left.triggerId.localeCompare(right.triggerId),
+      );
+      const evaluated = candidates.map((candidate) => ({
+        candidate,
+        evaluation: evaluateGithubTriggerConditions(
+          candidate.conditions,
+          webhook.conditionContext,
+        ),
+      }));
+      for (const { candidate, evaluation } of evaluated) {
+        decisions.push({
+          triggerId: candidate.triggerId,
+          decision: evaluation.matched ? "matched" : "filtered",
+          reasonCodes: evaluation.reasonCodes,
+        });
+      }
+      const selected = evaluated.find(
+        (item) => item.evaluation.matched,
+      )?.candidate;
+      if (!selected) continue;
+      this.options.dispatcher.enqueue({
+        agentId: selected.agentId,
+        triggerId: selected.triggerId,
         source: "github",
-        idempotencyKey: `github:${input.deliveryId}:${trigger.agentRevision}`,
+        idempotencyKey: `github:${input.deliveryId}:${selected.agentRevision}`,
         target: webhook.target,
       });
       matched += 1;
     }
-    return { status: "accepted", matched };
+    return acceptedResult(matched, decisions);
   }
 
   private hasValidSignature(rawBody: string, signature: string): boolean {
@@ -140,9 +206,10 @@ export class GitHubWebhookIngress {
       : "";
     if (!REPOSITORY_PATTERN.test(repository)) return undefined;
     const [owner, repo] = repository.split("/");
+    const subject = event === "issues" ? payload.issue : payload.pull_request;
     const number =
-      event === "issues" && isRecord(payload.issue)
-        ? payload.issue.number
+      event === "issues" && isRecord(subject)
+        ? subject.number
         : event === "pull_request"
           ? payload.number
           : undefined;
@@ -156,6 +223,18 @@ export class GitHubWebhookIngress {
     return {
       action: stringValue(payload.action),
       repository,
+      conditionContext: {
+        actor: readStringField(payload.sender, "login"),
+        labels: readLabels(subject),
+        baseBranch:
+          event === "pull_request"
+            ? readNestedStringField(subject, "base", "ref")
+            : { state: "missing" },
+        draftState:
+          event === "pull_request"
+            ? readBooleanField(subject, "draft")
+            : { state: "missing" },
+      },
       target: {
         kind: event === "issues" ? "issue" : "pull",
         owner,
@@ -164,6 +243,79 @@ export class GitHubWebhookIngress {
       },
     };
   }
+}
+
+function acceptedResult(
+  matched: number,
+  decisions: GitHubWebhookDecision[],
+): Extract<GitHubWebhookResult, { status: "accepted" }> {
+  const conditionFiltered = decisions.filter(
+    (decision) => decision.decision === "filtered",
+  ).length;
+  return {
+    status: "accepted",
+    matched,
+    conditionFiltered,
+    decisions: decisions.slice(0, MAX_WEBHOOK_DECISIONS),
+    decisionsTruncated: Math.max(0, decisions.length - MAX_WEBHOOK_DECISIONS),
+  };
+}
+
+function readStringField(
+  container: unknown,
+  key: string,
+): GitHubTriggerConditionFieldState<string> {
+  if (container === undefined || container === null)
+    return { state: "missing" };
+  if (!isRecord(container)) return { state: "malformed" };
+  if (!(key in container)) return { state: "missing" };
+  const value = container[key];
+  return typeof value === "string" && value.length > 0
+    ? { state: "available", value }
+    : { state: "malformed" };
+}
+
+function readNestedStringField(
+  container: unknown,
+  parentKey: string,
+  key: string,
+): GitHubTriggerConditionFieldState<string> {
+  if (container === undefined || container === null)
+    return { state: "missing" };
+  if (!isRecord(container)) return { state: "malformed" };
+  if (!(parentKey in container)) return { state: "missing" };
+  return readStringField(container[parentKey], key);
+}
+
+function readBooleanField(
+  container: unknown,
+  key: string,
+): GitHubTriggerConditionFieldState<boolean> {
+  if (container === undefined || container === null)
+    return { state: "missing" };
+  if (!isRecord(container)) return { state: "malformed" };
+  if (!(key in container)) return { state: "missing" };
+  return typeof container[key] === "boolean"
+    ? { state: "available", value: container[key] }
+    : { state: "malformed" };
+}
+
+function readLabels(
+  container: unknown,
+): GitHubTriggerConditionFieldState<string[]> {
+  if (container === undefined || container === null)
+    return { state: "missing" };
+  if (!isRecord(container)) return { state: "malformed" };
+  if (!("labels" in container)) return { state: "missing" };
+  if (!Array.isArray(container.labels)) return { state: "malformed" };
+  const labels: string[] = [];
+  for (const label of container.labels) {
+    if (!isRecord(label) || typeof label.name !== "string" || !label.name) {
+      return { state: "malformed" };
+    }
+    labels.push(label.name);
+  }
+  return { state: "available", value: labels };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

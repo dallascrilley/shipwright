@@ -37,8 +37,13 @@ import type {
   AgentDraft,
   AgentDefinition,
   AgentTrigger,
+  GithubTriggerCondition,
+  GithubTriggerConditionField,
+  GithubTriggerConditionInput,
 } from "../../../shared/agent-definition";
 import {
+  GITHUB_TRIGGER_CONDITION_CATALOG,
+  GITHUB_TRIGGER_CONDITION_LIMITS,
   GITHUB_TRIGGER_CHOICES,
   type GithubTriggerChoiceId,
 } from "../../../shared/agent-definition";
@@ -81,6 +86,41 @@ type DraftForm = {
 };
 
 type ConfirmationKind = "enable" | "disable" | "stop";
+
+type GithubConditionDraft = GithubTriggerCondition;
+
+function conditionAllowedForEvent(
+  field: GithubTriggerConditionField,
+  event: "issues" | "pull_request",
+): boolean {
+  const definition = GITHUB_TRIGGER_CONDITION_CATALOG.find(
+    (item) => item.field === field,
+  );
+  return Boolean(
+    definition && (definition.events as readonly string[]).includes(event),
+  );
+}
+
+function createGithubConditionDraft(
+  field: GithubTriggerConditionField,
+): GithubConditionDraft {
+  switch (field) {
+    case "actor":
+      return { field, operator: "is_one_of", values: [""] };
+    case "labels":
+      return { field, operator: "include_any", values: [""] };
+    case "base_branch":
+      return { field, operator: "is_one_of", values: [""] };
+    case "draft_state":
+      return { field, operator: "is_not_draft" };
+  }
+}
+
+function toGithubTriggerConditionInput(
+  condition: GithubConditionDraft,
+): GithubTriggerConditionInput {
+  return structuredClone(condition);
+}
 
 function toDraftForm(draft: AgentDraft): DraftForm {
   return {
@@ -173,6 +213,9 @@ export function AgentManagementConsole() {
   );
   const [githubChoiceId, setGithubChoiceId] =
     useState<GithubTriggerChoiceId>("issue_created");
+  const [githubConditions, setGithubConditions] = useState<
+    GithubConditionDraft[]
+  >([]);
   const [replacementTriggerId, setReplacementTriggerId] = useState<
     string | null
   >(null);
@@ -203,9 +246,13 @@ export function AgentManagementConsole() {
     { agentId: selectedId ?? "" },
     { enabled: selectedId !== null, refetchInterval: 5_000 },
   );
-  const repositoryQuery = useActionQuery("list-agent-repositories", {}, {
-    refetchInterval: 60_000,
-  });
+  const repositoryQuery = useActionQuery(
+    "list-agent-repositories",
+    {},
+    {
+      refetchInterval: 60_000,
+    },
+  );
   const exportQuery = useActionQuery(
     "export-agent-definition",
     { agentId: selectedId ?? "" },
@@ -248,6 +295,7 @@ export function AgentManagementConsole() {
     if (detail) {
       setDraftForm(toDraftForm(detail.config));
       setReplacementTriggerId(null);
+      setGithubConditions([]);
     }
   }, [detail?.agentId, detail?.currentRevision]);
 
@@ -300,11 +348,25 @@ export function AgentManagementConsole() {
     setMessage(null);
     try {
       if (triggerKind === "github") {
+        const invalidConditionIndex = githubConditions.findIndex(
+          (condition) =>
+            condition.field !== "draft_state" &&
+            condition.values.some((value) => value.trim().length === 0),
+        );
+        if (invalidConditionIndex >= 0) {
+          setMessage(
+            `Condition ${invalidConditionIndex + 1} has a blank value. Enter a value or remove it.`,
+          );
+          return;
+        }
         const choice =
-          GITHUB_TRIGGER_CHOICES.find(
-            (item) => item.id === githubChoiceId,
-          ) ?? GITHUB_TRIGGER_CHOICES[0];
-        const config = { event: choice.event, actions: [choice.action] };
+          GITHUB_TRIGGER_CHOICES.find((item) => item.id === githubChoiceId) ??
+          GITHUB_TRIGGER_CHOICES[0];
+        const config = {
+          event: choice.event,
+          actions: [choice.action],
+          conditions: githubConditions.map(toGithubTriggerConditionInput),
+        };
         if (replacementTriggerId) {
           await replaceTrigger.mutateAsync({
             agentId: detail.agentId,
@@ -314,6 +376,7 @@ export function AgentManagementConsole() {
             config,
           });
           setReplacementTriggerId(null);
+          setGithubConditions([]);
           setMessage("Trigger replaced atomically on the current revision.");
         } else {
           await createTrigger.mutateAsync({
@@ -325,6 +388,7 @@ export function AgentManagementConsole() {
           setMessage(
             "Validated trigger added and pinned to the current revision.",
           );
+          setGithubConditions([]);
         }
       } else {
         await createTrigger.mutateAsync({
@@ -340,7 +404,9 @@ export function AgentManagementConsole() {
             },
           },
         });
-        setMessage("Validated trigger added and pinned to the current revision.");
+        setMessage(
+          "Validated trigger added and pinned to the current revision.",
+        );
       }
       await refresh();
     } catch (error) {
@@ -370,11 +436,37 @@ export function AgentManagementConsole() {
     if (trigger.kind !== "github") return;
     setTriggerKind("github");
     setGithubChoiceId(trigger.choiceId ?? "issue_created");
+    setGithubConditions(
+      "event" in trigger.config
+        ? structuredClone(trigger.config.conditions ?? [])
+        : [],
+    );
     setReplacementTriggerId(trigger.triggerId);
     document.getElementById("trigger-editor")?.scrollIntoView({
       behavior: "smooth",
       block: "center",
     });
+  }
+
+  function changeGithubChoice(nextId: GithubTriggerChoiceId) {
+    const choice =
+      GITHUB_TRIGGER_CHOICES.find((item) => item.id === nextId) ??
+      GITHUB_TRIGGER_CHOICES[0];
+    const applicable = githubConditions.filter((condition) =>
+      conditionAllowedForEvent(condition.field, choice.event),
+    );
+    if (applicable.length !== githubConditions.length) {
+      setMessage(
+        "Pull request-only conditions were removed because the selected issue event cannot provide them.",
+      );
+    }
+    setGithubChoiceId(nextId);
+    setGithubConditions(applicable);
+  }
+
+  function cancelTriggerReplacement() {
+    setReplacementTriggerId(null);
+    setGithubConditions([]);
   }
 
   async function handleCopyDefinition() {
@@ -779,17 +871,16 @@ export function AgentManagementConsole() {
                     <select
                       id="trigger-kind"
                       value={triggerKind}
-                      onChange={(event) =>
-                        setTriggerKind(() => {
-                          const next = event.target.value as
-                            | "github"
-                            | "schedule";
-                          if (next === "schedule") {
-                            setReplacementTriggerId(null);
-                          }
-                          return next;
-                        })
-                      }
+                      onChange={(event) => {
+                        const next = event.target.value as
+                          | "github"
+                          | "schedule";
+                        setTriggerKind(next);
+                        if (next === "schedule") {
+                          setReplacementTriggerId(null);
+                          setGithubConditions([]);
+                        }
+                      }}
                       className="h-9 rounded-md border border-input bg-transparent px-2 text-sm"
                     >
                       <option value="github">GitHub event</option>
@@ -797,23 +888,35 @@ export function AgentManagementConsole() {
                     </select>
                   </div>
                   {triggerKind === "github" ? (
-                    <Field label="GitHub activity">
-                      <select
-                        value={githubChoiceId}
-                        onChange={(event) =>
-                          setGithubChoiceId(
-                            event.target.value as GithubTriggerChoiceId,
-                          )
+                    <div className="grid gap-3">
+                      <Field label="GitHub activity">
+                        <select
+                          value={githubChoiceId}
+                          onChange={(event) =>
+                            changeGithubChoice(
+                              event.target.value as GithubTriggerChoiceId,
+                            )
+                          }
+                          className="input-shell"
+                        >
+                          {GITHUB_TRIGGER_CHOICES.map((choice) => (
+                            <option key={choice.id} value={choice.id}>
+                              {choice.label}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <GithubConditionEditor
+                        event={
+                          GITHUB_TRIGGER_CHOICES.find(
+                            (choice) => choice.id === githubChoiceId,
+                          )?.event ?? "issues"
                         }
-                        className="input-shell"
-                      >
-                        {GITHUB_TRIGGER_CHOICES.map((choice) => (
-                          <option key={choice.id} value={choice.id}>
-                            {choice.label}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
+                        conditions={githubConditions}
+                        onChange={setGithubConditions}
+                        disabled={busy}
+                      />
+                    </div>
                   ) : (
                     <div className="grid gap-3">
                       <Field label="Cron schedule">
@@ -872,7 +975,7 @@ export function AgentManagementConsole() {
                         type="button"
                         variant="ghost"
                         disabled={busy}
-                        onClick={() => setReplacementTriggerId(null)}
+                        onClick={cancelTriggerReplacement}
                       >
                         Cancel replacement
                       </Button>
@@ -1121,6 +1224,231 @@ function Metric({ label, value }: { label: string; value: string }) {
         <p className="mt-1 text-lg font-semibold">{value}</p>
       </CardContent>
     </Card>
+  );
+}
+
+function GithubConditionEditor({
+  event,
+  conditions,
+  onChange,
+  disabled,
+}: {
+  event: "issues" | "pull_request";
+  conditions: GithubConditionDraft[];
+  onChange: (conditions: GithubConditionDraft[]) => void;
+  disabled: boolean;
+}) {
+  const availableFields = GITHUB_TRIGGER_CONDITION_CATALOG.filter((item) =>
+    (item.events as readonly string[]).includes(event),
+  );
+  const replaceCondition = (index: number, condition: GithubConditionDraft) =>
+    onChange(
+      conditions.map((item, itemIndex) =>
+        itemIndex === index ? condition : item,
+      ),
+    );
+
+  return (
+    <div className="grid gap-3 rounded-md border border-border bg-muted/20 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-medium">Conditions (optional)</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            All conditions must match. Actor and label comparisons ignore case;
+            branch names are exact.
+          </p>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={
+            disabled ||
+            conditions.length >= GITHUB_TRIGGER_CONDITION_LIMITS.rows
+          }
+          onClick={() =>
+            onChange([
+              ...conditions,
+              createGithubConditionDraft(availableFields[0]!.field),
+            ])
+          }
+        >
+          <IconPlus className="size-3.5" /> Add condition
+        </Button>
+      </div>
+
+      {conditions.length === 0 ? (
+        <p className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+          No conditions. Every otherwise eligible{" "}
+          {event === "issues" ? "issue" : "pull request"} event matches.
+        </p>
+      ) : (
+        <ol className="grid gap-3">
+          {conditions.map((condition, conditionIndex) => {
+            const definition = GITHUB_TRIGGER_CONDITION_CATALOG.find(
+              (item) => item.field === condition.field,
+            )!;
+            return (
+              <li
+                key={`${conditionIndex}-${condition.field}`}
+                className="grid gap-3 rounded-md border border-border bg-background p-3"
+              >
+                <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+                  <Field label="Field">
+                    <select
+                      aria-label={`Condition ${conditionIndex + 1} field`}
+                      value={condition.field}
+                      disabled={disabled}
+                      onChange={(changeEvent) =>
+                        replaceCondition(
+                          conditionIndex,
+                          createGithubConditionDraft(
+                            changeEvent.target
+                              .value as GithubTriggerConditionField,
+                          ),
+                        )
+                      }
+                      className="input-shell"
+                    >
+                      {availableFields.map((item) => (
+                        <option key={item.field} value={item.field}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Operator">
+                    <select
+                      aria-label={`Condition ${conditionIndex + 1} operator`}
+                      value={condition.operator}
+                      disabled={disabled}
+                      onChange={(changeEvent) =>
+                        replaceCondition(conditionIndex, {
+                          ...condition,
+                          operator: changeEvent.target.value,
+                        } as GithubConditionDraft)
+                      }
+                      className="input-shell"
+                    >
+                      {definition.operators.map((operator) => (
+                        <option key={operator.id} value={operator.id}>
+                          {operator.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    disabled={disabled}
+                    onClick={() =>
+                      onChange(
+                        conditions.filter(
+                          (_, itemIndex) => itemIndex !== conditionIndex,
+                        ),
+                      )
+                    }
+                    aria-label={`Remove condition ${conditionIndex + 1}`}
+                  >
+                    <IconTrash className="size-4" />
+                  </Button>
+                </div>
+
+                {condition.field !== "draft_state" ? (
+                  <div className="grid gap-2">
+                    <div className="flex items-center justify-between gap-2 text-xs font-medium">
+                      <span>Values</span>
+                      <span className="font-normal text-muted-foreground">
+                        {condition.values.length}/
+                        {GITHUB_TRIGGER_CONDITION_LIMITS.values}
+                      </span>
+                    </div>
+                    {condition.values.map((value, valueIndex) => (
+                      <div
+                        key={valueIndex}
+                        className="grid grid-cols-[minmax(0,1fr)_auto] gap-2"
+                      >
+                        <Input
+                          aria-label={`Condition ${conditionIndex + 1} value ${valueIndex + 1}`}
+                          value={value}
+                          maxLength={
+                            GITHUB_TRIGGER_CONDITION_LIMITS.valueLength
+                          }
+                          disabled={disabled}
+                          placeholder={
+                            condition.field === "actor"
+                              ? "octocat"
+                              : condition.field === "labels"
+                                ? "ready-for-agent"
+                                : "main"
+                          }
+                          onChange={(changeEvent) => {
+                            const values = condition.values.map(
+                              (item, itemIndex) =>
+                                itemIndex === valueIndex
+                                  ? changeEvent.target.value
+                                  : item,
+                            );
+                            replaceCondition(conditionIndex, {
+                              ...condition,
+                              values,
+                            });
+                          }}
+                          required
+                        />
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          disabled={disabled || condition.values.length === 1}
+                          onClick={() =>
+                            replaceCondition(conditionIndex, {
+                              ...condition,
+                              values: condition.values.filter(
+                                (_, itemIndex) => itemIndex !== valueIndex,
+                              ),
+                            })
+                          }
+                          aria-label={`Remove condition ${conditionIndex + 1} value ${valueIndex + 1}`}
+                        >
+                          <IconTrash className="size-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="justify-self-start"
+                      disabled={
+                        disabled ||
+                        condition.values.length >=
+                          GITHUB_TRIGGER_CONDITION_LIMITS.values
+                      }
+                      onClick={() =>
+                        replaceCondition(conditionIndex, {
+                          ...condition,
+                          values: [...condition.values, ""],
+                        })
+                      }
+                    >
+                      <IconPlus className="size-3.5" /> Add value
+                    </Button>
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+
+      <p className="text-xs text-muted-foreground">
+        Up to {GITHUB_TRIGGER_CONDITION_LIMITS.rows} conditions; membership
+        conditions accept {GITHUB_TRIGGER_CONDITION_LIMITS.values} values of up
+        to {GITHUB_TRIGGER_CONDITION_LIMITS.valueLength} characters each.
+      </p>
+    </div>
   );
 }
 
@@ -1409,9 +1737,7 @@ function TriggerRow({
           <p className="text-sm font-medium">{trigger.label}</p>
           <p className="mt-1 text-xs text-muted-foreground">
             Revision {trigger.agentRevision}
-            {scheduleTrigger
-              ? ` · next ${formatTime(trigger.nextFireAt)}`
-              : ""}
+            {scheduleTrigger ? ` · next ${formatTime(trigger.nextFireAt)}` : ""}
             {trigger.pausedAt ? " · paused" : ""}
           </p>
           {trigger.legacy ? (
@@ -1423,15 +1749,15 @@ function TriggerRow({
         </div>
         <div className="flex shrink-0 flex-wrap justify-end gap-1">
           {scheduleTrigger ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            onClick={onPause}
-          >
-            {trigger.pausedAt ? "Resume" : "Pause"}
-          </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={onPause}
+            >
+              {trigger.pausedAt ? "Resume" : "Pause"}
+            </Button>
           ) : (
             <Button
               type="button"

@@ -16,8 +16,10 @@ import type {
 import {
   agentDraftSchema,
   findGithubTriggerChoice,
+  githubTriggerConditionSchema,
   githubTriggerConfigSchema,
   scheduleTriggerConfigSchema,
+  type GithubTriggerCondition,
   type GithubTriggerChoiceId,
 } from "./agent-definition";
 import type { OperatorRunRecord } from "./operator-run";
@@ -35,12 +37,23 @@ export const agentListFilterSchema = z
 
 export type AgentListFilter = z.output<typeof agentListFilterSchema>;
 
-const exportedGithubTriggerSchema = z
+const exportedGithubTriggerV1Schema = z
   .object({
     kind: z.literal("github"),
     enabled: z.boolean(),
     event: githubTriggerConfigSchema.shape.event,
     actions: githubTriggerConfigSchema.shape.actions,
+    legacy: z.boolean(),
+  })
+  .strict();
+
+const exportedGithubTriggerV2Schema = z
+  .object({
+    kind: z.literal("github"),
+    enabled: z.boolean(),
+    event: githubTriggerConfigSchema.shape.event,
+    actions: githubTriggerConfigSchema.shape.actions,
+    conditions: z.array(githubTriggerConditionSchema),
     legacy: z.boolean(),
   })
   .strict();
@@ -56,7 +69,7 @@ const exportedScheduleTriggerSchema = z
   })
   .strict();
 
-export const agentDefinitionExportSchema = z
+export const agentDefinitionExportV1Schema = z
   .object({
     format: z.literal("shipwright.agent"),
     version: z.literal(1),
@@ -65,15 +78,39 @@ export const agentDefinitionExportSchema = z
     configuration: agentDraftSchema,
     triggers: z.array(
       z.discriminatedUnion("kind", [
-        exportedGithubTriggerSchema,
+        exportedGithubTriggerV1Schema,
         exportedScheduleTriggerSchema,
       ]),
     ),
   })
   .strict();
 
+export const agentDefinitionExportV2Schema = z
+  .object({
+    format: z.literal("shipwright.agent"),
+    version: z.literal(2),
+    revision: z.number().int().positive(),
+    enabled: z.boolean(),
+    configuration: agentDraftSchema,
+    triggers: z.array(
+      z.discriminatedUnion("kind", [
+        exportedGithubTriggerV2Schema,
+        exportedScheduleTriggerSchema,
+      ]),
+    ),
+  })
+  .strict();
+
+export const agentDefinitionExportSchema = z.discriminatedUnion("version", [
+  agentDefinitionExportV1Schema,
+  agentDefinitionExportV2Schema,
+]);
+
 export type AgentDefinitionExport = z.output<
   typeof agentDefinitionExportSchema
+>;
+export type AgentDefinitionExportV2 = z.output<
+  typeof agentDefinitionExportV2Schema
 >;
 
 export interface AgentActivityView {
@@ -232,10 +269,14 @@ export function buildAgentTriggerView(
   if (trigger.kind === "github" && "event" in trigger.config) {
     const choice = findGithubTriggerChoice(trigger.config);
     if (choice) {
+      const conditions = trigger.config.conditions ?? [];
+      const conditionLabel = conditions.length
+        ? ` when ${conditions.map(describeGithubTriggerCondition).join(" and ")}`
+        : "";
       return {
         ...structuredClone(trigger),
         choiceId: choice.id,
-        label: `${choice.label} in ${repository}`,
+        label: `${choice.label} in ${repository}${conditionLabel}`,
         legacy: false,
       };
     }
@@ -257,10 +298,30 @@ export function buildAgentTriggerView(
   throw new Error(`Trigger ${trigger.triggerId} has an invalid kind/config pair.`);
 }
 
+export function describeGithubTriggerCondition(
+  condition: GithubTriggerCondition,
+): string {
+  switch (condition.field) {
+    case "actor":
+      return `event actor ${membershipOperatorLabel(condition.operator)} ${formatConditionValues(condition.values, "or")}`;
+    case "labels":
+      return `labels ${labelsOperatorLabel(condition.operator)} ${formatConditionValues(
+        condition.values,
+        condition.operator === "include_all" ? "and" : "or",
+      )}`;
+    case "base_branch":
+      return `base branch ${membershipOperatorLabel(condition.operator)} ${formatConditionValues(condition.values, "or")}`;
+    case "draft_state":
+      return condition.operator === "is_draft"
+        ? "draft state is draft"
+        : "draft state is not draft";
+  }
+}
+
 export function buildAgentDefinitionDocument(
   snapshot: AgentControlPlaneSnapshot,
   agentId: string,
-): AgentDefinitionExport {
+): AgentDefinitionExportV2 {
   const agent = snapshot.agents.find((item) => item.agentId === agentId);
   if (!agent) throw new Error(`Unknown agent ${agentId}.`);
   const revision = findCurrentRevision(snapshot, agent);
@@ -278,6 +339,7 @@ export function buildAgentDefinitionDocument(
           enabled: trigger.enabled,
           event: trigger.config.event,
           actions: [...trigger.config.actions],
+          conditions: structuredClone(trigger.config.conditions ?? []),
           legacy: findGithubTriggerChoice(trigger.config) === undefined,
         };
       }
@@ -300,9 +362,9 @@ export function buildAgentDefinitionDocument(
       const rightKey = JSON.stringify(right);
       return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
     });
-  const document = agentDefinitionExportSchema.parse({
+  const document = agentDefinitionExportV2Schema.parse({
     format: "shipwright.agent",
-    version: 1,
+    version: 2,
     revision: agent.currentRevision,
     enabled: agent.enabled,
     configuration: structuredClone(revision.draft),
@@ -312,6 +374,32 @@ export function buildAgentDefinitionDocument(
     throw new Error("Secret-like values cannot be exported from agent configuration.");
   }
   return document;
+}
+
+function membershipOperatorLabel(
+  operator: "is_one_of" | "is_not_one_of",
+): string {
+  return operator === "is_one_of" ? "is one of" : "is not one of";
+}
+
+function labelsOperatorLabel(
+  operator: "include_any" | "include_all" | "include_none",
+): string {
+  switch (operator) {
+    case "include_any":
+      return "include any";
+    case "include_all":
+      return "include all";
+    case "include_none":
+      return "include none";
+  }
+}
+
+function formatConditionValues(
+  values: readonly string[],
+  conjunction: "and" | "or",
+): string {
+  return values.join(` ${conjunction} `);
 }
 
 function buildListItem(

@@ -3,8 +3,11 @@ import { describe, expect, test } from "vitest";
 import { agentControlPlaneSnapshotSchema } from "./agent-definition";
 import {
   agentDefinitionExportSchema,
+  agentDefinitionExportV1Schema,
+  agentDefinitionExportV2Schema,
   buildAgentDefinitionDocument,
   buildAgentTriggerView,
+  describeGithubTriggerCondition,
 } from "./agent-management";
 
 const draft = {
@@ -74,7 +77,22 @@ function createSnapshot() {
         agentRevision: 2,
         kind: "github",
         enabled: true,
-        config: { event: "issues", actions: ["opened"] },
+        config: {
+          event: "issues",
+          actions: ["opened"],
+          conditions: [
+            {
+              field: "actor",
+              operator: "is_one_of",
+              values: ["Alice", "Bob"],
+            },
+            {
+              field: "labels",
+              operator: "include_all",
+              values: ["bug", "urgent"],
+            },
+          ],
+        },
         createdAt: "2026-07-21T00:01:00.000Z",
         updatedAt: "2026-07-21T00:01:00.000Z",
       },
@@ -143,7 +161,8 @@ describe("agent management trigger projections", () => {
     expect(supported).toMatchObject({
       triggerId: "trigger-opened",
       choiceId: "issue_created",
-      label: "Issue created in dallascrilley/shipwright",
+      label:
+        "Issue created in dallascrilley/shipwright when event actor is one of Alice or Bob and labels include all bug and urgent",
       legacy: false,
     });
     expect(legacy).toMatchObject({
@@ -163,14 +182,51 @@ describe("agent management trigger projections", () => {
     ).toBe("Schedule 0 9 * * * (America/Chicago)");
   });
 
-  test("builds a deterministic versioned secret-free configuration document", () => {
+  test("renders every typed condition as a concise sentence", () => {
+    expect(
+      describeGithubTriggerCondition({
+        field: "actor",
+        operator: "is_not_one_of",
+        values: ["dependabot"],
+      }),
+    ).toBe("event actor is not one of dependabot");
+    expect(
+      describeGithubTriggerCondition({
+        field: "labels",
+        operator: "include_any",
+        values: ["bug", "urgent"],
+      }),
+    ).toBe("labels include any bug or urgent");
+    expect(
+      describeGithubTriggerCondition({
+        field: "labels",
+        operator: "include_none",
+        values: ["blocked", "wontfix"],
+      }),
+    ).toBe("labels include none blocked or wontfix");
+    expect(
+      describeGithubTriggerCondition({
+        field: "base_branch",
+        operator: "is_one_of",
+        values: ["main", "release"],
+      }),
+    ).toBe("base branch is one of main or release");
+    expect(
+      describeGithubTriggerCondition({
+        field: "draft_state",
+        operator: "is_not_draft",
+      }),
+    ).toBe("draft state is not draft");
+  });
+
+  test("builds a deterministic version-2 secret-free configuration document", () => {
     const snapshot = createSnapshot();
     const document = buildAgentDefinitionDocument(snapshot, "agent-1");
     const serialized = JSON.stringify(document);
 
     expect(document).toMatchObject({
       format: "shipwright.agent",
-      version: 1,
+      version: 2,
       revision: 2,
       enabled: false,
       configuration: draft,
@@ -184,12 +240,25 @@ describe("agent management trigger projections", () => {
       kind: "github",
       event: "issues",
       actions: ["opened"],
+      conditions: [
+        {
+          field: "actor",
+          operator: "is_one_of",
+          values: ["Alice", "Bob"],
+        },
+        {
+          field: "labels",
+          operator: "include_all",
+          values: ["bug", "urgent"],
+        },
+      ],
       legacy: false,
     });
     expect(document.triggers[1]).toMatchObject({
       kind: "github",
       event: "pull_request",
       actions: ["closed"],
+      conditions: [],
       legacy: true,
     });
     expect(document.triggers[2]).toMatchObject({
@@ -202,8 +271,33 @@ describe("agent management trigger projections", () => {
     expect(agentDefinitionExportSchema.parse(JSON.parse(serialized))).toEqual(
       document,
     );
+    expect(agentDefinitionExportV2Schema.parse(JSON.parse(serialized))).toEqual(
+      document,
+    );
     expect(serialized).not.toContain("audit-event-1");
     expect(serialized).not.toContain("nextFireAt");
     expect(serialized).not.toContain("receipt");
+  });
+
+  test("keeps version-1 unconditional exports parseable", () => {
+    const versionOne = {
+      format: "shipwright.agent",
+      version: 1,
+      revision: 2,
+      enabled: false,
+      configuration: draft,
+      triggers: [
+        {
+          kind: "github",
+          enabled: true,
+          event: "issues",
+          actions: ["opened"],
+          legacy: false,
+        },
+      ],
+    };
+
+    expect(agentDefinitionExportV1Schema.parse(versionOne)).toEqual(versionOne);
+    expect(agentDefinitionExportSchema.parse(versionOne)).toEqual(versionOne);
   });
 });
