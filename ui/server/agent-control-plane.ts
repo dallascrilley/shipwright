@@ -15,6 +15,7 @@ import {
   agentRevisionSchema,
   agentTriggerSchema,
   createEmptyAgentControlPlaneSnapshot,
+  curatedGithubTriggerConfigSchema,
   lifecycleEventSchema,
   type AgentControlPlaneSnapshot,
   type AgentDefinition,
@@ -127,6 +128,12 @@ export type CreateTriggerInput = Pick<AgentTriggerInput, "kind" | "config"> & {
   agentId: string;
   expectedRevision: number;
 };
+
+export interface RemoveTriggerInput {
+  agentId: string;
+  expectedRevision: number;
+  triggerId: string;
+}
 
 /**
  * State transitions for durable agent definitions. This class has no dispatcher or
@@ -252,6 +259,9 @@ export class AgentControlPlane {
     return this.store.transaction((snapshot) => {
       const agent = this.requireAgent(snapshot, input.agentId);
       this.assertRevision(agent, input.expectedRevision);
+      if (input.kind === "github") {
+        curatedGithubTriggerConfigSchema.parse(input.config);
+      }
       const now = this.now();
       const scheduleConfig =
         input.kind === "schedule" && "schedule" in input.config
@@ -279,6 +289,36 @@ export class AgentControlPlane {
       });
       snapshot.triggers.push(trigger);
       return trigger;
+    });
+  }
+
+  removeTrigger(input: RemoveTriggerInput): AgentTrigger {
+    return this.store.transaction((snapshot) => {
+      const agent = this.requireAgent(snapshot, input.agentId);
+      this.assertRevision(agent, input.expectedRevision);
+      const triggerIndex = snapshot.triggers.findIndex(
+        (trigger) =>
+          trigger.agentId === agent.agentId &&
+          trigger.triggerId === input.triggerId,
+      );
+      if (triggerIndex < 0) {
+        throw new Error(
+          `Unknown trigger ${input.triggerId} for agent ${agent.agentId}.`,
+        );
+      }
+      const [removed] = snapshot.triggers.splice(triggerIndex, 1);
+      if (!removed) {
+        throw new Error(`Could not remove trigger ${input.triggerId}.`);
+      }
+      this.appendEvent(
+        snapshot,
+        agent.agentId,
+        "trigger_removed",
+        agent.currentRevision,
+        this.now(),
+        removed.triggerId,
+      );
+      return removed;
     });
   }
 

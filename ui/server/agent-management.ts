@@ -15,8 +15,10 @@ import {
 } from "../shared/agent-definition";
 import {
   agentListFilterSchema,
+  buildAgentDefinitionDocument,
   buildAgentDetail,
   buildAgentList,
+  type AgentDefinitionExport,
   type AgentDetailView,
   type AgentListFilter,
   type AgentListItem,
@@ -29,6 +31,7 @@ import {
   MemoryAgentControlPlaneStore,
   type AgentControlPlaneStore,
   type CreateTriggerInput,
+  type RemoveTriggerInput,
 } from "./agent-control-plane";
 import { getOperatorRunRegistry, isOperatorDemoMode } from "./operator-runs";
 import {
@@ -170,6 +173,14 @@ export class AgentManagementService {
 
   createTrigger(input: CreateTriggerInput): AgentTrigger {
     return this.#controlPlane.createTrigger(input);
+  }
+
+  removeTrigger(input: RemoveTriggerInput): AgentTrigger {
+    return this.#controlPlane.removeTrigger(input);
+  }
+
+  exportAgentDefinition(agentId: string): AgentDefinitionExport {
+    return buildAgentDefinitionDocument(this.#store.load(), agentId);
   }
 
   setAgentEnabled(input: AgentEnableInput): AgentDefinition {

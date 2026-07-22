@@ -237,4 +237,43 @@ describe("AgentManagementService", () => {
     expect(saved.currentRevision).toBe(2);
     expect(assertSelectable).toHaveBeenCalledTimes(1);
   });
+
+  test("exports the current safe definition and removes its active trigger", async () => {
+    const service = createService();
+    const created = await service.createAgent(draft);
+    const trigger = service.createTrigger({
+      agentId: created.agentId,
+      expectedRevision: created.currentRevision,
+      kind: "github",
+      config: { event: "pull_request", actions: ["synchronize"] },
+    });
+
+    expect(service.exportAgentDefinition(created.agentId)).toMatchObject({
+      format: "shipwright.agent",
+      version: 1,
+      revision: 1,
+      configuration: draft,
+      triggers: [
+        {
+          kind: "github",
+          event: "pull_request",
+          actions: ["synchronize"],
+          legacy: false,
+        },
+      ],
+    });
+
+    expect(
+      service.removeTrigger({
+        agentId: created.agentId,
+        expectedRevision: created.currentRevision,
+        triggerId: trigger.triggerId,
+      }).triggerId,
+    ).toBe(trigger.triggerId);
+    expect(service.getAgent(created.agentId)?.triggers).toHaveLength(0);
+    expect(service.getAgent(created.agentId)?.audit[0]).toMatchObject({
+      action: "trigger_removed",
+      triggerId: trigger.triggerId,
+    });
+  });
 });

@@ -22,7 +22,7 @@ The manual Operator console remains unchanged. New agents remain disabled, test 
 - [x] (2026-07-22 14:49Z) Resolved repository-catalog refresh, legacy-trigger compatibility, and condition-scope questions as planning decisions.
 - [x] (2026-07-22 14:49Z) Imported epic `td-c4c766` with U1 `td-d39f87`, U2 `td-d77115`, U3 `td-997e46`, and U4 `td-137fbf`; verified the dependency graph.
 - [x] (2026-07-22 15:25Z) U1: Added the GitHub App-backed allowed repository catalog, safe read action, and create/repository-changing save enforcement with unchanged-scope outage compatibility.
-- [ ] U2: Add curated GitHub trigger choices, trigger removal, legacy compatibility, and versioned JSON projection.
+- [x] (2026-07-22 15:34Z) U2: Added the four curated GitHub choices, legacy-safe trigger projection/removal, audited optimistic removal, and deterministic version-1 secret-free export.
 - [ ] U3: Replace free-form repository/action inputs with the repository picker and readable trigger editor.
 - [ ] U4: Align deployment configuration and documentation, then prove the flow locally and in the deployed operator UI.
 

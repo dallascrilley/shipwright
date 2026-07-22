@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import type { OperatorRunRecord } from "../shared/operator-run";
+import { executionRequestSchema } from "../shared/agent-definition";
 import {
   AgentControlPlane,
   JsonFileAgentControlPlaneStore,
@@ -99,6 +100,22 @@ describe("AgentControlPlane", () => {
     expect(controlPlane.listLifecycleEvents(agent.agentId)).toHaveLength(1);
   });
 
+  test("rejects unsupported new GitHub trigger pairs without mutation", () => {
+    const store = new MemoryAgentControlPlaneStore();
+    const controlPlane = createControlPlane(store);
+    const agent = controlPlane.createAgent(draft);
+
+    expect(() =>
+      controlPlane.createTrigger({
+        agentId: agent.agentId,
+        expectedRevision: agent.currentRevision,
+        kind: "github",
+        config: { event: "pull_request", actions: ["closed"] },
+      }),
+    ).toThrow(/supported GitHub trigger/i);
+    expect(store.load().triggers).toHaveLength(0);
+  });
+
   test("orders lifecycle audit events and pins triggers to the active revision", () => {
     const controlPlane = createControlPlane();
     const agent = controlPlane.createAgent(draft);
@@ -152,6 +169,89 @@ describe("AgentControlPlane", () => {
       consecutiveFailures: 0,
       nextFireAt: "2026-07-21T13:00:00.000Z",
     });
+  });
+
+  test("removes a trigger optimistically while retaining historical execution references", () => {
+    const store = new MemoryAgentControlPlaneStore();
+    const controlPlane = createControlPlane(store);
+    const agent = controlPlane.createAgent(draft);
+    const trigger = controlPlane.createTrigger({
+      agentId: agent.agentId,
+      expectedRevision: agent.currentRevision,
+      kind: "github",
+      config: { event: "issues", actions: ["opened"] },
+    });
+    store.transaction((snapshot) => {
+      snapshot.executions.push(
+        executionRequestSchema.parse({
+          executionId: "execution-1",
+          agentId: agent.agentId,
+          agentRevision: agent.currentRevision,
+          triggerId: trigger.triggerId,
+          source: "github",
+          idempotencyKey: "github:delivery-1",
+          target: {
+            kind: "issue",
+            owner: "dallascrilley",
+            repo: "shipwright",
+            number: 42,
+          },
+          scheduledAt: "2026-07-21T00:00:00.000Z",
+          priority: 50,
+          createdAt: "2026-07-21T00:00:00.000Z",
+        }),
+      );
+    });
+
+    const removed = controlPlane.removeTrigger({
+      agentId: agent.agentId,
+      expectedRevision: agent.currentRevision,
+      triggerId: trigger.triggerId,
+    });
+
+    expect(removed.triggerId).toBe(trigger.triggerId);
+    expect(store.load().triggers).toHaveLength(0);
+    expect(store.load().executions[0]?.triggerId).toBe(trigger.triggerId);
+    expect(
+      controlPlane.listLifecycleEvents(agent.agentId).slice(-1)[0],
+    ).toMatchObject({
+      action: "trigger_removed",
+      triggerId: trigger.triggerId,
+      revision: agent.currentRevision,
+    });
+  });
+
+  test("rejects stale or unknown trigger removal without mutation", () => {
+    const store = new MemoryAgentControlPlaneStore();
+    const controlPlane = createControlPlane(store);
+    const agent = controlPlane.createAgent(draft);
+    const trigger = controlPlane.createTrigger({
+      agentId: agent.agentId,
+      expectedRevision: agent.currentRevision,
+      kind: "github",
+      config: { event: "issues", actions: ["opened"] },
+    });
+
+    expect(() =>
+      controlPlane.removeTrigger({
+        agentId: agent.agentId,
+        expectedRevision: 2,
+        triggerId: trigger.triggerId,
+      }),
+    ).toThrow(RevisionConflictError);
+    expect(() =>
+      controlPlane.removeTrigger({
+        agentId: agent.agentId,
+        expectedRevision: agent.currentRevision,
+        triggerId: "missing-trigger",
+      }),
+    ).toThrow(/Unknown trigger/i);
+    expect(store.load().triggers).toHaveLength(1);
+    expect(
+      controlPlane
+        .listLifecycleEvents(agent.agentId)
+        .some((event) => event.action === "trigger_removed"),
+    ).toBe(false);
   });
 
   test("keeps legacy P0 run records standalone during migration", () => {
