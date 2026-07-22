@@ -18,7 +18,7 @@
 ## OpenAI API fallback
 
 - Provider/model: `openai/gpt-5.4`, used only after the primary coding provider returns a recognized quota, rate-limit, or capacity failure. Pi's `openai-codex` transport requires ChatGPT OAuth and is not compatible with this API-key credential.
-- 1Password: item `ihnfet3bphdyzixh3ak5lolafa` (`OpenAI API Key - Org Verified`) in the `Private` vault is the authoritative key store; never commit or print its credential value.
+- 1Password: item `7k7i5cdnov6twm6qvl5cq5gake` (`OPENAI_API_KEY`) in the `Private` vault is the authoritative key store; never commit or print its credential value. The older `OpenAI API Key - Org Verified` item is not valid for production use.
 - Configuration: inject the item credential as `OPENAI_API_KEY`, then set `AGENTOS_FALLBACK_PROVIDER=openai` and `AGENTOS_FALLBACK_MODEL=gpt-5.4`. Shipwright retries at most once and records each provider/model attempt without storing credentials or upstream error text.
 
 ## GitHub App: Shipwright DCM review agent
