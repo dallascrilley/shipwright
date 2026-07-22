@@ -24,7 +24,7 @@ The manual Operator console remains unchanged. New agents remain disabled, test 
 - [x] (2026-07-22 15:25Z) U1: Added the GitHub App-backed allowed repository catalog, safe read action, and create/repository-changing save enforcement with unchanged-scope outage compatibility.
 - [x] (2026-07-22 15:34Z) U2: Added the four curated GitHub choices, legacy-safe trigger projection/removal, audited optimistic removal, and deterministic version-1 secret-free export.
 - [x] (2026-07-22 15:50Z) U3: Replaced free-form repository/action inputs with the guarded searchable picker and readable trigger editor; added atomic replacement, safe JSON copy, disabled-agent dry-run proof, and desktop/390 px browser validation.
-- [ ] U4: Align deployment configuration and documentation, then prove the flow locally and in the deployed operator UI.
+- [ ] (2026-07-22 15:55Z) U4 local work complete: both example environments, README, credential/deployment guidance, config regression coverage, and `bun run verify` pass. Production rollout and signed-event proof remain gated on reviewed integration and one configured GitHub App being installed across both owners.
 
 ## Surprises & Discoveries
 
@@ -35,6 +35,7 @@ The manual Operator console remains unchanged. New agents remain disabled, test 
 - Observation: `@octokit/app` already exposes `app.eachRepository.iterator()` in the installed version, so repository discovery needs no dependency change.
 - Observation: The repository's shared `td` database resolves from the primary checkout; the linked worktree contains only copied diagnostic files. Tracker commands for this plan must use `td -w /Users/dallascrilley/Documents/shipwright` or the equivalent explicit work directory.
 - Observation: Browser proof exposed that the explicit test-run action reused the dispatcher’s activation guard and therefore rejected disabled agents, contradicting the test-before-enable workflow. Evidence: the action failed with `Agent <id> is disabled and cannot enqueue work`; a narrow test-source-only dispatcher override now permits the dry-run queue entry without enabling the agent or weakening webhook/schedule traffic.
+- Observation: The checked-in credential inventory documents two distinct GitHub Apps, each restricted to one repository, rather than one App installed across both approved owners. Evidence: `docs/credentials.md` records App IDs `4337906` and `4342351` with separate installations. The selector can enumerate both owners only after one configured App is installed with the intended access on both; this is a deployment prerequisite, not a reason to weaken the catalog intersection.
 
 ## Requirements
 
@@ -61,6 +62,7 @@ The manual Operator console remains unchanged. New agents remain disabled, test 
 - Decision: Do not add a `conditions` field in this slice. Preserve the discriminated trigger boundary and plan conditions separately. Rationale: an unused or weakly validated condition field would imply behavior that does not exist. Date/Author: 2026-07-22 / Codex.
 - Decision: Replace GitHub triggers atomically in the control-plane transaction instead of composing client-side add/remove requests. Rationale: an enabled agent must never observe a missing or duplicate replacement caused by a partial two-request workflow. Date/Author: 2026-07-22 / Codex.
 - Decision: Permit disabled-agent queueing only when the trusted caller explicitly marks a `source: test` request as the pre-activation proof path. Rationale: operators must test before enable, while trigger-driven traffic must continue to fail closed for disabled agents. Date/Author: 2026-07-22 / Codex.
+- Decision: Stop U4 before push, integration, GitHub App permission changes, or production configuration mutation. Rationale: production proof depends on reviewed integrated code and a confirmed cross-owner App installation; neither should be improvised from an unpushed implementation branch. Date/Author: 2026-07-22 / Codex.
 
 ## Context and Orientation
 
@@ -231,7 +233,7 @@ No blocking questions remain. The condition field/operator matrix and AND/OR sem
 
 ## Outcomes & Retrospective
 
-Planning outcome: the approved requirements are mapped to four implementation units, planning-owned questions are resolved, and execution has not started. Replace this paragraph with delivered behavior, deviations, verification evidence, and residual risk when the plan completes.
+Local delivery now includes the App-backed allowed repository catalog and save-boundary enforcement; four curated GitHub trigger choices with legacy-safe loading; audited removal and atomic replacement; deterministic secret-free version-1 JSON export; a searchable responsive picker and readable trigger editor; and owner-scoped examples for both approved owners. Browser proof covered create, copy, replace, remove, test-before-enable, enable confirmation, catalog failure, desktop, and 390 px layouts. The full local gate passed with 227 Bun tests, 123 UI tests, both typechecks, and the production build. No conditions model was added by design. Residual work is deployment-only: review and integrate this branch, confirm one GitHub App installation spans both owners, apply the non-secret allowlist, then run readiness, selector, signed-event replay, and redacted dry-run receipt proofs.
 
 ## Artifacts and Notes
 
@@ -244,3 +246,4 @@ Planning outcome: the approved requirements are mapped to four implementation un
 ## Revision History
 
 - 2026-07-22: Initial full plan grounded in current `origin/main`; scoped to the remaining catalog, trigger editor, JSON projection, and rollout work.
+- 2026-07-22: Delivered U1-U3 and U4 local configuration/docs/proof; recorded reviewed-integration and cross-owner GitHub App installation as production rollout gates.

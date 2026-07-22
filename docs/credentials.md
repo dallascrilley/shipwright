@@ -26,3 +26,5 @@
 ## Repository allowlist format
 
 `GITHUB_REPOSITORY_ALLOWLIST` accepts a comma-separated mix of exact `owner/repo` entries and owner scopes written `owner/*`, which permit every repository under that owner (for example `dallascrilley/*, DallasCrilleyMarTech/*`). A bare `*` or `*/*` is rejected — scopes are always owner-bound. The GitHub App installation must also grant access to the repositories a scope is meant to cover; Shipwright's own guardrail never widens what the installation can reach.
+
+The production target policy is `GITHUB_REPOSITORY_ALLOWLIST=dallascrilley/*,DallasCrilleyMarTech/*`. To populate both owners in the Agents repository selector, one configured GitHub App must be installed on both owners with the intended repository access. Leave `GITHUB_APP_INSTALLATION_ID` unset so repository discovery can enumerate every installation for that App; per-run authorization still resolves and verifies the target installation.

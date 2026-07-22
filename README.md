@@ -21,7 +21,7 @@ bun run doctor
 bun run dev
 ```
 
-The GitHub App needs repository metadata read, issues read, contents write, and pull requests write. It does not need Actions, workflows, administration, secrets, or organization permissions. `GITHUB_REPOSITORY_ALLOWLIST` accepts exact `owner/repo` entries only; wildcards are rejected.
+The GitHub App needs repository metadata read, issues read, contents write, and pull requests write. It does not need Actions, workflows, administration, secrets, or organization permissions. `GITHUB_REPOSITORY_ALLOWLIST` accepts comma-separated exact `owner/repo` entries and owner-bound `owner/*` scopes; bare wildcards are rejected. The checked-in examples permit `dallascrilley/*` and `DallasCrilleyMarTech/*`, but the App must still be installed with access to each repository—Shipwright never widens GitHub installation access.
 
 ## Issue-to-PR CLI
 
