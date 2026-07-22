@@ -1,10 +1,13 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  GITHUB_TRIGGER_CHOICES,
   agentControlPlaneSnapshotSchema,
   agentDraftSchema,
   agentTriggerSchema,
+  curatedGithubTriggerConfigSchema,
   executionRequestSchema,
+  findGithubTriggerChoice,
   lifecycleEventSchema,
   queueEntrySchema,
 } from "./agent-definition";
@@ -25,6 +28,54 @@ const draft = {
 };
 
 describe("agentDefinition contracts", () => {
+  test("defines exactly the four curated GitHub trigger choices", () => {
+    expect(GITHUB_TRIGGER_CHOICES.map((choice) => choice.id)).toEqual([
+      "issue_created",
+      "issue_edited",
+      "pull_request_created",
+      "pull_request_pushed",
+    ]);
+    for (const choice of GITHUB_TRIGGER_CHOICES) {
+      const config = { event: choice.event, actions: [choice.action] };
+      expect(curatedGithubTriggerConfigSchema.safeParse(config).success).toBe(
+        true,
+      );
+      expect(findGithubTriggerChoice(config)?.id).toBe(choice.id);
+    }
+    expect(
+      curatedGithubTriggerConfigSchema.safeParse({
+        event: "issues",
+        actions: ["opened", "edited"],
+      }).success,
+    ).toBe(false);
+    expect(
+      curatedGithubTriggerConfigSchema.safeParse({
+        event: "pull_request",
+        actions: ["closed"],
+      }).success,
+    ).toBe(false);
+  });
+
+  test("keeps persisted legacy GitHub actions readable", () => {
+    const legacy = agentTriggerSchema.parse({
+      triggerId: "trigger-legacy",
+      agentId: "agent-1",
+      agentRevision: 1,
+      kind: "github",
+      enabled: true,
+      config: { event: "pull_request", actions: ["closed"] },
+      createdAt: "2026-07-21T00:00:00.000Z",
+      updatedAt: "2026-07-21T00:00:00.000Z",
+    });
+
+    expect(legacy.config).toEqual({
+      event: "pull_request",
+      actions: ["closed"],
+    });
+    if (!("event" in legacy.config)) throw new Error("expected GitHub config");
+    expect(findGithubTriggerChoice(legacy.config)).toBeUndefined();
+  });
+
   test("accepts an allowlisted dry-run draft", () => {
     expect(agentDraftSchema.parse(draft)).toMatchObject({
       name: "Issue triage",

@@ -104,14 +104,61 @@ export const agentRevisionSchema = z
 
 export type AgentRevision = z.output<typeof agentRevisionSchema>;
 
-const githubTriggerConfigSchema = z
+export const GITHUB_TRIGGER_CHOICES = [
+  {
+    id: "issue_created",
+    label: "Issue created",
+    event: "issues",
+    action: "opened",
+  },
+  {
+    id: "issue_edited",
+    label: "Issue edited",
+    event: "issues",
+    action: "edited",
+  },
+  {
+    id: "pull_request_created",
+    label: "Pull request created",
+    event: "pull_request",
+    action: "opened",
+  },
+  {
+    id: "pull_request_pushed",
+    label: "Commits pushed to pull request",
+    event: "pull_request",
+    action: "synchronize",
+  },
+] as const;
+
+export type GithubTriggerChoice = (typeof GITHUB_TRIGGER_CHOICES)[number];
+export type GithubTriggerChoiceId = GithubTriggerChoice["id"];
+
+export const githubTriggerConfigSchema = z
   .object({
     event: z.enum(["issues", "pull_request"]),
     actions: z.array(identifierSchema).min(1).max(16),
   })
   .strict();
 
-const scheduleTriggerConfigSchema = z
+export type GithubTriggerConfig = z.output<typeof githubTriggerConfigSchema>;
+
+export function findGithubTriggerChoice(
+  config: GithubTriggerConfig,
+): GithubTriggerChoice | undefined {
+  if (config.actions.length !== 1) return undefined;
+  return GITHUB_TRIGGER_CHOICES.find(
+    (choice) =>
+      choice.event === config.event && choice.action === config.actions[0],
+  );
+}
+
+export const curatedGithubTriggerConfigSchema = githubTriggerConfigSchema.refine(
+  (config) => findGithubTriggerChoice(config) !== undefined,
+  "Choose one supported GitHub trigger action.",
+);
+
+export const scheduleTriggerConfigSchema = z
   .object({
     schedule: safeText(200),
     timezone: safeText(100),
@@ -199,6 +246,7 @@ export const lifecycleEventSchema = z
       "stopped",
       "retry",
       "circuit_open",
+      "trigger_removed",
     ]),
     triggerId: identifierSchema.optional(),
     revision: revisionSchema,

@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import { redactSecrets } from "../../src/pipeline/secret-safety";
+import {
+  containsSecretLikeContent,
+  redactSecrets,
+} from "../../src/pipeline/secret-safety";
 import type {
   AgentControlPlaneSnapshot,
   AgentDefinition,
@@ -9,6 +12,13 @@ import type {
   ExecutionRequest,
   LifecycleEvent,
   QueueEntry,
+} from "./agent-definition";
+import {
+  agentDraftSchema,
+  findGithubTriggerChoice,
+  githubTriggerConfigSchema,
+  scheduleTriggerConfigSchema,
+  type GithubTriggerChoiceId,
 } from "./agent-definition";
 import type { OperatorRunRecord } from "./operator-run";
 
@@ -24,6 +34,47 @@ export const agentListFilterSchema = z
   .strict();
 
 export type AgentListFilter = z.output<typeof agentListFilterSchema>;
+
+const exportedGithubTriggerSchema = z
+  .object({
+    kind: z.literal("github"),
+    enabled: z.boolean(),
+    event: githubTriggerConfigSchema.shape.event,
+    actions: githubTriggerConfigSchema.shape.actions,
+    legacy: z.boolean(),
+  })
+  .strict();
+
+const exportedScheduleTriggerSchema = z
+  .object({
+    kind: z.literal("schedule"),
+    enabled: z.boolean(),
+    schedule: scheduleTriggerConfigSchema.shape.schedule,
+    timezone: scheduleTriggerConfigSchema.shape.timezone,
+    target: scheduleTriggerConfigSchema.shape.target,
+    paused: z.boolean(),
+  })
+  .strict();
+
+export const agentDefinitionExportSchema = z
+  .object({
+    format: z.literal("shipwright.agent"),
+    version: z.literal(1),
+    revision: z.number().int().positive(),
+    enabled: z.boolean(),
+    configuration: agentDraftSchema,
+    triggers: z.array(
+      z.discriminatedUnion("kind", [
+        exportedGithubTriggerSchema,
+        exportedScheduleTriggerSchema,
+      ]),
+    ),
+  })
+  .strict();
+
+export type AgentDefinitionExport = z.output<
+  typeof agentDefinitionExportSchema
+>;
 
 export interface AgentActivityView {
   at: string;
@@ -79,9 +130,15 @@ export interface AgentEvidenceView {
   pullRequestUrl?: string;
 }
 
+export type AgentTriggerView = AgentTrigger & {
+  label: string;
+  legacy: boolean;
+  choiceId?: GithubTriggerChoiceId;
+};
+
 export interface AgentDetailView extends AgentListItem {
   config: AgentDraft;
-  triggers: AgentTrigger[];
+  triggers: AgentTriggerView[];
   runHistory: AgentQueueRunView[];
   evidence: AgentEvidenceView[];
   audit: LifecycleEvent[];
@@ -153,7 +210,9 @@ export function buildAgentDetail(
     triggers: snapshot.triggers
       .filter((item) => item.agentId === agentId)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-      .map((item) => structuredClone(item)),
+      .map((item) =>
+        buildAgentTriggerView(item, revision.draft.targetScope.repository),
+      ),
     runHistory,
     evidence: operatorRuns
       .filter((record) => record.agentId === agentId)
@@ -164,6 +223,95 @@ export function buildAgentDetail(
       .sort((left, right) => right.sequence - left.sequence)
       .map((item) => structuredClone(item)),
   };
+}
+
+export function buildAgentTriggerView(
+  trigger: AgentTrigger,
+  repository: string,
+): AgentTriggerView {
+  if (trigger.kind === "github" && "event" in trigger.config) {
+    const choice = findGithubTriggerChoice(trigger.config);
+    if (choice) {
+      return {
+        ...structuredClone(trigger),
+        choiceId: choice.id,
+        label: `${choice.label} in ${repository}`,
+        legacy: false,
+      };
+    }
+    return {
+      ...structuredClone(trigger),
+      label: `Legacy GitHub trigger: ${trigger.config.event}.${trigger.config.actions.join(
+        ",",
+      )}`,
+      legacy: true,
+    };
+  }
+  if (trigger.kind === "schedule" && "schedule" in trigger.config) {
+    return {
+      ...structuredClone(trigger),
+      label: `Schedule ${trigger.config.schedule} (${trigger.config.timezone})`,
+      legacy: false,
+    };
+  }
+  throw new Error(`Trigger ${trigger.triggerId} has an invalid kind/config pair.`);
+}
+
+export function buildAgentDefinitionDocument(
+  snapshot: AgentControlPlaneSnapshot,
+  agentId: string,
+): AgentDefinitionExport {
+  const agent = snapshot.agents.find((item) => item.agentId === agentId);
+  if (!agent) throw new Error(`Unknown agent ${agentId}.`);
+  const revision = findCurrentRevision(snapshot, agent);
+  if (!revision) {
+    throw new Error(
+      `Missing revision ${agent.currentRevision} for ${agent.agentId}.`,
+    );
+  }
+  const triggers = snapshot.triggers
+    .filter((trigger) => trigger.agentId === agent.agentId)
+    .map((trigger) => {
+      if (trigger.kind === "github" && "event" in trigger.config) {
+        return {
+          kind: "github" as const,
+          enabled: trigger.enabled,
+          event: trigger.config.event,
+          actions: [...trigger.config.actions],
+          legacy: findGithubTriggerChoice(trigger.config) === undefined,
+        };
+      }
+      if (trigger.kind === "schedule" && "schedule" in trigger.config) {
+        return {
+          kind: "schedule" as const,
+          enabled: trigger.enabled,
+          schedule: trigger.config.schedule,
+          timezone: trigger.config.timezone,
+          target: structuredClone(trigger.config.target),
+          paused: trigger.pausedAt !== undefined,
+        };
+      }
+      throw new Error(
+        `Trigger ${trigger.triggerId} has an invalid kind/config pair.`,
+      );
+    })
+    .sort((left, right) => {
+      const leftKey = JSON.stringify(left);
+      const rightKey = JSON.stringify(right);
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    });
+  const document = agentDefinitionExportSchema.parse({
+    format: "shipwright.agent",
+    version: 1,
+    revision: agent.currentRevision,
+    enabled: agent.enabled,
+    configuration: structuredClone(revision.draft),
+    triggers,
+  });
+  if (containsSecretLikeContent(JSON.stringify(document))) {
+    throw new Error("Secret-like values cannot be exported from agent configuration.");
+  }
+  return document;
 }
 
 function buildListItem(
