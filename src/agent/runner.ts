@@ -75,6 +75,15 @@ function piModelsConfig(provider: ProviderConfig): string | undefined {
   });
 }
 
+function piAuthConfig(provider: ProviderConfig): string | undefined {
+  if (provider.name !== "openai-codex") return undefined;
+  const apiKey = provider.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OpenAI Codex provider credential is missing");
+  return JSON.stringify({
+    "openai-codex": { type: "api_key", key: apiKey },
+  });
+}
+
 export async function runPiAgent(
   vm: AgentVm,
   provider: ProviderConfig,
@@ -90,6 +99,8 @@ export async function runPiAgent(
       "/home/agentos/.pi/agent/settings.json",
       JSON.stringify({ defaultProvider: provider.name, defaultModel: provider.model }),
     );
+    const authConfig = piAuthConfig(provider);
+    if (authConfig) await vm.writeFile("/home/agentos/.pi/agent/auth.json", authConfig);
     const modelsConfig = piModelsConfig(provider);
     if (modelsConfig) await vm.writeFile("/home/agentos/.pi/agent/models.json", modelsConfig);
     if (skills.length > 0) {
