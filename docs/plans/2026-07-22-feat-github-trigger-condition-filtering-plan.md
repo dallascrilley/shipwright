@@ -22,7 +22,7 @@ Existing trigger records with no conditions continue to match exactly as they do
 - [x] (2026-07-22 23:34Z) Resolved compatibility, export versioning, evaluator placement, multi-trigger convergence, evidence, and normalization as planning decisions.
 - [x] (2026-07-22 23:38Z) Imported epic `td-18bac8` with U1 `td-049b5b`, U2 `td-adf814`, U3 `td-97bc77`, and U4 `td-f806ac`; verified the import receipt.
 - [x] (2026-07-22 23:45Z) U1: Added strict typed condition schemas, event-aware validation, bounded normalization, readable summaries, version-1 export compatibility, and current version-2 output; 133 UI tests and typecheck pass.
-- [ ] U2: Evaluate signed webhook conditions before queueing.
+- [x] (2026-07-22 23:52Z) U2: Added pure fail-closed condition evaluation, verified-payload field extraction, deterministic alternative grouping, one dispatch per agent revision and delivery, and capped reason-code-only ingress decisions; 20 focused tests and typecheck pass.
 - [ ] U3: Add the readable event-aware condition editor.
 - [ ] U4: Prove the public route, UI, safety, regressions, and documentation.
 
@@ -35,6 +35,7 @@ Existing trigger records with no conditions continue to match exactly as they do
 - Observation: There is no durable webhook-evaluation store. Reusing lifecycle history for every filtered delivery would create noisy, unbounded agent state. A capped ingress decision receipt is the narrowest existing evidence surface.
 - Observation: The public H3 route has dedicated signed-request tests. Prior solution guidance correctly warns that library-only webhook tests do not prove the actual mounted HTTP contract.
 - Observation: The operator console has no direct component test suite. Pure shared projection tests plus desktop and 390 px browser proof are the proportionate way to cover readable condition controls without introducing a new UI test framework.
+- Observation: A realistic conditioned pull-request payload can omit the top-level condition fields while still providing the dispatch target. Keeping target validation separate from condition field states preserves unconditional compatibility and lets configured conditions fail closed with precise missing or malformed reason codes.
 
 ## Requirements
 
