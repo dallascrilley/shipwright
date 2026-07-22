@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -16,10 +24,14 @@ const SNAPSHOT = JSON.stringify({
   queueEntries: [],
 });
 
-function run(args: string[]): { code: number; output: string } {
+function run(
+  args: string[],
+  env: Record<string, string | undefined> = {},
+): { code: number; output: string } {
   const result = Bun.spawnSync(["bash", script, ...args], {
     stdout: "pipe",
     stderr: "pipe",
+    env: { ...process.env, ...env },
   });
   return {
     code: result.exitCode,
@@ -53,9 +65,9 @@ describe("control-plane state backup/restore", () => {
 
       const restore = run(["restore", join(backupDir, backups[0]), restoreDir]);
       expect(restore.code).toBe(0);
-      expect(readFileSync(join(restoreDir, "agent-control-plane.json"), "utf8")).toBe(
-        SNAPSHOT,
-      );
+      expect(
+        readFileSync(join(restoreDir, "agent-control-plane.json"), "utf8"),
+      ).toBe(SNAPSHOT);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -112,7 +124,11 @@ describe("control-plane state backup/restore", () => {
         (name) => !name.endsWith(".sha256"),
       )!;
       const backupPath = join(backupDir, backup);
-      writeFileSync(backupPath, SNAPSHOT.replace("\"version\":1", "\"version\":1 "), "utf8");
+      writeFileSync(
+        backupPath,
+        SNAPSHOT.replace('"version":1', '"version":1 '),
+        "utf8",
+      );
 
       const restore = run(["restore", backupPath, join(root, "restored")]);
       expect(restore.code).toBe(1);
@@ -142,9 +158,74 @@ describe("control-plane state backup/restore", () => {
       );
 
       expect(run(["restore", join(backupDir, backup), stateDir]).code).toBe(0);
-      expect(readFileSync(join(stateDir, "agent-control-plane.json.bak"), "utf8")).toContain(
-        '"changed"',
+      expect(
+        readFileSync(join(stateDir, "agent-control-plane.json.bak"), "utf8"),
+      ).toContain('"changed"');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("restore reapplies the service owner before the atomic replacement", () => {
+    const root = mkdtempSync(join(tmpdir(), "shipwright-state-drill-"));
+    try {
+      const stateDir = join(root, "state");
+      const backup = join(root, "backup.json");
+      const fakeBin = join(root, "bin");
+      const chownLog = join(root, "chown.log");
+      Bun.spawnSync(["mkdir", "-p", stateDir, fakeBin]);
+      writeFileSync(join(stateDir, "agent-control-plane.json"), SNAPSHOT, {
+        mode: 0o600,
+      });
+      writeFileSync(backup, SNAPSHOT, { mode: 0o600 });
+      const fakeChown = join(fakeBin, "chown");
+      writeFileSync(
+        fakeChown,
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$SHIPWRIGHT_CHOWN_LOG"\n',
       );
+      chmodSync(fakeChown, 0o755);
+
+      const restore = run(["restore", backup, stateDir], {
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        SHIPWRIGHT_STATE_OWNER: "4242:4343",
+        SHIPWRIGHT_CHOWN_LOG: chownLog,
+      });
+
+      expect(restore.code).toBe(0);
+      expect(existsSync(chownLog)).toBe(true);
+      expect(readFileSync(chownLog, "utf8")).toMatch(
+        /4242:4343 .*agent-control-plane\.json\.restore\./,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("restore leaves live state untouched when ownership cannot be applied", () => {
+    const root = mkdtempSync(join(tmpdir(), "shipwright-state-drill-"));
+    try {
+      const stateDir = join(root, "state");
+      const live = join(stateDir, "agent-control-plane.json");
+      const backup = join(root, "backup.json");
+      const fakeBin = join(root, "bin");
+      Bun.spawnSync(["mkdir", "-p", stateDir, fakeBin]);
+      writeFileSync(live, "previous live state", { mode: 0o600 });
+      writeFileSync(backup, SNAPSHOT, { mode: 0o600 });
+      const fakeChown = join(fakeBin, "chown");
+      writeFileSync(fakeChown, "#!/bin/sh\nexit 73\n");
+      chmodSync(fakeChown, 0o755);
+
+      const restore = run(["restore", backup, stateDir], {
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        SHIPWRIGHT_STATE_OWNER: "4242:4343",
+      });
+
+      expect(restore.code).toBe(73);
+      expect(readFileSync(live, "utf8")).toBe("previous live state");
+      expect(existsSync(`${live}.bak`)).toBe(false);
+      expect(
+        readdirSync(stateDir).some((name) => name.includes(".restore.")),
+      ).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -177,7 +258,10 @@ describe("control-plane state backup/restore", () => {
       );
       expect(hostile.exitCode).toBe(0);
       expect(
-        readFileSync(join(root, "restored", "agent-control-plane.json"), "utf8"),
+        readFileSync(
+          join(root, "restored", "agent-control-plane.json"),
+          "utf8",
+        ),
       ).toBe(SNAPSHOT);
     } finally {
       rmSync(root, { recursive: true, force: true });
