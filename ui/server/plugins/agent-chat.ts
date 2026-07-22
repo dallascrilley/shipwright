@@ -10,6 +10,27 @@ const INITIAL_TOOL_NAMES = ["view-screen", "navigate", "hello"];
 
 export default createAgentChatPlugin({
   appId: "ui",
+  engine: {
+    name: "ai-sdk:openrouter",
+    config: {
+      appName: "Shipwright",
+      appUrl: "https://github.com/dallascrilley/shipwright",
+      providerOptions: {
+        openrouter: {
+          provider: {
+            data_collection: "deny",
+          },
+          plugins: [
+            {
+              id: "auto-router",
+              allowed_models: ["anthropic/*", "openai/*", "google/*", "z-ai/*"],
+              cost_quality_tradeoff: 3,
+            },
+          ],
+        },
+      },
+    },
+  },
   actions: loadActionsFromStaticRegistry(actionsRegistry),
   initialToolNames: INITIAL_TOOL_NAMES,
   resolveOrgId: async (event) => (await getOrgContext(event)).orgId,
