@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { SandboxWorkspace } from "../../src/sandbox/runtime.js";
+import {
+  EXPECTED_SANDBOX_BUN_VERSION,
+  SandboxWorkspace,
+} from "../../src/sandbox/runtime.js";
 
 const liveTest = process.env.RUN_DOCKER_E2E === "1" ? test : test.skip;
 
@@ -14,6 +17,18 @@ liveTest("runs a command in a disposable Docker sandbox and cleans it up", async
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("SANDBOX_OK");
+  } finally {
+    await workspace.destroy();
+  }
+}, 30_000);
+
+liveTest("exposes the pinned Bun runtime inside the disposable sandbox", async () => {
+  const workspace = await SandboxWorkspace.start();
+  try {
+    await workspace.initialize();
+    const result = await workspace.run({ command: "bun", args: ["--version"] });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe(EXPECTED_SANDBOX_BUN_VERSION);
   } finally {
     await workspace.destroy();
   }

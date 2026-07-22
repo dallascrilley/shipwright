@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  EXPECTED_SANDBOX_BUN_VERSION,
+  requireExpectedBunVersion,
   parseNulList,
   requireSuccessfulCommand,
+  resolveBunExecutable,
   resolvePiNodeModulesDirectory,
   resolveSandboxContainerUser,
   resolveSandboxImage,
@@ -69,6 +72,49 @@ describe("sandbox command helpers", () => {
       nodeModules,
       "@mariozechner/pi-coding-agent/dist/cli.js",
     )).size).toBeGreaterThan(0);
+  });
+
+  test("resolves a provisioned Linux Bun executable for the read-only mount", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "shipwright-bun-"));
+    const executable = join(directory, "bun");
+    try {
+      await writeFile(executable, "fixture");
+      await chmod(executable, 0o755);
+      expect(resolveBunExecutable(executable)).toBe(await realpath(executable));
+      expect(() => resolveBunExecutable(join(directory, "missing"))).toThrow(
+        "run bun run provision:sandbox-bun",
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("requires the Mise-pinned Bun version before sandbox work begins", async () => {
+    const miseConfig = await Bun.file(new URL("../../mise.toml", import.meta.url)).text();
+    const provisioner = await Bun.file(
+      new URL("../../scripts/provision-sandbox-bun.sh", import.meta.url),
+    ).text();
+    expect(miseConfig).toContain(`bun = "${EXPECTED_SANDBOX_BUN_VERSION}"`);
+    expect(provisioner).toContain(`bun_version="${EXPECTED_SANDBOX_BUN_VERSION}"`);
+    expect(provisioner).toMatch(/oven\/bun@sha256:[0-9a-f]{64}/);
+    expect(requireExpectedBunVersion({
+      exitCode: 0,
+      stdout: `${EXPECTED_SANDBOX_BUN_VERSION}\n`,
+      stderr: "",
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      timedOut: false,
+      durationMs: 1,
+    })).toBe(EXPECTED_SANDBOX_BUN_VERSION);
+    expect(() => requireExpectedBunVersion({
+      exitCode: 0,
+      stdout: "0.0.0\n",
+      stderr: "",
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      timedOut: false,
+      durationMs: 1,
+    })).toThrow(`expected ${EXPECTED_SANDBOX_BUN_VERSION}`);
   });
 
   test("host temp workspaces resolve through macOS private tmp symlinks", async () => {

@@ -99,7 +99,9 @@ The deploy command bootstraps Docker, mise, pinned runtimes, Tailscale, the serv
 deploy/deploy.sh root@TAILSCALE_HOSTNAME_OR_IP
 ```
 
-The command refuses a dirty checkout, uploads the exact current commit to a new release directory, installs locked dependencies, pulls the sandbox image by immutable SHA-256 digest, validates the full GitHub/model configuration as the service user, builds on the Linux host, atomically moves the `current` symlink, starts the service, and waits for a loopback HTTP response. If startup or health verification fails, it automatically restores the previous release and systemd unit.
+The command refuses a dirty checkout, uploads the exact current commit to a new release directory, installs locked dependencies, pulls the sandbox image by immutable SHA-256 digest, provisions Bun 1.3.14 from an immutable `oven/bun` image into the service user's tool cache, validates the full GitHub/model configuration as the service user, builds on the Linux host, atomically moves the `current` symlink, starts the service, and waits for a loopback HTTP response. If startup or health verification fails, it automatically restores the previous release and systemd unit.
+
+The provisioned Linux Bun binary is mounted read-only at `/usr/local/bin/bun` in each disposable sandbox. `SandboxWorkspace.initialize()` requires the exact Mise-pinned version before cloning a repository or starting a model, so a missing or stale runtime fails as `sandbox Bun preflight` instead of consuming provider capacity and later returning `sh: 1: bun: not found`. Run `bun run provision:sandbox-bun` to repair a local cache; `bun run test:docker` provisions it automatically before the Docker lifecycle tests.
 
 ## Configure secrets
 

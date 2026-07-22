@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 import { parseGitHubConfig } from "../src/config/github.js";
 import { resolveProvider } from "../src/config/provider.js";
-import { resolveSandboxImage } from "../src/sandbox/runtime.js";
+import { resolveBunExecutable, resolveSandboxImage } from "../src/sandbox/runtime.js";
 
 interface Check {
   name: string;
@@ -63,6 +63,7 @@ const checks: Check[] = [
     }
     return image;
   }),
+  configurationCheck("Sandbox Bun", () => resolveBunExecutable()),
   configurationCheck("State directory", () => {
     accessSync(stateDirectory, constants.R_OK | constants.W_OK | constants.X_OK);
     return stateDirectory;

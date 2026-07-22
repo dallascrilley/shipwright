@@ -49,6 +49,7 @@ if [[ ! "$sandbox_image" =~ @sha256:[0-9a-f]{64}$ ]]; then
 fi
 export SHIPWRIGHT_SANDBOX_IMAGE="$sandbox_image"
 docker pull "$sandbox_image" >/dev/null
+run_tool bun run provision:sandbox-bun
 run_tool bun run doctor -- --runtime-only
 
 printf 'Shipwright bootstrap complete. Run bun run doctor after configuring .env.\n'
