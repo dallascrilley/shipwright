@@ -167,14 +167,14 @@ export function OperatorConsole() {
   const demoMode = historyResponse?.demoMode ?? false;
   const presets = (presetsQuery.data as VerifyPreset[] | undefined) ?? [];
   const readinessReport = readinessQuery.data as HostReadinessReport | undefined;
-  const readinessBlocksStart = Boolean(
+  const liveStartBlocked = Boolean(
     readinessReport &&
       !readinessReport.demoMode &&
       readinessReport.blocksLiveStart,
   );
   const active = Boolean(record && !isTerminalRun(record.status));
-  const busy =
-    startRun.isPending || active || preflightPending || readinessBlocksStart;
+  // Intake/dry-run busy only — readiness never blocks dry-run.
+  const busy = startRun.isPending || active || preflightPending;
   const nextActions = useMemo(
     () => (record ? resolveOperatorNextAction(record) : null),
     [record],
@@ -251,6 +251,12 @@ export function OperatorConsole() {
 
   function handlePublishClick() {
     setFormError(null);
+    if (liveStartBlocked) {
+      setFormError(
+        "Host prerequisites are not ready for live publish. Fix readiness first.",
+      );
+      return;
+    }
     setPublishSource(null);
     const request = buildRequest(true);
     if (!request) return;
@@ -308,8 +314,14 @@ export function OperatorConsole() {
       }
       if (action.type === "start_publish_run") {
         if (!record || record.runId !== action.runId) return;
+        if (liveStartBlocked) {
+          setFormError(
+            "Host prerequisites are not ready for live publish. Fix readiness first.",
+          );
+          return;
+        }
         setPublishSource(record);
-            setConfirmOpen(true);
+        setConfirmOpen(true);
         return;
       }
       try {
@@ -332,6 +344,14 @@ export function OperatorConsole() {
 
   async function confirmPublish() {
     setFormError(null);
+    if (liveStartBlocked) {
+      setFormError(
+        "Host prerequisites are not ready for live publish. Fix readiness first.",
+      );
+      setConfirmOpen(false);
+      setPublishSource(null);
+      return;
+    }
     try {
       if (publishSource) {
         const started = (await startRun.mutateAsync({
@@ -623,11 +643,11 @@ export function OperatorConsole() {
             </div>
           )}
 
-          {readinessBlocksStart ? (
+          {liveStartBlocked ? (
             <p className="text-xs text-amber-700 dark:text-amber-300">
-              Host prerequisites are not ready. Live starts are disabled until
+              Host prerequisites are not ready. Live publish is disabled until
               provider, GitHub App, Docker socket, and state store report ready.
-              History remains available.
+              Dry-run and history remain available.
             </p>
           ) : null}
           <div className="flex flex-wrap gap-3">
@@ -648,7 +668,7 @@ export function OperatorConsole() {
               type="button"
               size="lg"
               variant="outline"
-              disabled={busy}
+              disabled={busy || liveStartBlocked}
               onClick={handlePublishClick}
               className="w-full sm:w-auto"
             >
@@ -731,7 +751,7 @@ export function OperatorConsole() {
             </Button>
             <Button
               onClick={() => void confirmPublish()}
-              disabled={startRun.isPending}
+              disabled={startRun.isPending || liveStartBlocked}
             >
               {startRun.isPending && <IconLoader2 className="animate-spin" />}
               Start publish run
