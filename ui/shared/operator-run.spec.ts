@@ -519,9 +519,9 @@ describe("operator run history list", () => {
         errorMessage: "SECRET_TOKEN=super-secret-value",
       },
     });
-    expect(
-      matchesOperatorRunListFilters(record, { query: "widgets" }),
-    ).toBe(true);
+    expect(matchesOperatorRunListFilters(record, { query: "widgets" })).toBe(
+      true,
+    );
     expect(matchesOperatorRunListFilters(record, { query: "flaky" })).toBe(
       true,
     );
@@ -559,9 +559,9 @@ describe("operator run history list", () => {
         to: "2026-07-20T11:00:00.000Z",
       }),
     ).toBe(true);
-    expect(
-      matchesOperatorRunListFilters(failed, { status: "succeeded" }),
-    ).toBe(false);
+    expect(matchesOperatorRunListFilters(failed, { status: "succeeded" })).toBe(
+      false,
+    );
     expect(matchesOperatorRunListFilters(failed, { mode: "issue" })).toBe(
       false,
     );
@@ -647,7 +647,11 @@ describe("operator run history list", () => {
   });
 
   test("selectRetainedOperatorRuns can protect selected lineage when requested", () => {
-    const root = rec({ runId: "root", rootRunId: "root", startedAt: "2026-07-20T10:00:00.000Z" });
+    const root = rec({
+      runId: "root",
+      rootRunId: "root",
+      startedAt: "2026-07-20T10:00:00.000Z",
+    });
     const mid = rec({
       runId: "mid",
       parentRunId: "root",

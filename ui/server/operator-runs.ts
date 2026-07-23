@@ -271,7 +271,11 @@ export class OperatorRunRegistry {
       }
       this.#records.set(record.runId, record);
     }
-    if (reconciled) this.#persist();
+    if (reconciled) {
+      // Write back normalized/interrupted records without retention pruning.
+      // Selection roots are only known after list/get; load must keep the full store.
+      this.store.save([...this.#records.values()]);
+    }
   }
 
   async start(input: OperatorRunRequest): Promise<OperatorRunRecord> {

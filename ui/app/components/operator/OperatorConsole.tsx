@@ -121,7 +121,9 @@ export function OperatorConsole() {
   const [debouncedHistoryQuery, setDebouncedHistoryQuery] = useState("");
   const [historyStatus, setHistoryStatus] = useState<string>("");
   const [historyMode, setHistoryMode] = useState<string>("");
-  const [historyCursor, setHistoryCursor] = useState<string | undefined>(undefined);
+  const [historyCursor, setHistoryCursor] = useState<string | undefined>(
+    undefined,
+  );
   const [historyCursorStack, setHistoryCursorStack] = useState<string[]>([]);
 
   const startRun = useActionMutation("start-shipwright-run");
@@ -587,7 +589,10 @@ export function OperatorConsole() {
               disabled={!historyNextCursor}
               onClick={() => {
                 if (!historyNextCursor) return;
-                setHistoryCursorStack((stack) => [...stack, historyCursor ?? ""]);
+                setHistoryCursorStack((stack) => [
+                  ...stack,
+                  historyCursor ?? "",
+                ]);
                 setHistoryCursor(historyNextCursor);
               }}
             >

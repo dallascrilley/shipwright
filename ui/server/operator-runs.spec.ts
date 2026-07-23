@@ -6,12 +6,12 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { RunReceipt } from "../../src/pipeline/receipt";
 import { operatorRunRequestSchema } from "../shared/operator-run";
+import { selectRetainedOperatorRuns } from "../shared/operator-run";
 import {
   JsonFileOperatorRunStore,
   MemoryOperatorRunStore,
   OperatorRunRegistry,
 } from "./operator-runs";
-import { selectRetainedOperatorRuns } from "../shared/operator-run";
 import * as resolveTargetModule from "./resolve-target";
 
 const request = {
@@ -683,13 +683,17 @@ describe("OperatorRunRegistry", () => {
       if (calls === 1) throw new Error("disk full");
       return original(records);
     };
-    await expect(registry.start({ ...request, issueUrl: "https://github.com/dallascrilley/example/issues/99" })).rejects.toThrow(/disk full|already active|Run /);
+    await expect(
+      registry.start({
+        ...request,
+        issueUrl: "https://github.com/dallascrilley/example/issues/99",
+      }),
+    ).rejects.toThrow(/disk full|already active|Run /);
     // Depending on whether previous run still active - flush completed so terminal.
     // After throw on second start, first record must remain.
     expect(registry.get("run-keep")).toBeTruthy();
     store.save = original;
   });
-
 
   test("selected descendant lineage survives pruning on successful persist", async () => {
     const dir = mkdtempSync(join(tmpdir(), "shipwright-selected-retain-"));
@@ -779,5 +783,4 @@ describe("OperatorRunRegistry", () => {
 
     rmSync(dir, { recursive: true, force: true });
   });
-
 });

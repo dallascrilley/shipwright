@@ -269,7 +269,6 @@ export interface OperatorNextActionView {
   secondary: OperatorNextAction[];
 }
 
-
 export const MAX_RETAINED_TERMINAL_RUNS = 500;
 export const DEFAULT_RUN_LIST_LIMIT = 50;
 export const MAX_RUN_LIST_LIMIT = 100;
@@ -318,7 +317,9 @@ export const operatorRunListRequestSchema = z
     }
   });
 
-export type OperatorRunListRequest = z.infer<typeof operatorRunListRequestSchema>;
+export type OperatorRunListRequest = z.infer<
+  typeof operatorRunListRequestSchema
+>;
 
 export interface OperatorRunListResponse {
   records: OperatorRunRecord[];
@@ -348,10 +349,7 @@ export function buildOperatorRunSearchText(record: OperatorRunRecord): string {
 export function matchesOperatorRunListFilters(
   record: OperatorRunRecord,
   filters: Partial<
-    Pick<
-      OperatorRunListRequest,
-      "query" | "status" | "mode" | "from" | "to"
-    >
+    Pick<OperatorRunListRequest, "query" | "status" | "mode" | "from" | "to">
   >,
 ): boolean {
   const query = (filters.query ?? "").trim().toLowerCase();
@@ -368,7 +366,8 @@ export function matchesOperatorRunListFilters(
   }
 
   if (filters.status === "active" && isTerminalRun(record.status)) return false;
-  if (filters.status === "terminal" && !isTerminalRun(record.status)) return false;
+  if (filters.status === "terminal" && !isTerminalRun(record.status))
+    return false;
   if (
     filters.status &&
     filters.status !== "active" &&
@@ -389,7 +388,11 @@ export function matchesOperatorRunListFilters(
   if (filters.from) {
     const fromMs = Date.parse(filters.from);
     const startedMs = Date.parse(record.startedAt);
-    if (!Number.isNaN(fromMs) && !Number.isNaN(startedMs) && startedMs < fromMs) {
+    if (
+      !Number.isNaN(fromMs) &&
+      !Number.isNaN(startedMs) &&
+      startedMs < fromMs
+    ) {
       return false;
     }
   }
@@ -544,7 +547,10 @@ export function selectRetainedOperatorRuns(
   }
 
   const terminals = records
-    .filter((record) => isTerminalRun(record.status) && !protectedIds.has(record.runId))
+    .filter(
+      (record) =>
+        isTerminalRun(record.status) && !protectedIds.has(record.runId),
+    )
     .sort(compareRunsNewestFirst);
 
   const keptTerminalIds = new Set(
@@ -552,7 +558,8 @@ export function selectRetainedOperatorRuns(
   );
 
   return records.filter(
-    (record) => protectedIds.has(record.runId) || keptTerminalIds.has(record.runId),
+    (record) =>
+      protectedIds.has(record.runId) || keptTerminalIds.has(record.runId),
   );
 }
 
