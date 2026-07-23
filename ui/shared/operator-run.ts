@@ -16,6 +16,94 @@ export type OperatorRunPhase = (typeof RUN_PHASES)[number];
 export type OperatorRunStatus = "queued" | "running" | "succeeded" | "failed";
 export type OperatorRunKind = "issue" | "review";
 
+
+export const OPERATOR_RUN_EVENT_KINDS = [
+  "queued",
+  "started",
+  "phase",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "interrupted",
+] as const;
+
+export type OperatorRunEventKind = (typeof OPERATOR_RUN_EVENT_KINDS)[number];
+
+/** Server-authored, redacted lifecycle entry. Never browser-supplied. */
+export interface OperatorRunEvent {
+  at: string;
+  phase: OperatorRunPhase;
+  status: OperatorRunStatus;
+  kind: OperatorRunEventKind;
+  summary: string;
+}
+
+export const OPERATOR_RUN_EVENT_LIMIT = 32;
+
+const PHASE_EVENT_SUMMARY: Record<OperatorRunPhase, string> = {
+  intake: "Intake started",
+  workspace: "Workspace preparation started",
+  agent: "Agent execution started",
+  verify: "Verification started",
+  policy: "Policy checks started",
+  publish: "Publish started",
+  threads: "Thread replies started",
+  complete: "Run completed",
+};
+
+export function summarizeOperatorRunEvent(input: {
+  kind: OperatorRunEventKind;
+  phase: OperatorRunPhase;
+  status: OperatorRunStatus;
+  publish?: boolean;
+  changedFileCount?: number;
+}): string {
+  switch (input.kind) {
+    case "queued":
+      return "Run queued";
+    case "started":
+      return "Run started";
+    case "succeeded": {
+      const bits = [input.publish ? "Publish completed" : "Dry run completed"];
+      if (
+        typeof input.changedFileCount === "number" &&
+        Number.isFinite(input.changedFileCount)
+      ) {
+        const n = Math.max(0, Math.floor(input.changedFileCount));
+        bits.push(n === 1 ? "1 changed file" : `${n} changed files`);
+      }
+      return bits.join(" · ");
+    }
+    case "failed":
+      return "Run failed";
+    case "cancelled":
+      return "Run cancelled by operator";
+    case "interrupted":
+      return "Run interrupted after service restart";
+    case "phase":
+    default:
+      return PHASE_EVENT_SUMMARY[input.phase] ?? `Phase ${input.phase}`;
+  }
+}
+
+/** Append one redacted event; dedupe adjacent phase/status; cap at limit. */
+export function appendOperatorRunEvent(
+  events: OperatorRunEvent[] | undefined,
+  event: OperatorRunEvent,
+  options?: { limit?: number },
+): OperatorRunEvent[] {
+  const limit = options?.limit ?? OPERATOR_RUN_EVENT_LIMIT;
+  const current = Array.isArray(events) ? events.slice() : [];
+  const prev = current[current.length - 1];
+  if (prev && prev.phase === event.phase && prev.status === event.status) {
+    return current.slice(-limit);
+  }
+  current.push(event);
+  if (current.length <= limit) return current;
+  return current.slice(current.length - limit);
+}
+
+
 const ISSUE_URL_PATTERN =
   /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/issues\/([1-9]\d*)\/?$/;
 const PULL_REQUEST_URL_PATTERN =
@@ -145,6 +233,8 @@ export interface OperatorRunRecord {
   /** Present only for Phase 2 control-plane executions; P0 runs stay standalone. */
   agentId?: string;
   agentRevision?: number;
+  /** Server-authored redacted lifecycle timeline; legacy records normalize to []. */
+  events: OperatorRunEvent[];
   summary?: string;
   durationMs?: number;
   finishedAt?: string;
