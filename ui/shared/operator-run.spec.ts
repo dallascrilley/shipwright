@@ -816,7 +816,30 @@ describe("buildOperatorChangeEvidence", () => {
     );
   });
 
-  test("redacts secret-like path segments and truncates file lists", () => {
+  
+  test("collapses absolute host paths to basename only", () => {
+    const evidence = buildOperatorChangeEvidence(
+      baseRecord({
+        receipt: {
+          ...receiptBase,
+          changedFiles: [
+            "/Users/dallascrilley/Code/shipwright/src/ops/run.ts",
+            "C:\\Users\\dallascrilley\\repo\\pkg\\main.ts",
+            "src/relative/keep.ts",
+          ],
+        },
+      }),
+    );
+    expect(evidence?.changedFiles).toEqual([
+      "run.ts",
+      "main.ts",
+      "src/relative/keep.ts",
+    ]);
+    expect(evidence?.changedFiles.join(" ")).not.toContain("Users");
+    expect(evidence?.changedFiles.join(" ")).not.toContain("dallascrilley");
+  });
+
+test("redacts secret-like path segments and truncates file lists", () => {
     const files = Array.from({ length: OPERATOR_CHANGE_EVIDENCE_FILE_LIMIT + 3 }, (_, i) => {
       if (i === 0) return "src/tokens/github_pat_abcdefghijklmnopqrstuvwxyz0123456789.ts";
       return `src/file-${i}.ts`;

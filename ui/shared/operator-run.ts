@@ -613,11 +613,25 @@ export interface OperatorChangeEvidence {
 }
 
 function basenamePreservingPath(value: string): string {
-  const redacted = redactSecrets(value).replace(/\\/g, "/").trim();
+  const normalized = value.replace(/\\/g, "/").trim();
+  if (!normalized) return "";
+  const isAbsolute =
+    normalized.startsWith("/") ||
+    /^[A-Za-z]:[\\/]/.test(value) ||
+    normalized.startsWith("//");
+  const redacted = redactSecrets(normalized).trim();
   if (!redacted) return "";
-  // Keep relative path shape; drop only empty segments / traversal noise.
-  const parts = redacted.split("/").filter((part) => part && part !== "." && part !== "..");
-  return parts.join("/") || redacted;
+  const parts = redacted
+    .replace(/^[A-Za-z]:\//, "")
+    .replace(/^\/+/, "")
+    .split("/")
+    .filter((part) => part && part !== "." && part !== "..");
+  if (parts.length === 0) return "";
+  // Absolute host paths must not leak directory layout; keep basename only.
+  if (isAbsolute) {
+    return parts[parts.length - 1]!;
+  }
+  return parts.join("/");
 }
 
 /**
