@@ -41,7 +41,9 @@ export function assertSafeVerifyCommand(command: string): string {
     throw new Error("Verification command must be a single line.");
   }
   if (/`|\$\(|\$\{/.test(trimmed)) {
-    throw new Error("Verification command contains disallowed shell expansion syntax.");
+    throw new Error(
+      "Verification command contains disallowed shell expansion syntax.",
+    );
   }
   return trimmed;
 }

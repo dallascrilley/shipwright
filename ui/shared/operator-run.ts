@@ -1,4 +1,5 @@
 import { z } from "zod";
+
 import type { RunExecution } from "../../src/pipeline/receipt";
 
 export const RUN_PHASES = [
@@ -15,7 +16,6 @@ export const RUN_PHASES = [
 export type OperatorRunPhase = (typeof RUN_PHASES)[number];
 export type OperatorRunStatus = "queued" | "running" | "succeeded" | "failed";
 export type OperatorRunKind = "issue" | "review";
-
 
 export const OPERATOR_RUN_EVENT_KINDS = [
   "queued",
@@ -102,7 +102,6 @@ export function appendOperatorRunEvent(
   if (current.length <= limit) return current;
   return current.slice(current.length - limit);
 }
-
 
 const ISSUE_URL_PATTERN =
   /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/issues\/([1-9]\d*)\/?$/;
@@ -276,10 +275,7 @@ export function phaseIndex(phase: OperatorRunPhase): number {
 }
 
 export function targetUrl(
-  request: Pick<
-    OperatorRunRequest,
-    "mode" | "issueUrl" | "pullRequestUrl"
-  >,
+  request: Pick<OperatorRunRequest, "mode" | "issueUrl" | "pullRequestUrl">,
 ): string {
   return request.mode === "review" ? request.pullRequestUrl : request.issueUrl;
 }
@@ -349,10 +345,17 @@ export function detectRunModeFromUrl(
 export function buildRunSummary(record: OperatorRunRecord): string {
   const receipt = record.receipt;
   if (record.status === "failed") {
-    if (receipt?.errorCode === "cancelled" || /cancelled/i.test(record.message ?? "")) {
+    if (
+      receipt?.errorCode === "cancelled" ||
+      /cancelled/i.test(record.message ?? "")
+    ) {
       return "cancelled";
     }
-    if (receipt?.verification && receipt.verification.exitCode !== null && !receipt.verification.passed) {
+    if (
+      receipt?.verification &&
+      receipt.verification.exitCode !== null &&
+      !receipt.verification.passed
+    ) {
       return `verify failed (exit ${receipt.verification.exitCode})`;
     }
     if (receipt?.errorCode) return receipt.errorCode;
@@ -395,9 +398,7 @@ export function resolveOperatorNextAction(
   if (!isTerminalRun(record.status)) {
     return {
       headline:
-        record.status === "queued"
-          ? "Queued"
-          : `Running · ${record.phase}`,
+        record.status === "queued" ? "Queued" : `Running · ${record.phase}`,
       primary: {
         type: "cancel",
         label: "Cancel run",
@@ -454,7 +455,8 @@ export function resolveOperatorNextAction(
 
   // failed
   const code = record.receipt?.errorCode;
-  const message = record.receipt?.errorMessage ?? record.message ?? "Run failed";
+  const message =
+    record.receipt?.errorMessage ?? record.message ?? "Run failed";
   const verifyFailed =
     record.phase === "verify" ||
     (record.receipt?.verification &&

@@ -1,4 +1,8 @@
-import { isRepositoryAllowed, parseGitHubConfig, type GitHubConfig } from "../../src/config/github.js";
+import {
+  isRepositoryAllowed,
+  parseGitHubConfig,
+  type GitHubConfig,
+} from "../../src/config/github.js";
 import {
   authorizeIssue,
   authorizePullRequest,
@@ -142,7 +146,9 @@ export async function resolveTarget(
     });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Target could not be authorized.";
+      error instanceof Error
+        ? error.message
+        : "Target could not be authorized.";
     return fromParsed(parsed, { allowed: false, denyReason: message });
   }
 }
@@ -184,7 +190,8 @@ async function resolvePullRequestHead(
   if (!isRepositoryAllowed(config, canonicalName)) {
     return fromParsed(parsed, {
       allowed: false,
-      denyReason: "canonical repository is not in the GitHub repository allowlist",
+      denyReason:
+        "canonical repository is not in the GitHub repository allowlist",
     });
   }
 

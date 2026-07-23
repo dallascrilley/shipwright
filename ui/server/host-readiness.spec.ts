@@ -1,4 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  chmodSync,
+  mkdirSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -65,7 +71,10 @@ describe("host readiness evaluators", () => {
         },
         checkedAt,
       ),
-    ).toMatchObject({ status: "unavailable", code: "github_app_key_unreadable" });
+    ).toMatchObject({
+      status: "unavailable",
+      code: "github_app_key_unreadable",
+    });
     expect(
       evaluateGitHubAppReadiness(
         {
@@ -115,7 +124,11 @@ describe("host readiness evaluators", () => {
         hasInlinePrivateKey: false,
         hasPrivateKeyPath: false,
       },
-      docker: { socketPath: "/var/run/docker.sock", exists: false, readable: false },
+      docker: {
+        socketPath: "/var/run/docker.sock",
+        exists: false,
+        readable: false,
+      },
       stateStore: { path: "/tmp/state", exists: false, readable: false },
     });
     expect(report.demoMode).toBe(true);

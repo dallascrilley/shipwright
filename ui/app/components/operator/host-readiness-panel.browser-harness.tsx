@@ -1,5 +1,5 @@
-import { createRoot } from "react-dom/client";
 import { createElement, useState } from "react";
+import { createRoot } from "react-dom/client";
 
 import type { HostReadinessReport } from "../../../shared/host-readiness";
 import { HostReadinessPanel } from "./HostReadinessPanel";

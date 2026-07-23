@@ -1,10 +1,10 @@
-import { createServer } from "node:http";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { spawnSync } from "node:child_process";
 
 const require = createRequire(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -49,7 +49,9 @@ if (!playwrightPkg) {
   process.exit(0);
 }
 
-const { chromium } = await import(pathToFileURL(join(playwrightPkg, "index.mjs")).href);
+const { chromium } = await import(
+  pathToFileURL(join(playwrightPkg, "index.mjs")).href
+);
 const esbuild = require(require.resolve("esbuild", { paths: [uiRoot] }));
 
 const outdir = mkdtempSync(join(tmpdir(), "host-ready-browser-"));
@@ -110,12 +112,14 @@ try {
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
 
     const body = await page.textContent("body");
-    if (!body.includes("Host readiness")) throw new Error("panel did not render");
+    if (!body.includes("Host readiness"))
+      throw new Error("panel did not render");
     if (!body.includes("Demo mode")) throw new Error("demo copy missing");
     if (!body.includes("provider")) throw new Error("provider chip missing");
 
     const before = await page.textContent('[data-testid="refresh-count"]');
-    if (before !== "0") throw new Error(`expected refresh count 0, got ${before}`);
+    if (before !== "0")
+      throw new Error(`expected refresh count 0, got ${before}`);
 
     await page.getByRole("button", { name: "Refresh" }).click();
     await page.waitForFunction(() => {

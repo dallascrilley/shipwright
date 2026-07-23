@@ -7,7 +7,6 @@ import {
 import { QueueDispatcher } from "./queue-dispatcher";
 import { operatorPipelineQueueRunner } from "./queue-runner";
 
-
 // guard:allow-env-credential — test-only non-secret demo mode switch
 const originalDemoMode = process.env.SHIPWRIGHT_UI_DEMO;
 

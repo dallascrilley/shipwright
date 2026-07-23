@@ -7,8 +7,7 @@ import {
 } from "../server/operator-runs";
 
 export default defineAction({
-  description:
-    "List recent durable Shipwright operator runs, newest first.",
+  description: "List recent durable Shipwright operator runs, newest first.",
   schema: z.object({
     limit: z.number().int().min(1).max(200).default(50).optional(),
   }),

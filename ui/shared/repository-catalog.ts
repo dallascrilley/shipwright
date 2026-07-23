@@ -56,7 +56,9 @@ export type RepositoryPickerView = {
   message?: string;
 };
 
-export function normalizeRepositoryIdentifier(value: string): string | undefined {
+export function normalizeRepositoryIdentifier(
+  value: string,
+): string | undefined {
   const parsed = repositoryIdentifierSchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
 }
@@ -86,8 +88,7 @@ export function buildRepositoryPickerView(
   const normalizedQuery = query.trim().toLowerCase();
   const options = source
     .filter(
-      (item) =>
-        !normalizedQuery || item.repository.includes(normalizedQuery),
+      (item) => !normalizedQuery || item.repository.includes(normalizedQuery),
     )
     .map((item) => ({
       ...item,

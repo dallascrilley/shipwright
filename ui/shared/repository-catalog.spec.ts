@@ -78,16 +78,10 @@ describe("repository catalog contracts", () => {
       ),
     ).toMatchObject({
       state: "ready",
-      options: [
-        { repository: "dallascrilleymartech/jcs-production-os" },
-      ],
+      options: [{ repository: "dallascrilleymartech/jcs-production-os" }],
     });
     expect(
-      buildRepositoryPickerView(
-        { ok: true, repositories },
-        "not-present",
-        "",
-      ),
+      buildRepositoryPickerView({ ok: true, repositories }, "not-present", ""),
     ).toMatchObject({ state: "empty", options: [] });
     expect(
       buildRepositoryPickerView(

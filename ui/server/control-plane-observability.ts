@@ -93,7 +93,8 @@ export function buildMetricsText(input: ControlPlaneMetricsInput): string {
       (entry.state === "claimed" || entry.state === "running") &&
       entry.lease
     ) {
-      const age = nowTime - (Date.parse(entry.lease.expiresAt) - leaseDurationMs);
+      const age =
+        nowTime - (Date.parse(entry.lease.expiresAt) - leaseDurationMs);
       activeLeaseMaxAgeMs = Math.max(activeLeaseMaxAgeMs, age);
     }
   }
@@ -131,7 +132,9 @@ export function buildMetricsText(input: ControlPlaneMetricsInput): string {
   );
   for (const [action, count] of [...lifecycleByAction].sort()) {
     assertMetricFragmentSafe(action, "lifecycle action");
-    lines.push(`shipwright_lifecycle_events_total{action="${action}"} ${count}`);
+    lines.push(
+      `shipwright_lifecycle_events_total{action="${action}"} ${count}`,
+    );
   }
 
   const pausedBreakers = snapshot.triggers.filter(

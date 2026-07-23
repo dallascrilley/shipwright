@@ -5,13 +5,13 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { RunReceipt } from "../../src/pipeline/receipt";
+import { operatorRunRequestSchema } from "../shared/operator-run";
 import {
   JsonFileOperatorRunStore,
   MemoryOperatorRunStore,
   OperatorRunRegistry,
 } from "./operator-runs";
 import * as resolveTargetModule from "./resolve-target";
-import { operatorRunRequestSchema } from "../shared/operator-run";
 
 const request = {
   mode: "issue" as const,
@@ -150,7 +150,7 @@ describe("OperatorRunRegistry", () => {
           pullRequestUrl: "",
           skillId: "",
           presetId: "",
-                    verifyCommand: request.verifyCommand,
+          verifyCommand: request.verifyCommand,
           publish: request.publish,
           timeoutMinutes: request.timeoutMinutes,
         },
@@ -189,7 +189,7 @@ describe("OperatorRunRegistry", () => {
           pullRequestUrl: "",
           skillId: "",
           presetId: "",
-                    verifyCommand: request.verifyCommand,
+          verifyCommand: request.verifyCommand,
           publish: true,
           timeoutMinutes: request.timeoutMinutes,
         },
@@ -236,7 +236,11 @@ describe("OperatorRunRegistry", () => {
           });
           const onAbort = () => {
             sawSignal = true;
-            reject(signal?.reason instanceof Error ? signal.reason : new Error("aborted"));
+            reject(
+              signal?.reason instanceof Error
+                ? signal.reason
+                : new Error("aborted"),
+            );
           };
           if (signal?.aborted) {
             onAbort();
@@ -253,7 +257,9 @@ describe("OperatorRunRegistry", () => {
     await registry.start(request);
     await flushMicrotasks();
     const cancelled = registry.cancel("run-1");
-    expect(cancelled.status === "running" || cancelled.status === "failed").toBe(true);
+    expect(
+      cancelled.status === "running" || cancelled.status === "failed",
+    ).toBe(true);
     await flushMicrotasks();
     await flushMicrotasks();
     const failed = registry.get("run-1");
@@ -291,10 +297,11 @@ describe("OperatorRunRegistry", () => {
     const listed = second.list(1);
     expect(listed).toHaveLength(1);
     expect(listed[0]?.runId).toBe("run-2");
-    expect(second.list(50).map((item) => item.runId)).toEqual(["run-2", "run-1"]);
+    expect(second.list(50).map((item) => item.runId)).toEqual([
+      "run-2",
+      "run-1",
+    ]);
   });
-
-
 
   test("records target summary and duration on success", async () => {
     let now = 1_000;
@@ -457,15 +464,17 @@ describe("OperatorRunRegistry", () => {
   });
 
   test("rejects start when resolve-target denies the URL", async () => {
-    const spy = vi.spyOn(resolveTargetModule, "resolveTarget").mockResolvedValue({
-      kind: "issue",
-      owner: "dallascrilley",
-      repo: "example",
-      number: 12,
-      url: request.issueUrl,
-      allowed: false,
-      denyReason: "repository is not in the GitHub repository allowlist",
-    });
+    const spy = vi
+      .spyOn(resolveTargetModule, "resolveTarget")
+      .mockResolvedValue({
+        kind: "issue",
+        owner: "dallascrilley",
+        repo: "example",
+        number: 12,
+        url: request.issueUrl,
+        allowed: false,
+        denyReason: "repository is not in the GitHub repository allowlist",
+      });
     const registry = new OperatorRunRegistry(
       async () => completeReceipt,
       () => "run-1",
@@ -475,13 +484,27 @@ describe("OperatorRunRegistry", () => {
     spy.mockRestore();
   });
 
-  
   test("persists a redacted phase timeline across issue progress", async () => {
     const registry = new OperatorRunRegistry(
       async (_input, runId, progress) => {
-        progress({ ...completeReceipt, runId, phase: "agent", changedFiles: ["a.ts", "b.ts"] });
-        progress({ ...completeReceipt, runId, phase: "verify", changedFiles: ["a.ts", "b.ts"] });
-        return { ...completeReceipt, runId, phase: "complete", changedFiles: ["a.ts", "b.ts"] };
+        progress({
+          ...completeReceipt,
+          runId,
+          phase: "agent",
+          changedFiles: ["a.ts", "b.ts"],
+        });
+        progress({
+          ...completeReceipt,
+          runId,
+          phase: "verify",
+          changedFiles: ["a.ts", "b.ts"],
+        });
+        return {
+          ...completeReceipt,
+          runId,
+          phase: "complete",
+          changedFiles: ["a.ts", "b.ts"],
+        };
       },
       () => "timeline-1",
     );
@@ -497,9 +520,13 @@ describe("OperatorRunRegistry", () => {
       status: "queued",
       summary: "Run queued",
     });
-    expect(record?.events?.some((event) => event.kind === "started")).toBe(true);
+    expect(record?.events?.some((event) => event.kind === "started")).toBe(
+      true,
+    );
     expect(
-      record?.events?.some((event) => event.phase === "verify" && event.kind === "phase"),
+      record?.events?.some(
+        (event) => event.phase === "verify" && event.kind === "phase",
+      ),
     ).toBe(true);
     expect(record?.events?.[record.events.length - 1]).toMatchObject({
       kind: "succeeded",
@@ -540,10 +567,11 @@ describe("OperatorRunRegistry", () => {
 
     const record = registry.get("interrupt-timeline");
     expect(record?.status).toBe("failed");
-    expect(record?.events?.some((event) => event.kind === "interrupted")).toBe(true);
+    expect(record?.events?.some((event) => event.kind === "interrupted")).toBe(
+      true,
+    );
     expect(record?.events?.[record.events.length - 1]?.summary).toBe(
       "Run interrupted after service restart",
     );
   });
-
 });

@@ -29,7 +29,8 @@ export function HostReadinessPanel({
         <div>
           <p className="text-sm font-semibold">Host readiness</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Non-secret checks only. Ready does not skip start-time authorization.
+            Non-secret checks only. Ready does not skip start-time
+            authorization.
           </p>
         </div>
         <button
@@ -38,7 +39,9 @@ export function HostReadinessPanel({
           onClick={onRefresh}
           disabled={refreshing}
         >
-          {refreshing ? <IconLoader2 className="size-3.5 animate-spin" /> : null}
+          {refreshing ? (
+            <IconLoader2 className="size-3.5 animate-spin" />
+          ) : null}
           Refresh
         </button>
       </div>
@@ -48,7 +51,8 @@ export function HostReadinessPanel({
         <div className="mt-3 space-y-2">
           {report.demoMode ? (
             <p className="text-xs text-amber-700 dark:text-amber-300">
-              Demo mode — live host readiness is advisory; dry-run stays available.
+              Demo mode — live host readiness is advisory; dry-run stays
+              available.
             </p>
           ) : null}
           <ul className="flex flex-wrap gap-2">
