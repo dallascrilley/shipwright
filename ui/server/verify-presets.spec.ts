@@ -8,6 +8,7 @@ import {
   resolveStartVerifySelection,
   resolveVerifyPreset,
   selectVerifyPreset,
+  validateVerifyPresetsAtStartup,
   VERIFY_PRESETS_ENV,
 } from "./verify-presets";
 
@@ -182,5 +183,42 @@ describe("assertSafeVerifyCommand", () => {
   test("rejects empty and expansion-prone commands", () => {
     expect(() => assertSafeVerifyCommand("")).toThrow(/required/);
     expect(() => assertSafeVerifyCommand("echo `id`")).toThrow(/disallowed/);
+  });
+});
+
+describe("validateVerifyPresetsAtStartup", () => {
+  test("no-ops when overlay env is blank", () => {
+    expect(() => validateVerifyPresetsAtStartup({})).not.toThrow();
+    expect(() =>
+      validateVerifyPresetsAtStartup({ [VERIFY_PRESETS_ENV]: "   " }),
+    ).not.toThrow();
+  });
+
+  test("fails closed on malformed overlay without waiting for first request", () => {
+    expect(() =>
+      validateVerifyPresetsAtStartup({ [VERIFY_PRESETS_ENV]: "{not-json" }),
+    ).toThrow(/valid JSON/);
+    expect(() =>
+      validateVerifyPresetsAtStartup({
+        [VERIFY_PRESETS_ENV]: JSON.stringify([
+          { id: "bad", label: "Bad", command: "echo $(whoami)" },
+        ]),
+      }),
+    ).toThrow(/disallowed shell expansion/);
+  });
+
+  test("accepts valid overlay configuration", () => {
+    expect(() =>
+      validateVerifyPresetsAtStartup({
+        [VERIFY_PRESETS_ENV]: JSON.stringify([
+          {
+            id: "pytest",
+            label: "pytest",
+            command: "pytest -q",
+            repositories: ["acme/widgets"],
+          },
+        ]),
+      }),
+    ).not.toThrow();
   });
 });

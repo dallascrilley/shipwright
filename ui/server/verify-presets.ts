@@ -227,6 +227,20 @@ function loadConfiguredPresets(
   return presets;
 }
 
+/**
+ * Fail closed at process/module startup when host overlay config is present
+ * and invalid. Empty env keeps builtins and does not throw.
+ * Does not seed the request cache, so later tests may inject alternate env.
+ */
+export function validateVerifyPresetsAtStartup(
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const raw = (env[VERIFY_PRESETS_ENV] ?? "").trim();
+  if (!raw) return;
+  // Validate only; do not populate cachedTable from process env here.
+  buildPresetTable(raw);
+}
+
 /** Test helper: drop cached env-derived preset table. */
 export function resetVerifyPresetCache(): void {
   cachedTable = undefined;
@@ -396,3 +410,8 @@ export function resolveStartVerifySelection(input: {
     verifyCommand: explicit.preset.command,
   };
 }
+
+// Validate host overlay configuration when this module is first loaded.
+// Malformed SHIPWRIGHT_VERIFY_PRESETS_JSON must fail closed at startup, not on
+// the first list/start request.
+validateVerifyPresetsAtStartup();
