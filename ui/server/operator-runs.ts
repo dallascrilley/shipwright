@@ -21,7 +21,10 @@ import { redactSecrets } from "../../src/pipeline/secret-safety";
 import {
   buildRunSummary,
   isTerminalRun,
+  MAX_RETAINED_TERMINAL_RUNS,
+  paginateOperatorRuns,
   parseOperatorTarget,
+  selectRetainedOperatorRuns,
   targetUrl,
   appendOperatorRunEvent,
   summarizeOperatorRunEvent,
@@ -31,6 +34,8 @@ import {
   type OperatorRunRequest,
   type OperatorRunEvent,
   type OperatorRunEventKind,
+  type OperatorRunListRequest,
+  type OperatorRunListResponse,
 } from "../shared/operator-run";
 import { resolveTarget } from "./resolve-target";
 import {
@@ -198,6 +203,9 @@ function normalizeRecord(stored: OperatorRunRecord): {
 export class OperatorRunRegistry {
   readonly #records = new Map<string, OperatorRunRecord>();
   readonly #controllers = new Map<string, AbortController>();
+  /** Operator-selected run retained as a lineage root until selection changes. */
+  #selectedRunId: string | undefined;
+  readonly #maxTerminalRuns: number;
 
   constructor(
     private readonly execute: RunExecutor = executeOperatorPipeline,
@@ -206,7 +214,9 @@ export class OperatorRunRegistry {
     private readonly store: OperatorRunStore = new MemoryOperatorRunStore(),
     private readonly now: () => string = () => new Date().toISOString(),
     private readonly loadReceipt: RunReceiptLoader = () => undefined,
+    maxTerminalRuns: number = MAX_RETAINED_TERMINAL_RUNS,
   ) {
+    this.#maxTerminalRuns = Math.max(1, maxTerminalRuns);
     let reconciled = false;
     for (const stored of this.store.load()) {
       const { record, mutated } = normalizeRecord(structuredClone(stored));
@@ -261,7 +271,11 @@ export class OperatorRunRegistry {
       }
       this.#records.set(record.runId, record);
     }
-    if (reconciled) this.#persist();
+    if (reconciled) {
+      // Write back normalized/interrupted records without retention pruning.
+      // Selection roots are only known after list/get; load must keep the full store.
+      this.store.save([...this.#records.values()]);
+    }
   }
 
   async start(input: OperatorRunRequest): Promise<OperatorRunRecord> {
@@ -392,7 +406,9 @@ export class OperatorRunRegistry {
 
   get(runId: string): OperatorRunRecord | undefined {
     const record = this.#records.get(runId);
-    return record ? structuredClone(record) : undefined;
+    if (!record) return undefined;
+    this.#selectedRunId = runId;
+    return structuredClone(record);
   }
 
   getLatest(): OperatorRunRecord | undefined {
@@ -401,12 +417,44 @@ export class OperatorRunRegistry {
     return record ? structuredClone(record) : undefined;
   }
 
+  /**
+   * Back-compat newest-first page. Prefer listPage for filters/cursors.
+   */
   list(limit = 50): OperatorRunRecord[] {
-    const bounded = Math.max(1, Math.min(limit, 200));
-    return [...this.#records.values()]
-      .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
-      .slice(0, bounded)
-      .map((record) => structuredClone(record));
+    return this.listPage({ limit }).records;
+  }
+
+  listPage(
+    request: Partial<OperatorRunListRequest> = {},
+  ): OperatorRunListResponse {
+    const selected = request.selectedRunId?.trim();
+    if (selected) {
+      // Durable selection signal for retention: active OR selected descendant.
+      this.#selectedRunId = selected;
+    }
+    const all = [...this.#records.values()];
+    const page = paginateOperatorRuns(all, {
+      query: request.query ?? "",
+      status: request.status,
+      mode: request.mode,
+      from: request.from,
+      to: request.to,
+      cursor: request.cursor,
+      limit: request.limit,
+    } as OperatorRunListRequest);
+
+    const retainedSorted = [...all].sort((left, right) =>
+      left.startedAt.localeCompare(right.startedAt),
+    );
+    const earliestRetainedAt = retainedSorted[0]?.startedAt;
+
+    return {
+      records: page.records.map((record) => structuredClone(record)),
+      total: page.total,
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      retainedCount: all.length,
+      ...(earliestRetainedAt ? { earliestRetainedAt } : {}),
+    };
   }
 
   cancel(runId: string): OperatorRunRecord {
@@ -545,7 +593,29 @@ export class OperatorRunRegistry {
   }
 
   #persist(): void {
-    this.store.save([...this.#records.values()]);
+    const current = [...this.#records.values()];
+    // Retention roots: active/nonterminal runs and the operator-selected
+    // descendant (when still present), plus their lineage ancestors.
+    const selectedRunId =
+      this.#selectedRunId && this.#records.has(this.#selectedRunId)
+        ? this.#selectedRunId
+        : undefined;
+    if (this.#selectedRunId && !selectedRunId) {
+      this.#selectedRunId = undefined;
+    }
+    const retained = selectRetainedOperatorRuns(current, {
+      maxTerminal: this.#maxTerminalRuns,
+      ...(selectedRunId ? { selectedRunId } : {}),
+    });
+    // Save first. Only mutate in-memory map after a successful save so a
+    // throwing store leaves registry + disk unchanged.
+    this.store.save(retained);
+    if (retained.length !== current.length) {
+      const kept = new Set(retained.map((record) => record.runId));
+      for (const runId of [...this.#records.keys()]) {
+        if (!kept.has(runId)) this.#records.delete(runId);
+      }
+    }
   }
 }
 
