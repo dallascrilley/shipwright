@@ -425,7 +425,6 @@ export class OperatorRunRegistry {
       to: request.to,
       cursor: request.cursor,
       limit: request.limit,
-      selectedRunId: request.selectedRunId,
     } as OperatorRunListRequest);
 
     const retainedSorted = [...all].sort((left, right) =>
@@ -577,10 +576,11 @@ export class OperatorRunRegistry {
     return next;
   }
 
-  #persist(options: { selectedRunId?: string } = {}): void {
+  #persist(): void {
     const current = [...this.#records.values()];
+    // Retention roots are active/nonterminal runs (plus their lineage ancestors).
+    // Client selection is not a server-side retention root.
     const retained = selectRetainedOperatorRuns(current, {
-      selectedRunId: options.selectedRunId,
       maxTerminal: MAX_RETAINED_TERMINAL_RUNS,
     });
     // Save first. Only mutate in-memory map after a successful save so a

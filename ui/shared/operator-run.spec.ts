@@ -646,7 +646,7 @@ describe("operator run history list", () => {
     expect(ids.has("t0")).toBe(false);
   });
 
-  test("retention preserves lineage ancestors of active and selected runs", () => {
+  test("selectRetainedOperatorRuns can protect selected lineage when requested", () => {
     const root = rec({ runId: "root", rootRunId: "root", startedAt: "2026-07-20T10:00:00.000Z" });
     const mid = rec({
       runId: "mid",
@@ -672,6 +672,30 @@ describe("operator run history list", () => {
     const ids = new Set(kept.map((r) => r.runId));
     expect(ids.has("child")).toBe(true);
     expect(ids.has("mid")).toBe(true);
+    expect(ids.has("root")).toBe(true);
+  });
+
+  test("selectRetainedOperatorRuns protects selected terminal lineage when asked", () => {
+    const root = rec({
+      runId: "root",
+      rootRunId: "root",
+      startedAt: "2026-07-20T10:00:00.000Z",
+    });
+    const selected = rec({
+      runId: "sel",
+      parentRunId: "root",
+      rootRunId: "root",
+      startedAt: "2026-07-20T11:00:00.000Z",
+    });
+    const noise = Array.from({ length: 4 }, (_, i) =>
+      rec({ runId: `n${i}`, startedAt: `2026-07-20T1${i}:30:00.000Z` }),
+    );
+    const kept = selectRetainedOperatorRuns([root, selected, ...noise], {
+      maxTerminal: 1,
+      selectedRunId: "sel",
+    });
+    const ids = new Set(kept.map((r) => r.runId));
+    expect(ids.has("sel")).toBe(true);
     expect(ids.has("root")).toBe(true);
   });
 });
