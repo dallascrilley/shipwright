@@ -23,6 +23,7 @@ import {
   isTerminalRun,
   MAX_RETAINED_TERMINAL_RUNS,
   paginateOperatorRuns,
+  RUN_INTERRUPTED_BY_RESTART_MESSAGE,
   parseOperatorTarget,
   selectRetainedOperatorRuns,
   targetUrl,
@@ -247,7 +248,11 @@ export class OperatorRunRegistry {
           });
         } else {
           record.status = "failed";
-          record.message = "Run interrupted by service restart.";
+          record.message = RUN_INTERRUPTED_BY_RESTART_MESSAGE;
+          if (!record.operatorHint) {
+            record.operatorHint =
+              "The host restarted while this run was active. Start a new dry-run with the same inputs; prior sandbox work is not resumed.";
+          }
           if (durableReceipt) {
             record.phase = durableReceipt.phase;
             record.receipt = structuredClone(durableReceipt);
