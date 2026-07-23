@@ -379,6 +379,13 @@ export class OperatorRunRegistry {
       timeoutMinutes: base.timeoutMinutes ?? 30,
     };
 
+    const fromRunId = input.fromRunId?.trim() || "";
+    const prior = fromRunId ? this.#records.get(fromRunId) : undefined;
+    const parentRunId = prior?.runId;
+    const rootRunId = prior
+      ? prior.rootRunId?.trim() || prior.runId
+      : runId;
+
     const record: OperatorRunRecord = {
       runId,
       status: "queued",
@@ -402,6 +409,8 @@ export class OperatorRunRegistry {
       ],
       verifySelectionReason: selection.selectionReason,
       ...(target ? { target } : {}),
+      ...(parentRunId ? { parentRunId } : {}),
+      rootRunId,
       startedAt: now,
       updatedAt: now,
     };

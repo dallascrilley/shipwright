@@ -45,6 +45,8 @@ import {
   type OperatorRunRecord,
   type OperatorRunRequest,
   type ResolveTargetResult,
+  hydrateIntakeFromRecord,
+  resolveOperatorRunLineage,
 } from "../../../shared/operator-run";
 import { HostReadinessPanel } from "./HostReadinessPanel";
 
@@ -148,6 +150,7 @@ export function OperatorConsole() {
   const [recoveryDismissed, setRecoveryDismissed] = useState(false);
   const recoveryBootstrapped = useRef(false);
   const operatorSelectedRun = useRef(false);
+  const [draftSourceRunId, setDraftSourceRunId] = useState<string | null>(null);
 
   const startRun = useActionMutation("start-shipwright-run");
   const cancelRun = useActionMutation("cancel-shipwright-run");
@@ -284,6 +287,44 @@ export function OperatorConsole() {
     recoveryBootstrapped.current = true;
   }, [history, runId]);
 
+  const historyById = useMemo(() => {
+    const map = new Map<string, OperatorRunRecord>();
+    for (const item of history) map.set(item.runId, item);
+    if (record) map.set(record.runId, record);
+    return map;
+  }, [history, record]);
+  const selectedLineage = useMemo(
+    () => (record ? resolveOperatorRunLineage(record, historyById) : null),
+    [record, historyById],
+  );
+
+  function selectHistoryRecord(runIdToSelect: string) {
+    setRunId(runIdToSelect);
+    // Selecting evidence/lineage leaves draft mode; only Load as draft hydrates intake.
+    if (draftSourceRunId && draftSourceRunId !== runIdToSelect) {
+      setDraftSourceRunId(null);
+    }
+  }
+
+  function loadHistoryAsDraft(item: OperatorRunRecord) {
+    // Intentional form hydration only — no start/cancel/publish mutation.
+    const draft = hydrateIntakeFromRecord(item);
+    setTargetInput(draft.targetInput);
+    setMode(draft.mode);
+    setSkillId(draft.skillId);
+    setPresetId(draft.presetId);
+    setVerifyCommand(draft.verifyCommand);
+    setUseRawVerify(draft.useRawVerify);
+    setTimeoutMinutes(draft.timeoutMinutes);
+    setAdvancedOpen(draft.advancedOpen);
+    setPublishSource(null);
+    setConfirmOpen(false);
+    setFormError(null);
+    setDraftSourceRunId(item.runId);
+    // Evidence stays on the historical record; intake is ready for a new start.
+    setRunId(item.runId);
+  }
+
   useEffect(() => {
     const detected = detectRunModeFromUrl(targetInput);
     if (detected) setMode(detected);
@@ -356,6 +397,7 @@ export function OperatorConsole() {
       setRunId(started.runId);
       setRecoveryDismissed(true);
       operatorSelectedRun.current = true;
+      setDraftSourceRunId(null);
       setConfirmOpen(false);
       setPublishSource(null);
       void historyQuery.refetch();
@@ -460,6 +502,7 @@ export function OperatorConsole() {
         setRunId(started.runId);
       setRecoveryDismissed(true);
       operatorSelectedRun.current = true;
+      setDraftSourceRunId(null);
         void historyQuery.refetch();
       } catch (error) {
         setFormError(
@@ -491,6 +534,7 @@ export function OperatorConsole() {
         setRunId(started.runId);
       setRecoveryDismissed(true);
       operatorSelectedRun.current = true;
+      setDraftSourceRunId(null);
         setConfirmOpen(false);
         setPublishSource(null);
         void historyQuery.refetch();
@@ -546,6 +590,17 @@ export function OperatorConsole() {
           <span>Private operator service</span>
         </div>
       </header>
+
+      {draftSourceRunId ? (
+        <div className="rounded-md border border-border bg-muted/20 px-4 py-3 text-sm">
+          <p className="font-medium">Draft loaded from history</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Intake fields were hydrated from {draftSourceRunId.slice(0, 10)}.
+            This does not start a run or resume prior sandbox work. Press Dry run
+            or Publish when ready.
+          </p>
+        </div>
+      ) : null}
 
       <HostReadinessPanel
         report={readinessReport}
@@ -920,6 +975,8 @@ export function OperatorConsole() {
           actionPending={startRun.isPending || cancelRun.isPending}
           showRecoveryStrip={showRecoveryStrip}
           onDismissRecovery={() => setRecoveryDismissed(true)}
+          lineage={selectedLineage}
+          onSelectRun={(id) => setRunId(id)}
         />
       </div>
 
@@ -1092,6 +1149,8 @@ function RunProgress({
   actionPending,
   showRecoveryStrip,
   onDismissRecovery,
+  lineage,
+  onSelectRun,
 }: {
   record?: OperatorRunRecord;
   loading: boolean;
@@ -1100,6 +1159,8 @@ function RunProgress({
   actionPending: boolean;
   showRecoveryStrip?: boolean;
   onDismissRecovery?: () => void;
+  lineage?: ReturnType<typeof resolveOperatorRunLineage> | null;
+  onSelectRun?: (runId: string) => void;
 }) {
   const visiblePhases = RUN_PHASES.filter((phase) => {
     if (phase === "publish") return Boolean(record?.request.publish);
@@ -1163,6 +1224,41 @@ function RunProgress({
                     Dismiss
                   </Button>
                 </div>
+              </div>
+            ) : null}
+
+            
+            {lineage && (lineage.parentRunId || (lineage.rootRunId && lineage.rootRunId !== lineage.runId)) ? (
+              <div className="rounded-md border border-border bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
+                <p className="font-medium text-foreground">Lineage</p>
+                <p className="mt-1">
+                  {lineage.parentRunId ? (
+                    <>
+                      Parent{" "}
+                      <button
+                        type="button"
+                        className="underline underline-offset-2"
+                        onClick={() => onSelectRun?.(lineage.parentRunId!)}
+                      >
+                        {lineage.parentRunId.slice(0, 10)}
+                      </button>
+                      {" · "}
+                    </>
+                  ) : null}
+                  {lineage.rootRunId ? (
+                    <>
+                      Root{" "}
+                      <button
+                        type="button"
+                        className="underline underline-offset-2"
+                        onClick={() => onSelectRun?.(lineage.rootRunId!)}
+                      >
+                        {lineage.rootRunId.slice(0, 10)}
+                      </button>
+                    </>
+                  ) : null}
+                  {lineage.truncated ? " · partial history" : null}
+                </p>
               </div>
             ) : null}
 

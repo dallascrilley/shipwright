@@ -241,8 +241,12 @@ export interface OperatorRunRecord {
   durationMs?: number;
   finishedAt?: string;
   operatorHint?: string;
-  /** Optional lineage from U4; retention preserves ancestors when present. */
+  /** Immediate predecessor when this run was started via fromRunId. */
   parentRunId?: string;
+  /**
+   * Root of the intentional retry/publish chain.
+   * Fresh runs set this to their own runId. Legacy records may omit it.
+   */
   rootRunId?: string;
   /** Non-secret explanation of how verify preset/command was chosen. */
   verifySelectionReason?: string;
@@ -776,6 +780,99 @@ export function resolveOperatorHint(
  * Priority: active → restart-interrupted → failed recoverable → latest terminal.
  * Side-effect free; never starts, cancels, or publishes.
  */
+export const MAX_LINEAGE_DEPTH = 32;
+
+export interface OperatorRunLineageLink {
+  runId: string;
+  parentRunId?: string;
+  rootRunId?: string;
+  missing?: boolean;
+}
+
+export interface OperatorRunLineage {
+  runId: string;
+  parentRunId?: string;
+  rootRunId?: string;
+  /** Ancestor chain from immediate parent up to root (or until missing/cycle). */
+  ancestors: OperatorRunLineageLink[];
+  /** True when a referenced parent/root is absent from the lookup set. */
+  truncated: boolean;
+}
+
+/**
+ * Pure lineage projection. Does not invent links from URL/title similarity.
+ * Tolerates missing/pruned ancestors and guards against cycles/depth blowups.
+ */
+export function resolveOperatorRunLineage(
+  record: OperatorRunRecord,
+  recordsById: ReadonlyMap<string, OperatorRunRecord> | ReadonlyArray<OperatorRunRecord>,
+): OperatorRunLineage {
+  let lookup: ReadonlyMap<string, OperatorRunRecord>;
+  if (recordsById instanceof Map) {
+    lookup = recordsById;
+  } else {
+    const entries = recordsById as ReadonlyArray<OperatorRunRecord>;
+    lookup = new Map(entries.map((entry) => [entry.runId, entry]));
+  }
+
+  const ancestors: OperatorRunLineageLink[] = [];
+  const seen = new Set<string>([record.runId]);
+  let truncated = false;
+  let cursor = record.parentRunId?.trim() || undefined;
+
+  while (cursor) {
+    if (seen.has(cursor) || ancestors.length >= MAX_LINEAGE_DEPTH) {
+      truncated = true;
+      break;
+    }
+    seen.add(cursor);
+    const ancestor = lookup.get(cursor);
+    if (!ancestor) {
+      ancestors.push({ runId: cursor, missing: true });
+      truncated = true;
+      break;
+    }
+    ancestors.push({
+      runId: ancestor.runId,
+      ...(ancestor.parentRunId ? { parentRunId: ancestor.parentRunId } : {}),
+      ...(ancestor.rootRunId ? { rootRunId: ancestor.rootRunId } : {}),
+    });
+    cursor = ancestor.parentRunId?.trim() || undefined;
+  }
+
+  const rootRunId =
+    record.rootRunId?.trim() ||
+    ancestors.find((entry) => !entry.missing && entry.rootRunId)?.rootRunId ||
+    (ancestors.length === 0 ? record.runId : ancestors[ancestors.length - 1]?.runId);
+
+  if (record.rootRunId?.trim()) {
+    const declaredRoot = record.rootRunId.trim();
+    if (!lookup.has(declaredRoot) && declaredRoot !== record.runId) {
+      truncated = true;
+    }
+  }
+
+  return {
+    runId: record.runId,
+    ...(record.parentRunId ? { parentRunId: record.parentRunId } : {}),
+    ...(rootRunId ? { rootRunId } : {}),
+    ancestors,
+    truncated,
+  };
+}
+
+/** Client-side intake hydration from a historical record. Never starts a run. */
+export function hydrateIntakeFromRecord(record: OperatorRunRecord): {
+  targetInput: string;
+  mode: OperatorRunKind;
+  skillId: string;
+  presetId: string;
+  verifyCommand: string;
+  useRawVerify: boolean;
+  timeoutMinutes: number;
+  advancedOpen: boolean;
+}
+
 export function resolveRecoverySelection(
   records: OperatorRunRecord[],
 ): OperatorRunRecord | undefined {
