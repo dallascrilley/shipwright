@@ -154,6 +154,7 @@ describe("OperatorRunRegistry", () => {
           publish: request.publish,
           timeoutMinutes: request.timeoutMinutes,
         },
+        events: [],
         startedAt: "2026-07-19T00:00:00.000Z",
         updatedAt: "2026-07-19T00:01:00.000Z",
       },
@@ -192,6 +193,7 @@ describe("OperatorRunRegistry", () => {
           publish: true,
           timeoutMinutes: request.timeoutMinutes,
         },
+        events: [],
         startedAt: "2026-07-19T00:00:00.000Z",
         updatedAt: "2026-07-19T00:01:00.000Z",
       },
@@ -336,6 +338,7 @@ describe("OperatorRunRegistry", () => {
           publish: false,
           timeoutMinutes: 30,
         } as any,
+        events: [],
         startedAt: "2026-07-20T12:00:00.000Z",
         updatedAt: "2026-07-20T12:00:01.000Z",
       } as any,
@@ -471,4 +474,76 @@ describe("OperatorRunRegistry", () => {
     await expect(registry.start(request)).rejects.toThrow(/allowlist/i);
     spy.mockRestore();
   });
+
+  
+  test("persists a redacted phase timeline across issue progress", async () => {
+    const registry = new OperatorRunRegistry(
+      async (_input, runId, progress) => {
+        progress({ ...completeReceipt, runId, phase: "agent", changedFiles: ["a.ts", "b.ts"] });
+        progress({ ...completeReceipt, runId, phase: "verify", changedFiles: ["a.ts", "b.ts"] });
+        return { ...completeReceipt, runId, phase: "complete", changedFiles: ["a.ts", "b.ts"] };
+      },
+      () => "timeline-1",
+    );
+
+    await registry.start(request);
+    await flushMicrotasks();
+
+    const record = registry.get("timeline-1");
+    expect(record?.events?.length).toBeGreaterThanOrEqual(4);
+    expect(record?.events?.[0]).toMatchObject({
+      kind: "queued",
+      phase: "intake",
+      status: "queued",
+      summary: "Run queued",
+    });
+    expect(record?.events?.some((event) => event.kind === "started")).toBe(true);
+    expect(
+      record?.events?.some((event) => event.phase === "verify" && event.kind === "phase"),
+    ).toBe(true);
+    expect(record?.events?.[record.events.length - 1]).toMatchObject({
+      kind: "succeeded",
+      status: "succeeded",
+      summary: "Dry run completed · 2 changed files",
+    });
+  });
+
+  test("records interrupted timeline entry after restart reconciliation", () => {
+    const store = new MemoryOperatorRunStore([
+      {
+        runId: "interrupt-timeline",
+        status: "running",
+        phase: "agent",
+        kind: "issue",
+        request: {
+          mode: "issue",
+          issueUrl: request.issueUrl,
+          pullRequestUrl: "",
+          skillId: "",
+          presetId: "",
+          verifyCommand: request.verifyCommand,
+          publish: false,
+          timeoutMinutes: 30,
+        },
+        events: [],
+        startedAt: "2026-07-20T12:00:00.000Z",
+        updatedAt: "2026-07-20T12:01:00.000Z",
+      } as any,
+    ]);
+
+    const registry = new OperatorRunRegistry(
+      () => new Promise(() => {}),
+      () => "unused",
+      store,
+      () => "2026-07-20T12:05:00.000Z",
+    );
+
+    const record = registry.get("interrupt-timeline");
+    expect(record?.status).toBe("failed");
+    expect(record?.events?.some((event) => event.kind === "interrupted")).toBe(true);
+    expect(record?.events?.[record.events.length - 1]?.summary).toBe(
+      "Run interrupted after service restart",
+    );
+  });
+
 });

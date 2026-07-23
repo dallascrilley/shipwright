@@ -1,12 +1,16 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  appendOperatorRunEvent,
   buildRunSummary,
   detectRunModeFromUrl,
+  OPERATOR_RUN_EVENT_LIMIT,
   operatorRunRequestSchema,
   parseOperatorTarget,
   resolveOperatorNextAction,
   resolveOperatorPublishConfirmation,
+  summarizeOperatorRunEvent,
+  type OperatorRunEvent,
   type OperatorRunRecord,
 } from "./operator-run";
 
@@ -42,6 +46,7 @@ function baseRecord(
       number: 12,
       url: "https://github.com/dallascrilley/example/issues/12",
     },
+    events: [],
     startedAt: "2026-07-20T12:00:00.000Z",
     updatedAt: "2026-07-20T12:02:00.000Z",
     ...overrides,
@@ -382,5 +387,83 @@ describe("resolveOperatorPublishConfirmation", () => {
       verifyCommand: "bun run verify",
     });
     expect(confirmation).not.toHaveProperty("sourceRunId");
+  });
+});
+
+
+describe("summarizeOperatorRunEvent", () => {
+  test("uses closed static templates only", () => {
+    expect(
+      summarizeOperatorRunEvent({
+        kind: "queued",
+        phase: "intake",
+        status: "queued",
+      }),
+    ).toBe("Run queued");
+    expect(
+      summarizeOperatorRunEvent({
+        kind: "phase",
+        phase: "verify",
+        status: "running",
+      }),
+    ).toBe("Verification started");
+    expect(
+      summarizeOperatorRunEvent({
+        kind: "succeeded",
+        phase: "complete",
+        status: "succeeded",
+        publish: false,
+        changedFileCount: 2,
+      }),
+    ).toBe("Dry run completed · 2 changed files");
+    expect(
+      summarizeOperatorRunEvent({
+        kind: "interrupted",
+        phase: "agent",
+        status: "failed",
+      }),
+    ).toBe("Run interrupted after service restart");
+  });
+});
+
+describe("appendOperatorRunEvent", () => {
+  test("dedupes adjacent identical phase/status and caps length", () => {
+    const first: OperatorRunEvent = {
+      at: "2026-07-20T12:00:00.000Z",
+      phase: "agent",
+      status: "running",
+      kind: "phase",
+      summary: "Agent execution started",
+    };
+    const dup: OperatorRunEvent = {
+      ...first,
+      at: "2026-07-20T12:00:01.000Z",
+      summary: "Agent execution started again",
+    };
+    const nextPhase: OperatorRunEvent = {
+      at: "2026-07-20T12:00:02.000Z",
+      phase: "verify",
+      status: "running",
+      kind: "phase",
+      summary: "Verification started",
+    };
+    const once = appendOperatorRunEvent([], first);
+    const deduped = appendOperatorRunEvent(once, dup);
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0]?.summary).toBe("Agent execution started");
+    const advanced = appendOperatorRunEvent(deduped, nextPhase);
+    expect(advanced.map((event) => event.phase)).toEqual(["agent", "verify"]);
+
+    let events: OperatorRunEvent[] = [];
+    for (let i = 0; i < OPERATOR_RUN_EVENT_LIMIT + 5; i += 1) {
+      events = appendOperatorRunEvent(events, {
+        at: `2026-07-20T12:00:${String(i).padStart(2, "0")}.000Z`,
+        phase: "agent",
+        status: i % 2 === 0 ? "running" : "queued",
+        kind: "phase",
+        summary: `Event ${i}`,
+      });
+    }
+    expect(events).toHaveLength(OPERATOR_RUN_EVENT_LIMIT);
   });
 });
