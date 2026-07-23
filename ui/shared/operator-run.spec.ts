@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 
+import { describe, expect, test } from "vitest";
+
 import {
   appendOperatorRunEvent,
   buildOperatorChangeEvidence,
@@ -25,7 +27,8 @@ import {
   RUN_INTERRUPTED_BY_RESTART_MESSAGE,
   type OperatorRunRecord,,
   hydrateIntakeFromRecord,
-  resolveOperatorRunLineage
+  resolveOperatorRunLineage,
+  MAX_LINEAGE_DEPTH
 } from "./operator-run";
 
 const validInput = {

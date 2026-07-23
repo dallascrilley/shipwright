@@ -670,8 +670,13 @@ export function OperatorConsole() {
                       type="button"
                       onClick={() => {
                         operatorSelectedRun.current = true;
-                        setRunId(item.runId);
+                        selectHistoryRecord(item.runId);
                       }}
+                      onClick={() => {
+                        operatorSelectedRun.current = true;
+                        selectHistoryRecord(item.runId);
+                      }}
+>>>>>>> 39b99d1 (feat(ui): add linked run lineage and history draft replay (td-ba32d0))
                       className={`w-full rounded-md border px-3 py-2 text-left transition ${
                         selected
                           ? "border-primary bg-primary/5"
@@ -976,7 +981,7 @@ export function OperatorConsole() {
           showRecoveryStrip={showRecoveryStrip}
           onDismissRecovery={() => setRecoveryDismissed(true)}
           lineage={selectedLineage}
-          onSelectRun={(id) => setRunId(id)}
+          onSelectRun={(id) => selectHistoryRecord(id)}
         />
       </div>
 
