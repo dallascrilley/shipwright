@@ -40,6 +40,8 @@ import {
   type OperatorRunRequest,
   type ResolveTargetResult,
 } from "../../../shared/operator-run";
+import type { HostReadinessReport } from "../../../shared/host-readiness";
+import { HostReadinessPanel } from "./HostReadinessPanel";
 
 const PHASE_LABELS = {
   intake: "Intake",
@@ -123,6 +125,14 @@ export function OperatorConsole() {
     },
   );
   const presetsQuery = useActionQuery("list-verify-presets", {});
+  const readinessQuery = useActionQuery(
+    "get-host-readiness",
+    {},
+    {
+      // Advisory only — no continuous polling beyond normal refetch on focus/refresh.
+      refetchInterval: false,
+    },
+  );
   const trimmedTarget = targetInput.trim();
   const canPreflight = Boolean(detectRunModeFromUrl(trimmedTarget));
   const targetQuery = useActionQuery(
@@ -153,7 +163,14 @@ export function OperatorConsole() {
   const history = historyResponse?.records ?? [];
   const demoMode = historyResponse?.demoMode ?? false;
   const presets = (presetsQuery.data as VerifyPreset[] | undefined) ?? [];
+  const readinessReport = readinessQuery.data as HostReadinessReport | undefined;
+  const liveStartBlocked = Boolean(
+    readinessReport &&
+      !readinessReport.demoMode &&
+      readinessReport.blocksLiveStart,
+  );
   const active = Boolean(record && !isTerminalRun(record.status));
+  // Intake/dry-run busy only — readiness never blocks dry-run.
   const busy = startRun.isPending || active || preflightPending;
   const nextActions = useMemo(
     () => (record ? resolveOperatorNextAction(record) : null),
@@ -231,6 +248,12 @@ export function OperatorConsole() {
 
   function handlePublishClick() {
     setFormError(null);
+    if (liveStartBlocked) {
+      setFormError(
+        "Host prerequisites are not ready for live publish. Fix readiness first.",
+      );
+      return;
+    }
     setPublishSource(null);
     const request = buildRequest(true);
     if (!request) return;
@@ -288,8 +311,14 @@ export function OperatorConsole() {
       }
       if (action.type === "start_publish_run") {
         if (!record || record.runId !== action.runId) return;
+        if (liveStartBlocked) {
+          setFormError(
+            "Host prerequisites are not ready for live publish. Fix readiness first.",
+          );
+          return;
+        }
         setPublishSource(record);
-            setConfirmOpen(true);
+        setConfirmOpen(true);
         return;
       }
       try {
@@ -312,6 +341,14 @@ export function OperatorConsole() {
 
   async function confirmPublish() {
     setFormError(null);
+    if (liveStartBlocked) {
+      setFormError(
+        "Host prerequisites are not ready for live publish. Fix readiness first.",
+      );
+      setConfirmOpen(false);
+      setPublishSource(null);
+      return;
+    }
     try {
       if (publishSource) {
         const started = (await startRun.mutateAsync({
@@ -376,6 +413,13 @@ export function OperatorConsole() {
           <span>Private operator service</span>
         </div>
       </header>
+
+      <HostReadinessPanel
+        report={readinessReport}
+        loading={readinessQuery.isLoading}
+        onRefresh={() => void readinessQuery.refetch()}
+        refreshing={readinessQuery.isFetching}
+      />
 
       <div className="grid gap-8 xl:grid-cols-[240px_minmax(0,0.92fr)_minmax(420px,1.08fr)] lg:grid-cols-[minmax(0,0.92fr)_minmax(420px,1.08fr)]">
         <aside className="space-y-3 lg:order-first xl:order-none">
@@ -596,6 +640,13 @@ export function OperatorConsole() {
             </div>
           )}
 
+          {liveStartBlocked ? (
+            <p className="text-xs text-amber-700 dark:text-amber-300">
+              Host prerequisites are not ready. Live publish is disabled until
+              provider, GitHub App, Docker socket, and state store report ready.
+              Dry-run and history remain available.
+            </p>
+          ) : null}
           <div className="flex flex-wrap gap-3">
             <Button
               type="submit"
@@ -614,7 +665,7 @@ export function OperatorConsole() {
               type="button"
               size="lg"
               variant="outline"
-              disabled={busy}
+              disabled={busy || liveStartBlocked}
               onClick={handlePublishClick}
               className="w-full sm:w-auto"
             >
@@ -697,7 +748,7 @@ export function OperatorConsole() {
             </Button>
             <Button
               onClick={() => void confirmPublish()}
-              disabled={startRun.isPending}
+              disabled={startRun.isPending || liveStartBlocked}
             >
               {startRun.isPending && <IconLoader2 className="animate-spin" />}
               Start publish run
@@ -1025,3 +1076,5 @@ function StatusBadge({ record }: { record: OperatorRunRecord }) {
     </span>
   );
 }
+
+

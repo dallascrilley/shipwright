@@ -27,6 +27,7 @@ Demo mode is dry-run only. Real runs use the root project's GitHub App, provider
 - `list-verify-presets`: server-owned verification command presets.
 - `resolve-target`: preflight a GitHub issue/PR URL for allowlist, title, and pinned head metadata before starting a run.
 - `list-shipwright-runs` / `get-shipwright-run` / `cancel-shipwright-run`: history, detail, cancel.
+- `get-host-readiness`: non-secret host readiness chips for provider, GitHub App, Docker socket, and state store (`ready` / `not_configured` / `unavailable`). Probes use configuration presence and path readability only — no model calls, GitHub HTTP, token validation, writes, or container launches. Ready is advisory and does not bypass start-time authorization.
 - `view-screen`: returns current navigation plus the latest redacted run state.
 - `navigate`: changes the visible application route.
 
