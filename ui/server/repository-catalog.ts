@@ -61,7 +61,8 @@ export class AgentRepositoryCatalog {
           return null;
         }
       });
-    this.#createTransport = dependencies.createTransport ?? createOctokitTransport;
+    this.#createTransport =
+      dependencies.createTransport ?? createOctokitTransport;
     this.#demoRepositories = dependencies.demoRepositories ?? DEMO_REPOSITORIES;
   }
 
@@ -87,9 +88,8 @@ export class AgentRepositoryCatalog {
     }
 
     try {
-      const repositories = await this.#createTransport(
-        config,
-      ).listAccessibleRepositories();
+      const repositories =
+        await this.#createTransport(config).listAccessibleRepositories();
       const options = buildRepositoryOptions(repositories, config);
       if (options.length === 0) {
         return catalogError(
@@ -125,7 +125,9 @@ export class AgentRepositoryCatalog {
       );
     }
     if (!option.selectable || option.archived) {
-      throw new Error(`Repository ${canonical} is archived and cannot be selected.`);
+      throw new Error(
+        `Repository ${canonical} is archived and cannot be selected.`,
+      );
     }
     return option;
   }

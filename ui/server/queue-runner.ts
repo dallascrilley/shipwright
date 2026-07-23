@@ -1,9 +1,11 @@
 import { targetMatchesScope } from "../shared/agent-definition";
-
 import type { OperatorStoredRequest } from "../shared/operator-run";
-import { canPublishAtStage, resolveRolloutStage } from "./control-plane-runtime";
-import type { QueueRunner } from "./queue-dispatcher";
+import {
+  canPublishAtStage,
+  resolveRolloutStage,
+} from "./control-plane-runtime";
 import { executeOperatorPipeline } from "./operator-runs";
+import type { QueueRunner } from "./queue-dispatcher";
 import { resolveVerifyPreset } from "./verify-presets";
 
 /**
@@ -35,7 +37,9 @@ export const operatorPipelineQueueRunner: QueueRunner = async (context) => {
   const url = `https://github.com/${target.owner}/${target.repo}/${
     isReview ? "pull" : "issues"
   }/${target.number}`;
-  const preset = resolveVerifyPreset(context.revision.draft.verification.presetId);
+  const preset = resolveVerifyPreset(
+    context.revision.draft.verification.presetId,
+  );
   const request: OperatorStoredRequest = {
     mode: isReview ? "review" : "issue",
     issueUrl: isReview ? "" : url,

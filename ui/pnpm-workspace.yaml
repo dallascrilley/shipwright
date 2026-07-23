@@ -18,5 +18,5 @@ minimumReleaseAgeExclude:
   - fast-xml-parser
   - "@sentry/*"
   - "@typescript/*"
-  - '@agent-native/core@0.109.4'
-  - '@agent-native/toolkit@0.5.0'
+  - "@agent-native/core@0.109.4"
+  - "@agent-native/toolkit@0.5.0"

@@ -58,15 +58,15 @@ read files under `node_modules/@agent-native/core/corpus/core/` or
 
 ## Useful Slugs
 
-| Need | Slugs |
-| --- | --- |
-| Actions and typed client calls | `actions`, `client` |
-| SQL, auth, access, sharing | `database`, `authentication`, `security`, `sharing` |
-| UI state visible to the agent | `context-awareness` |
-| Headless and chat-first apps | `pure-agent-apps`, `agent-surfaces`, `using-your-agent` |
-| Automations and schedules | `automations`, `recurring-jobs` |
-| Cross-app and external agents | `a2a-protocol`, `external-agents`, `mcp-protocol`, `mcp-apps` |
-| Skills and instructions | `skills-guide`, `writing-agent-instructions` |
+| Need                           | Slugs                                                         |
+| ------------------------------ | ------------------------------------------------------------- |
+| Actions and typed client calls | `actions`, `client`                                           |
+| SQL, auth, access, sharing     | `database`, `authentication`, `security`, `sharing`           |
+| UI state visible to the agent  | `context-awareness`                                           |
+| Headless and chat-first apps   | `pure-agent-apps`, `agent-surfaces`, `using-your-agent`       |
+| Automations and schedules      | `automations`, `recurring-jobs`                               |
+| Cross-app and external agents  | `a2a-protocol`, `external-agents`, `mcp-protocol`, `mcp-apps` |
+| Skills and instructions        | `skills-guide`, `writing-agent-instructions`                  |
 
 ## Don't
 

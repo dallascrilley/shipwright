@@ -142,15 +142,17 @@ describe("parseOperatorTarget", () => {
   });
 
   test("returns undefined for non-canonical URLs", () => {
-    expect(parseOperatorTarget("https://gitlab.com/a/b/issues/1")).toBeUndefined();
+    expect(
+      parseOperatorTarget("https://gitlab.com/a/b/issues/1"),
+    ).toBeUndefined();
   });
 });
 
 describe("detectRunModeFromUrl", () => {
   test("detects issue vs review", () => {
-    expect(
-      detectRunModeFromUrl("https://github.com/a/b/issues/1"),
-    ).toBe("issue");
+    expect(detectRunModeFromUrl("https://github.com/a/b/issues/1")).toBe(
+      "issue",
+    );
     expect(detectRunModeFromUrl("https://github.com/a/b/pull/2")).toBe(
       "review",
     );
@@ -349,7 +351,6 @@ describe("resolveOperatorNextAction", () => {
     expect(view.secondary[0]?.type).toBe("open_url");
   });
 });
-
 
 describe("resolveOperatorPublishConfirmation", () => {
   test("keeps a CTA-selected dry run when form inputs later change", () => {

@@ -75,7 +75,7 @@ run: async (args, ctx) => {
     throw new Error("Full app building is not enabled for this account.");
   }
   // guarded operation
-}
+};
 ```
 
 Use the client hook only to hide or reveal hydrated UI:
@@ -106,11 +106,11 @@ shell; it is shared and cached for every visitor.
 
 Core mounts three actions in registered apps:
 
-| Action | Purpose |
-| --- | --- |
-| `get-feature-flags` | Return the current caller's evaluated boolean values. |
-| `list-feature-flags` | Return definitions and rollout metadata to an authorized operator. |
-| `set-feature-flag` | Atomically turn a flag off, enable it for the operator, or replace targeting rules. |
+| Action               | Purpose                                                                             |
+| -------------------- | ----------------------------------------------------------------------------------- |
+| `get-feature-flags`  | Return the current caller's evaluated boolean values.                               |
+| `list-feature-flags` | Return definitions and rollout metadata to an authorized operator.                  |
+| `set-feature-flag`   | Atomically turn a flag off, enable it for the operator, or replace targeting rules. |
 
 Analytics calls the app-local operator actions through narrowly scoped A2A
 delegation. Tokens require an exact audience, organization, scope, operator

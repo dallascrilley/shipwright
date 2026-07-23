@@ -88,7 +88,9 @@ function historyTitle(item: OperatorRunRecord): string {
 function historyMeta(item: OperatorRunRecord): string {
   const bits: string[] = [];
   if (item.target) {
-    bits.push(`${item.target.owner}/${item.target.repo} #${item.target.number}`);
+    bits.push(
+      `${item.target.owner}/${item.target.repo} #${item.target.number}`,
+    );
   }
   const duration = formatDuration(item.durationMs);
   if (duration) bits.push(duration);
@@ -106,7 +108,9 @@ export function OperatorConsole() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [useRawVerify, setUseRawVerify] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [publishSource, setPublishSource] = useState<OperatorRunRecord | null>(null);
+  const [publishSource, setPublishSource] = useState<OperatorRunRecord | null>(
+    null,
+  );
   const [runId, setRunId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -117,7 +121,9 @@ export function OperatorConsole() {
     { limit: 50 },
     {
       refetchInterval: (query) => {
-        const response = query.state.data as OperatorRunListResponse | undefined;
+        const response = query.state.data as
+          | OperatorRunListResponse
+          | undefined;
         return response?.records.some((item) => !isTerminalRun(item.status))
           ? 1000
           : 5000;
@@ -159,7 +165,9 @@ export function OperatorConsole() {
   );
 
   const record = runQuery.data as OperatorRunRecord | undefined;
-  const historyResponse = historyQuery.data as OperatorRunListResponse | undefined;
+  const historyResponse = historyQuery.data as
+    | OperatorRunListResponse
+    | undefined;
   const history = historyResponse?.records ?? [];
   const demoMode = historyResponse?.demoMode ?? false;
   const presets = (presetsQuery.data as VerifyPreset[] | undefined) ?? [];
@@ -198,10 +206,8 @@ export function OperatorConsole() {
       setFormError(preflight.denyReason ?? "Target is not allowed.");
       return null;
     }
-    const issueUrl =
-      mode === "issue" ? targetInput.trim() : "";
-    const pullRequestUrl =
-      mode === "review" ? targetInput.trim() : "";
+    const issueUrl = mode === "issue" ? targetInput.trim() : "";
+    const pullRequestUrl = mode === "review" ? targetInput.trim() : "";
     const candidate = {
       mode,
       issueUrl,
@@ -360,7 +366,7 @@ export function OperatorConsole() {
         })) as OperatorRunRecord;
         setRunId(started.runId);
         setConfirmOpen(false);
-          setPublishSource(null);
+        setPublishSource(null);
         void historyQuery.refetch();
         return;
       }
@@ -474,10 +480,7 @@ export function OperatorConsole() {
           </ul>
         </aside>
 
-        <form
-          onSubmit={handleDryRun}
-          className="space-y-6"
-        >
+        <form onSubmit={handleDryRun} className="space-y-6">
           <section className="space-y-5">
             <div>
               <h2 className="text-lg font-semibold">Run specification</h2>
@@ -487,7 +490,9 @@ export function OperatorConsole() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="target-url">GitHub issue or pull request URL</Label>
+              <Label htmlFor="target-url">
+                GitHub issue or pull request URL
+              </Label>
               <Input
                 id="target-url"
                 type="url"
@@ -531,7 +536,9 @@ export function OperatorConsole() {
                 </p>
               ) : null}
               {preflight && !preflight.allowed ? (
-                <p className="text-xs text-destructive">{preflight.denyReason}</p>
+                <p className="text-xs text-destructive">
+                  {preflight.denyReason}
+                </p>
               ) : null}
             </div>
 
@@ -705,7 +712,7 @@ export function OperatorConsole() {
         onOpenChange={(open) => {
           setConfirmOpen(open);
           if (!open) {
-                  setPublishSource(null);
+            setPublishSource(null);
           }
         }}
       >
@@ -741,7 +748,7 @@ export function OperatorConsole() {
               variant="outline"
               onClick={() => {
                 setConfirmOpen(false);
-                          setPublishSource(null);
+                setPublishSource(null);
               }}
             >
               Keep as draft
@@ -798,8 +805,8 @@ function RunProgress({
             <IconGitPullRequest className="mb-4 size-8 text-muted-foreground" />
             <p className="font-medium">No run selected</p>
             <p className="mt-1 max-w-xs text-sm text-muted-foreground">
-              Paste a GitHub URL and start a dry run. History, phase updates, and
-              the next action will appear here.
+              Paste a GitHub URL and start a dry run. History, phase updates,
+              and the next action will appear here.
             </p>
           </div>
         ) : (
@@ -827,7 +834,9 @@ function RunProgress({
                 <div className="flex flex-wrap gap-2">
                   <Button
                     type="button"
-                    disabled={actionPending || nextActions.primary.type === "none"}
+                    disabled={
+                      actionPending || nextActions.primary.type === "none"
+                    }
                     onClick={() => onAction(nextActions.primary)}
                   >
                     {actionPending ? (

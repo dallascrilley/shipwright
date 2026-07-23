@@ -1,6 +1,9 @@
 import { defineEventHandler, setHeader, setResponseStatus } from "h3";
 
-import { getAgentManagementService, DEFAULT_LEASE_DURATION_MS } from "../agent-management";
+import {
+  getAgentManagementService,
+  DEFAULT_LEASE_DURATION_MS,
+} from "../agent-management";
 import { buildMetricsText } from "../control-plane-observability";
 import { resolveRolloutStage } from "../control-plane-runtime";
 

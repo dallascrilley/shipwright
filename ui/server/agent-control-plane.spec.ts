@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "vitest";
 
-import type { OperatorRunRecord } from "../shared/operator-run";
 import { executionRequestSchema } from "../shared/agent-definition";
+import type { OperatorRunRecord } from "../shared/operator-run";
 import {
   AgentControlPlane,
   JsonFileAgentControlPlaneStore,
@@ -292,7 +292,9 @@ describe("AgentControlPlane", () => {
     });
     expect(replacement.triggerId).not.toBe(original.triggerId);
     expect(store.load().triggers).toEqual([replacement]);
-    expect(controlPlane.listLifecycleEvents(agent.agentId).slice(-1)[0]).toMatchObject({
+    expect(
+      controlPlane.listLifecycleEvents(agent.agentId).slice(-1)[0],
+    ).toMatchObject({
       action: "trigger_removed",
       triggerId: original.triggerId,
     });

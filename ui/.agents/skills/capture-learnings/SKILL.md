@@ -27,16 +27,17 @@ Memories are stored as **resources** in the SQL database, not as files on disk.
 
 ## Memory Types
 
-| Type | Use for |
-|------|---------|
-| `user` | Preferences, role, personal context, contacts |
-| `feedback` | Corrections, confirmed approaches, things to avoid or repeat |
-| `project` | Ongoing work context, decisions, deadlines, status |
-| `reference` | Pointers to external systems, URLs, API details |
+| Type        | Use for                                                      |
+| ----------- | ------------------------------------------------------------ |
+| `user`      | Preferences, role, personal context, contacts                |
+| `feedback`  | Corrections, confirmed approaches, things to avoid or repeat |
+| `project`   | Ongoing work context, decisions, deadlines, status           |
+| `reference` | Pointers to external systems, URLs, API details              |
 
 ## When to Capture
 
 ### Team and organization knowledge (`LEARNINGS.md`, shared scope)
+
 - Canonical destinations and workflows (for example, which Content database receives a type of Slack request)
 - Required intake fields, ownership, prioritization conventions, metric definitions, and approved terminology
 - Durable external references that the whole team needs, including the canonical page/database URL
@@ -45,27 +46,32 @@ Memories are stored as **resources** in the SQL database, not as files on disk.
 Store the fact and a concise provenance link when available. Do not paste full private conversations, customer data, credentials, or secrets into learnings. Put stable always-on policy in shared `AGENTS.md`; put learned facts and evolving conventions in shared `LEARNINGS.md`.
 
 ### User Preferences & Memory (`user`)
+
 - **Tone and style** — "I prefer casual tone", "don't use emojis", "keep replies short"
 - **Personal context** — contacts, relationships, habits ("my wife's email is...", "I'm in PST timezone")
 - **Workflow preferences** — "always CC my assistant", "I like to review before sending"
 - **Role and expertise** — "I'm a data scientist", "new to React"
 
 ### Feedback & Corrections (`feedback`)
+
 - **Corrections** — user says "no, do it this way" → capture the right way
 - **Confirmed approaches** — user validates a non-obvious choice ("yes, that's perfect")
 - **Repeated friction** — you hit the same issue twice; save it
 
 ### Project Context (`project`)
+
 - **Ongoing work** — who is doing what, why, by when
 - **Decisions** — why something is done a certain way
 - **Status** — current state of initiatives
 
 ### References (`reference`)
+
 - **External systems** — "bugs are tracked in Linear project INGEST"
 - **URLs** — dashboards, documentation, tools
 - **API quirks** — undocumented behavior, version-specific gotchas
 
 ### Don't Capture
+
 - Things obvious from reading the code
 - Standard language/framework behavior
 - Temporary debugging notes
@@ -84,6 +90,7 @@ Store the fact and a concise provenance link when available. Do not paste full p
 ## Graduation
 
 When a memory is referenced repeatedly, it may belong in AGENTS.md or a skill:
+
 - Saving a personal memory is lightweight (auto-apply, personal scope)
 - Shared LEARNINGS.md is the lightweight organization knowledge layer
 - Updating AGENTS.md or a skill is heavier (affects all users/agents)
