@@ -123,4 +123,6 @@ pnpm typecheck
 pnpm build
 ```
 
+Each durable run record includes a server-authored, redacted phase timeline (queued, phase transitions, terminal success/failure/cancel/interrupt). Entries use static templates and safe counts only—never raw model, provider, command, or secret-looking text. Legacy records normalize to an empty timeline.
+
 The run registry is intentionally single-operator. It prevents concurrent starts and persists records atomically under `SHIPWRIGHT_STATE_DIR`. On restart it reconciles a completed durable pipeline receipt before marking a genuinely unfinished run as interrupted; automatic resumption and multi-user tenancy remain out of scope.

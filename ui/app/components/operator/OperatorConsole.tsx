@@ -799,6 +799,57 @@ function RunProgress({
               </div>
             )}
 
+
+            {record?.events && record.events.length > 0 ? (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Phase timeline
+                </p>
+                <ol className="space-y-2">
+                  {record.events.map((event, index) => {
+                    const terminal =
+                      event.kind === "succeeded" ||
+                      event.kind === "failed" ||
+                      event.kind === "cancelled" ||
+                      event.kind === "interrupted";
+                    return (
+                      <li
+                        key={`${event.at}-${event.kind}-${event.phase}-${index}`}
+                        className={
+                          terminal
+                            ? "rounded-md border border-border bg-muted/20 px-3 py-2"
+                            : "rounded-md border border-border/70 px-3 py-2"
+                        }
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p
+                              className={
+                                terminal
+                                  ? "text-sm font-semibold"
+                                  : "text-sm font-medium"
+                              }
+                            >
+                              {event.summary}
+                            </p>
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              {PHASE_LABELS[event.phase]} · {event.status}
+                            </p>
+                          </div>
+                          <time
+                            className="shrink-0 font-mono text-[11px] text-muted-foreground"
+                            dateTime={event.at}
+                          >
+                            {new Date(event.at).toLocaleTimeString()}
+                          </time>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </div>
+            ) : null}
+
             <ol className="grid gap-2 sm:grid-cols-2">
               {visiblePhases.map((phase) => {
                 const index = phaseIndex(phase);
