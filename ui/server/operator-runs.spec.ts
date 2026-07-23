@@ -690,4 +690,94 @@ describe("OperatorRunRegistry", () => {
     store.save = original;
   });
 
+
+  test("selected descendant lineage survives pruning on successful persist", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "shipwright-selected-retain-"));
+    const path = join(dir, "runs.json");
+    const store = new JsonFileOperatorRunStore(path);
+    const baseTarget = {
+      kind: "issue" as const,
+      owner: "dallascrilley",
+      repo: "example",
+      number: 12,
+      url: request.issueUrl,
+    };
+    const baseRequest = {
+      mode: "issue" as const,
+      issueUrl: request.issueUrl,
+      pullRequestUrl: "",
+      skillId: "",
+      presetId: "bun-test",
+      verifyCommand: "bun test",
+      publish: false,
+      timeoutMinutes: 30,
+    };
+    const seed = [
+      {
+        runId: "root",
+        status: "succeeded" as const,
+        phase: "complete" as const,
+        kind: "issue" as const,
+        request: baseRequest,
+        target: baseTarget,
+        rootRunId: "root",
+        startedAt: "2026-07-20T10:00:00.000Z",
+        updatedAt: "2026-07-20T10:01:00.000Z",
+      },
+      {
+        runId: "selected",
+        status: "succeeded" as const,
+        phase: "complete" as const,
+        kind: "issue" as const,
+        request: baseRequest,
+        target: baseTarget,
+        parentRunId: "root",
+        rootRunId: "root",
+        startedAt: "2026-07-20T11:00:00.000Z",
+        updatedAt: "2026-07-20T11:01:00.000Z",
+      },
+      ...Array.from({ length: 5 }, (_, i) => ({
+        runId: `noise-${i}`,
+        status: "succeeded" as const,
+        phase: "complete" as const,
+        kind: "issue" as const,
+        request: baseRequest,
+        target: { ...baseTarget, number: 100 + i },
+        startedAt: `2026-07-20T1${i}:30:00.000Z`,
+        updatedAt: `2026-07-20T1${i}:31:00.000Z`,
+      })),
+    ];
+    store.save(seed as any);
+
+    // maxTerminal=1 would drop root/selected without selection protection
+    const registry = new OperatorRunRegistry(
+      async () => completeReceipt,
+      () => "new-run",
+      store,
+      () => "2026-07-20T21:00:00.000Z",
+      () => undefined,
+      1,
+    );
+
+    // Selection signal via listPage (as the console does)
+    registry.listPage({ selectedRunId: "selected", limit: 50 });
+    expect(registry.get("selected")?.runId).toBe("selected");
+
+    // Force persist by starting a new terminal run after selection
+    await registry.start({
+      ...request,
+      issueUrl: "https://github.com/dallascrilley/example/issues/99",
+    });
+    await flushMicrotasks();
+
+    const page = registry.listPage({ limit: 50 });
+    const ids = new Set(page.records.map((r) => r.runId));
+    expect(ids.has("selected")).toBe(true);
+    expect(ids.has("root")).toBe(true);
+    // noise should be mostly pruned under ceiling 1 (+ protected selected lineage + new run)
+    expect(ids.has("noise-0")).toBe(false);
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
 });

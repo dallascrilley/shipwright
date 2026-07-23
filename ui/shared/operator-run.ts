@@ -295,8 +295,9 @@ export const operatorRunListRequestSchema = z
       .optional()
       .default(DEFAULT_RUN_LIST_LIMIT),
     /**
-     * Optional selected run id for clients. Evidence stability uses
-     * get-shipwright-run; this field does not change server retention.
+     * Operator-selected run id. list-shipwright-runs / get-shipwright-run
+     * remember this as a retention root so selected descendants and their
+     * lineage ancestors survive terminal pruning.
      */
     selectedRunId: z.string().trim().max(64).optional(),
   })
@@ -509,9 +510,8 @@ export function paginateOperatorRuns(
 /**
  * Compute the retained set under the terminal ceiling.
  * Never drops active/nonterminal records. Keeps lineage ancestors of
- * protected records (active/nonterminal, plus optional selectedRunId when
- * provided by a caller). Registry persistence currently protects active runs
- * only. Pure: does not mutate inputs.
+ * protected records (active/nonterminal + optional selectedRunId) and walks
+ * parent/root lineage for each. Pure: does not mutate inputs.
  */
 export function selectRetainedOperatorRuns(
   records: readonly OperatorRunRecord[],

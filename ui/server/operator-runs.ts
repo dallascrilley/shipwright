@@ -203,6 +203,9 @@ function normalizeRecord(stored: OperatorRunRecord): {
 export class OperatorRunRegistry {
   readonly #records = new Map<string, OperatorRunRecord>();
   readonly #controllers = new Map<string, AbortController>();
+  /** Operator-selected run retained as a lineage root until selection changes. */
+  #selectedRunId: string | undefined;
+  readonly #maxTerminalRuns: number;
 
   constructor(
     private readonly execute: RunExecutor = executeOperatorPipeline,
@@ -211,7 +214,9 @@ export class OperatorRunRegistry {
     private readonly store: OperatorRunStore = new MemoryOperatorRunStore(),
     private readonly now: () => string = () => new Date().toISOString(),
     private readonly loadReceipt: RunReceiptLoader = () => undefined,
+    maxTerminalRuns: number = MAX_RETAINED_TERMINAL_RUNS,
   ) {
+    this.#maxTerminalRuns = Math.max(1, maxTerminalRuns);
     let reconciled = false;
     for (const stored of this.store.load()) {
       const { record, mutated } = normalizeRecord(structuredClone(stored));
@@ -397,7 +402,9 @@ export class OperatorRunRegistry {
 
   get(runId: string): OperatorRunRecord | undefined {
     const record = this.#records.get(runId);
-    return record ? structuredClone(record) : undefined;
+    if (!record) return undefined;
+    this.#selectedRunId = runId;
+    return structuredClone(record);
   }
 
   getLatest(): OperatorRunRecord | undefined {
@@ -416,6 +423,11 @@ export class OperatorRunRegistry {
   listPage(
     request: Partial<OperatorRunListRequest> = {},
   ): OperatorRunListResponse {
+    const selected = request.selectedRunId?.trim();
+    if (selected) {
+      // Durable selection signal for retention: active OR selected descendant.
+      this.#selectedRunId = selected;
+    }
     const all = [...this.#records.values()];
     const page = paginateOperatorRuns(all, {
       query: request.query ?? "",
@@ -578,10 +590,18 @@ export class OperatorRunRegistry {
 
   #persist(): void {
     const current = [...this.#records.values()];
-    // Retention roots are active/nonterminal runs (plus their lineage ancestors).
-    // Client selection is not a server-side retention root.
+    // Retention roots: active/nonterminal runs and the operator-selected
+    // descendant (when still present), plus their lineage ancestors.
+    const selectedRunId =
+      this.#selectedRunId && this.#records.has(this.#selectedRunId)
+        ? this.#selectedRunId
+        : undefined;
+    if (this.#selectedRunId && !selectedRunId) {
+      this.#selectedRunId = undefined;
+    }
     const retained = selectRetainedOperatorRuns(current, {
-      maxTerminal: MAX_RETAINED_TERMINAL_RUNS,
+      maxTerminal: this.#maxTerminalRuns,
+      ...(selectedRunId ? { selectedRunId } : {}),
     });
     // Save first. Only mutate in-memory map after a successful save so a
     // throwing store leaves registry + disk unchanged.
