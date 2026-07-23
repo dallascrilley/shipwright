@@ -16,7 +16,6 @@ const config: GitHubConfig = {
 
 let savedDemoEnv: string | undefined;
 
-
 beforeEach(() => {
   // guard:allow-env-credential — tests isolate deploy-level non-secret demo mode.
   savedDemoEnv = process.env.SHIPWRIGHT_UI_DEMO;
@@ -124,8 +123,22 @@ describe("resolveTarget", () => {
         installationId: 9,
       },
       reviewThreads: [
-        { id: "t1", isResolved: false, isOutdated: false, path: "a.ts", line: 1, comments: [] },
-        { id: "t2", isResolved: true, isOutdated: false, path: "b.ts", line: 2, comments: [] },
+        {
+          id: "t1",
+          isResolved: false,
+          isOutdated: false,
+          path: "a.ts",
+          line: 1,
+          comments: [],
+        },
+        {
+          id: "t2",
+          isResolved: true,
+          isOutdated: false,
+          path: "b.ts",
+          line: 2,
+          comments: [],
+        },
       ],
       reviews: [],
       repositoryClient: {} as never,
@@ -191,8 +204,9 @@ describe("resolveTarget", () => {
           }),
           getPullRequest,
         },
-        withInstallationToken: async <T>(action: (token: string) => Promise<T>) =>
-          action("token"),
+        withInstallationToken: async <T>(
+          action: (token: string) => Promise<T>,
+        ) => action("token"),
       })),
     } as unknown as GitHubTransport;
 

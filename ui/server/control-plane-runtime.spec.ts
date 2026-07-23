@@ -1,15 +1,16 @@
+import { describe, expect, test, vi } from "vitest";
+
+import type { AgentDefinition } from "../shared/agent-definition";
 import {
   MemoryAgentControlPlaneStore,
   type AgentControlPlaneStore,
 } from "./agent-control-plane";
-import type { AgentDefinition } from "../shared/agent-definition";
 import {
   canPublishAtStage,
   resolveRolloutStage,
   sourcesDispatchableAtStage,
 } from "./control-plane-runtime";
 import { QueueDispatcher } from "./queue-dispatcher";
-import { describe, expect, test, vi } from "vitest";
 
 describe("rollout stages", () => {
   test("defaults to disabled and rejects unknown stage values", () => {
@@ -55,7 +56,10 @@ describe("QueueDispatcher rollout gating", () => {
     publicationPolicy: "dry_run" as const,
   };
 
-  function setup(): { store: AgentControlPlaneStore; dispatcher: QueueDispatcher } {
+  function setup(): {
+    store: AgentControlPlaneStore;
+    dispatcher: QueueDispatcher;
+  } {
     const store = new MemoryAgentControlPlaneStore();
     let id = 0;
     const dispatcher = new QueueDispatcher(

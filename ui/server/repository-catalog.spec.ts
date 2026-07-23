@@ -1,7 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
 
 import type { GitHubConfig } from "../../src/config/github.js";
-import type { GitHubAccessibleRepository, GitHubTransport } from "../../src/github/app-client.js";
+import type {
+  GitHubAccessibleRepository,
+  GitHubTransport,
+} from "../../src/github/app-client.js";
 import { AgentRepositoryCatalog } from "./repository-catalog";
 
 const config: GitHubConfig = {
@@ -13,7 +16,9 @@ const config: GitHubConfig = {
 
 function createCatalog(
   repositories: GitHubAccessibleRepository[],
-  overrides: Partial<ConstructorParameters<typeof AgentRepositoryCatalog>[0]> = {},
+  overrides: Partial<
+    ConstructorParameters<typeof AgentRepositoryCatalog>[0]
+  > = {},
 ) {
   const transport = {
     listAccessibleRepositories: vi.fn(async () => repositories),
@@ -164,11 +169,12 @@ describe("AgentRepositoryCatalog", () => {
     const failing = new AgentRepositoryCatalog({
       isDemoMode: () => false,
       loadGitHubConfig: () => config,
-      createTransport: () => ({
-        listAccessibleRepositories: async () => {
-          throw new Error("example-upstream-secret rejected the request");
-        },
-      }) as unknown as GitHubTransport,
+      createTransport: () =>
+        ({
+          listAccessibleRepositories: async () => {
+            throw new Error("example-upstream-secret rejected the request");
+          },
+        }) as unknown as GitHubTransport,
     });
     const failure = await failing.list();
     expect(failure).toMatchObject({ ok: false, code: "github_unavailable" });

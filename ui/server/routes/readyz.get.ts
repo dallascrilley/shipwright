@@ -2,9 +2,7 @@ import { defineEventHandler, setResponseStatus } from "h3";
 
 import { resolveShipwrightStateDirectory } from "../../../src/config/state.js";
 import { getAgentManagementService } from "../agent-management";
-import {
-  buildControlPlaneReadiness,
-} from "../control-plane-observability";
+import { buildControlPlaneReadiness } from "../control-plane-observability";
 import { resolveRolloutStage } from "../control-plane-runtime";
 
 /**

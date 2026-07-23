@@ -1,15 +1,11 @@
 import { describe, expect, test } from "vitest";
+
 import type { AgentDraftInput } from "../shared/agent-definition";
-
-
 import {
   AgentControlPlane,
   MemoryAgentControlPlaneStore,
 } from "./agent-control-plane";
-import {
-  QueueDispatcher,
-  type QueueRunner,
-} from "./queue-dispatcher";
+import { QueueDispatcher, type QueueRunner } from "./queue-dispatcher";
 
 const draft: AgentDraftInput = {
   name: "Issue triage",
@@ -136,9 +132,9 @@ describe("QueueDispatcher", () => {
     const fixture = createFixture();
     const agent = fixture.controlPlane.createAgent(draft);
 
-    expect(() => enqueue(fixture, agent.agentId, "test:disabled-agent")).toThrow(
-      /disabled/,
-    );
+    expect(() =>
+      enqueue(fixture, agent.agentId, "test:disabled-agent"),
+    ).toThrow(/disabled/);
     expect(() =>
       fixture.dispatcher.enqueue({
         agentId: agent.agentId,
@@ -210,14 +206,17 @@ describe("QueueDispatcher", () => {
     const agent = createEnabledAgent(fixture);
     const queued = enqueue(fixture, agent.agentId, "test:verification-failed");
 
-    const completed = await fixture.dispatcher.dispatchNext("worker-a", async ({ execution }) => ({
-      receipt: {
-        runId: execution.executionId,
-        phase: "verify",
-        verificationPassed: false,
-        errorCode: "verification_failed",
-      },
-    }));
+    const completed = await fixture.dispatcher.dispatchNext(
+      "worker-a",
+      async ({ execution }) => ({
+        receipt: {
+          runId: execution.executionId,
+          phase: "verify",
+          verificationPassed: false,
+          errorCode: "verification_failed",
+        },
+      }),
+    );
 
     expect(completed).toMatchObject({
       executionId: queued.execution.executionId,
@@ -241,14 +240,20 @@ describe("QueueDispatcher", () => {
   });
 
   test("enforces both global and per-agent concurrency limits", () => {
-    const perAgent = createFixture({ globalConcurrency: 2, perAgentConcurrency: 1 });
+    const perAgent = createFixture({
+      globalConcurrency: 2,
+      perAgentConcurrency: 1,
+    });
     const agent = createEnabledAgent(perAgent);
     enqueue(perAgent, agent.agentId, "test:one");
     enqueue(perAgent, agent.agentId, "test:two");
     expect(perAgent.dispatcher.claimNext("worker-a")).toBeDefined();
     expect(perAgent.dispatcher.claimNext("worker-b")).toBeUndefined();
 
-    const global = createFixture({ globalConcurrency: 1, perAgentConcurrency: 2 });
+    const global = createFixture({
+      globalConcurrency: 1,
+      perAgentConcurrency: 2,
+    });
     const firstAgent = createEnabledAgent(global);
     const secondAgent = createEnabledAgent(global);
     enqueue(global, firstAgent.agentId, "test:one");
@@ -260,7 +265,11 @@ describe("QueueDispatcher", () => {
   test("marks a running lease interrupted after restart and requires retry", async () => {
     const fixture = createFixture();
     const agent = createEnabledAgent(fixture);
-    const queued = enqueue(fixture, agent.agentId, "schedule:2026-07-21T00:00:00Z");
+    const queued = enqueue(
+      fixture,
+      agent.agentId,
+      "schedule:2026-07-21T00:00:00Z",
+    );
     let finishRun: () => void = () => undefined;
     const runner: QueueRunner = ({ execution }) =>
       new Promise((resolve) => {
@@ -295,12 +304,14 @@ describe("QueueDispatcher", () => {
 
     finishRun();
     await running;
-    expect(restarted.get(queued.execution.executionId)?.state).toBe("interrupted");
+    expect(restarted.get(queued.execution.executionId)?.state).toBe(
+      "interrupted",
+    );
 
     restarted.retry(queued.execution.executionId);
-    expect(
-      await restarted.dispatchNext("worker-b", succeeds),
-    ).toMatchObject({ state: "succeeded" });
+    expect(await restarted.dispatchNext("worker-b", succeeds)).toMatchObject({
+      state: "succeeded",
+    });
   });
 
   test("cancels an active runner through AbortSignal without publishing", async () => {
@@ -327,7 +338,9 @@ describe("QueueDispatcher", () => {
 
     expect(sawAbort).toBe(true);
     expect(cancelled.state).toBe("cancelled");
-    expect(fixture.dispatcher.get(queued.execution.executionId)?.receipt).toBeUndefined();
+    expect(
+      fixture.dispatcher.get(queued.execution.executionId)?.receipt,
+    ).toBeUndefined();
   });
 
   test("dead-letters repeated explicit failures without automatic reruns", async () => {

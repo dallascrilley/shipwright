@@ -70,7 +70,12 @@ export function evaluateProviderReadiness(
   checkedAt: string,
 ): HostReadinessComponent {
   if (!input.hasCredential) {
-    return component("provider", "not_configured", "provider_missing", checkedAt);
+    return component(
+      "provider",
+      "not_configured",
+      "provider_missing",
+      checkedAt,
+    );
   }
   return component(
     "provider",
@@ -103,12 +108,7 @@ export function evaluateGitHubAppReadiness(
       checkedAt,
     );
   }
-  return component(
-    "github_app",
-    "ready",
-    "github_app_configured",
-    checkedAt,
-  );
+  return component("github_app", "ready", "github_app_configured", checkedAt);
 }
 
 export function evaluateDockerReadiness(
@@ -227,8 +227,7 @@ export function loadHostReadinessProbeInputs(
   } = {},
 ): HostReadinessProbeInputs {
   const checkedAt = (options.now ?? (() => new Date().toISOString()))();
-  const demoMode =
-    env.SHIPWRIGHT_UI_DEMO === "1" || isOperatorDemoMode();
+  const demoMode = env.SHIPWRIGHT_UI_DEMO === "1" || isOperatorDemoMode();
 
   const providerFlags = {
     anthropic: envHasNonEmpty("ANTHROPIC_API_KEY", env),
@@ -256,8 +255,7 @@ export function loadHostReadinessProbeInputs(
   const privateKeyPathReadable =
     hasPrivateKeyPath && keyPath ? isPathReadable(keyPath) : undefined;
 
-  const socketPath =
-    options.dockerSocketPath ?? resolveDockerSocketPath(env);
+  const socketPath = options.dockerSocketPath ?? resolveDockerSocketPath(env);
   const socketExists = pathExists(socketPath);
   const socketReadable = socketExists ? isPathReadable(socketPath) : false;
 

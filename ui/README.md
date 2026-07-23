@@ -71,12 +71,12 @@ conditions before queueing.
 
 ### GitHub trigger conditions
 
-| Field | Events | Operators | Comparison |
-| --- | --- | --- | --- |
-| Event actor | Issues and pull requests | is one of, is not one of | Case-insensitive |
-| Labels | Issues and pull requests | include any, include all, include none | Case-insensitive |
-| Base branch | Pull requests | is one of, is not one of | Exact |
-| Draft state | Pull requests | is draft, is not draft | Boolean |
+| Field       | Events                   | Operators                              | Comparison       |
+| ----------- | ------------------------ | -------------------------------------- | ---------------- |
+| Event actor | Issues and pull requests | is one of, is not one of               | Case-insensitive |
+| Labels      | Issues and pull requests | include any, include all, include none | Case-insensitive |
+| Base branch | Pull requests            | is one of, is not one of               | Exact            |
+| Draft state | Pull requests            | is draft, is not draft                 | Boolean          |
 
 All rows on one trigger must match (AND). Multiple triggers for the same agent
 revision are alternatives (OR), but the ingress chooses one deterministic

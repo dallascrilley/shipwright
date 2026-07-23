@@ -46,9 +46,7 @@ export function sourcesDispatchableAtStage(
 
 /** Triggers may produce queue entries at any stage above test-only. */
 export function schedulerActiveAtStage(stage: RolloutStage): boolean {
-  return (
-    stage !== "disabled" && stage !== "test_only"
-  );
+  return stage !== "disabled" && stage !== "test_only";
 }
 
 /**
@@ -129,7 +127,13 @@ export class ControlPlaneRuntime {
     this.#dispatching = true;
     try {
       let dispatched = 0;
-      while (await this.dispatcher.dispatchNext(this.options.workerName, this.runner, sources)) {
+      while (
+        await this.dispatcher.dispatchNext(
+          this.options.workerName,
+          this.runner,
+          sources,
+        )
+      ) {
         dispatched += 1;
       }
       return dispatched;

@@ -126,9 +126,9 @@ describe("buildMetricsText", () => {
       now: NOW,
     });
 
-    expect(text).toContain("shipwright_queue_entries{state=\"queued\"} 1");
-    expect(text).toContain("shipwright_queue_entries{state=\"dead_letter\"} 1");
-    expect(text).toContain("shipwright_rollout_stage{stage=\"dry_run\"} 1");
+    expect(text).toContain('shipwright_queue_entries{state="queued"} 1');
+    expect(text).toContain('shipwright_queue_entries{state="dead_letter"} 1');
+    expect(text).toContain('shipwright_rollout_stage{stage="dry_run"} 1');
     expect(text).not.toContain("agent-1");
     expect(text).not.toContain("dallascrilley");
   });

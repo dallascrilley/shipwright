@@ -295,7 +295,9 @@ export function buildAgentTriggerView(
       legacy: false,
     };
   }
-  throw new Error(`Trigger ${trigger.triggerId} has an invalid kind/config pair.`);
+  throw new Error(
+    `Trigger ${trigger.triggerId} has an invalid kind/config pair.`,
+  );
 }
 
 export function describeGithubTriggerCondition(
@@ -371,7 +373,9 @@ export function buildAgentDefinitionDocument(
     triggers,
   });
   if (containsSecretLikeContent(JSON.stringify(document))) {
-    throw new Error("Secret-like values cannot be exported from agent configuration.");
+    throw new Error(
+      "Secret-like values cannot be exported from agent configuration.",
+    );
   }
   return document;
 }

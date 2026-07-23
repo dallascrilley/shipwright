@@ -63,9 +63,7 @@ export class MemoryAgentControlPlaneStore implements AgentControlPlaneStore {
  * snapshot is atomically renamed into place, so a restart observes either the
  * prior snapshot or the committed replacement, never a partial write.
  */
-export class JsonFileAgentControlPlaneStore
-  implements AgentControlPlaneStore
-{
+export class JsonFileAgentControlPlaneStore implements AgentControlPlaneStore {
   constructor(private readonly path: string) {}
 
   load(): AgentControlPlaneSnapshot {
