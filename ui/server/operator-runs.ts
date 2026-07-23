@@ -13,21 +13,24 @@ import {
   createReviewPipelineDependencies,
 } from "../../src/cli/dependencies.js";
 import { resolveShipwrightStateDirectory } from "../../src/config/state.js";
-import { redactSecrets, type RunReceipt } from "../../src/pipeline/receipt.js";
+import type { RunReceipt } from "../../src/pipeline/receipt.js";
+import { redactSecrets } from "../../src/pipeline/secret-safety";
 import type { ReviewRunReceipt } from "../../src/pipeline/review-receipt.js";
 import { runReviewAgent } from "../../src/pipeline/review-run.js";
 import { runShipwright } from "../../src/pipeline/run.js";
-import type {
-  OperatorRunPhase,
-  OperatorRunReceipt,
-  OperatorRunRecord,
-  OperatorRunRequest,
-} from "../shared/operator-run";
 import {
   buildRunSummary,
   isTerminalRun,
   parseOperatorTarget,
   targetUrl,
+  appendOperatorRunEvent,
+  summarizeOperatorRunEvent,
+  type OperatorRunPhase,
+  type OperatorRunReceipt,
+  type OperatorRunRecord,
+  type OperatorRunRequest,
+  type OperatorRunEvent,
+  type OperatorRunEventKind,
 } from "../shared/operator-run";
 import {
   DEFAULT_REVIEW_SKILL_ID,
@@ -175,16 +178,19 @@ function normalizeRecord(stored: OperatorRunRecord): {
   const legacyRequest = stored.request as LegacyStoredRequest | undefined;
   const hadSkillPath = Boolean(legacyRequest?.skillPath?.trim());
   const mutated = requestMutated || hadSkillPath || (!stored.target && Boolean(target));
+  const events = Array.isArray(stored.events) ? stored.events : [];
+  const eventsMutated = !Array.isArray(stored.events);
   const record: OperatorRunRecord = {
     ...stored,
     kind: kind === "review" ? "review" : "issue",
     request,
+    events,
     ...(target ? { target } : {}),
     ...(operatorHint && !stored.operatorHint
       ? { operatorHint }
       : {}),
   };
-  return { record, mutated };
+  return { record, mutated: mutated || eventsMutated };
 }
 
 export class OperatorRunRegistry {
@@ -210,6 +216,21 @@ export class OperatorRunRegistry {
           record.phase = "complete";
           record.receipt = structuredClone(durableReceipt);
           delete record.message;
+          record.events = appendOperatorRunEvent(record.events, {
+            at: this.now(),
+            phase: record.phase,
+            status: record.status,
+            kind: "succeeded",
+            summary: redactSecrets(
+              summarizeOperatorRunEvent({
+                kind: "succeeded",
+                phase: record.phase,
+                status: record.status,
+                publish: record.request.publish,
+                changedFileCount: record.receipt?.changedFiles?.length,
+              }),
+            ),
+          });
         } else {
           record.status = "failed";
           record.message = "Run interrupted by service restart.";
@@ -217,6 +238,19 @@ export class OperatorRunRegistry {
             record.phase = durableReceipt.phase;
             record.receipt = structuredClone(durableReceipt);
           }
+          record.events = appendOperatorRunEvent(record.events, {
+            at: this.now(),
+            phase: record.phase,
+            status: record.status,
+            kind: "interrupted",
+            summary: redactSecrets(
+              summarizeOperatorRunEvent({
+                kind: "interrupted",
+                phase: record.phase,
+                status: record.status,
+              }),
+            ),
+          });
         }
         record.updatedAt = this.now();
         record.finishedAt = record.finishedAt ?? this.now();
@@ -321,6 +355,21 @@ export class OperatorRunRegistry {
       phase: "intake",
       kind: mode === "review" ? "review" : "issue",
       request,
+      events: [
+        {
+          at: now,
+          phase: "intake",
+          status: "queued",
+          kind: "queued",
+          summary: redactSecrets(
+            summarizeOperatorRunEvent({
+              kind: "queued",
+              phase: "intake",
+              status: "queued",
+            }),
+          ),
+        },
+      ],
       ...(target ? { target } : {}),
       startedAt: now,
       updatedAt: now,
@@ -371,7 +420,11 @@ export class OperatorRunRegistry {
     initial: OperatorRunRecord,
     controller: AbortController,
   ): Promise<void> {
-    this.#replace(initial.runId, { status: "running" });
+    this.#replace(initial.runId, {
+      status: "running",
+      phase: initial.phase,
+      eventKind: "started",
+    });
     try {
       const receipt = await this.execute(
         initial.request,
@@ -381,34 +434,29 @@ export class OperatorRunRegistry {
             status: "running",
             phase: progress.phase,
             receipt: progress,
+            eventKind: "phase",
           });
         },
         controller.signal,
       );
       this.#replace(initial.runId, {
         status: "succeeded",
-        phase: receipt.phase,
-        receipt: structuredClone(receipt),
+        phase: "complete",
+        receipt,
+        message: undefined,
+        eventKind: "succeeded",
       });
     } catch (error) {
       const current = this.#records.get(initial.runId);
       const message = redactSecrets(
         error instanceof Error ? error.message : String(error),
       );
-      const receipt = current?.receipt
-        ? {
-            ...structuredClone(current.receipt),
-            errorMessage: current.receipt.errorMessage ?? message,
-            errorCode:
-              current.receipt.errorCode ??
-              (controller.signal.aborted ? "cancelled" : undefined),
-          }
-        : current?.receipt;
       this.#replace(initial.runId, {
         status: "failed",
-        phase: current?.phase ?? "intake",
+        phase: current?.phase ?? initial.phase,
+        receipt: current?.receipt,
         message,
-        ...(receipt ? { receipt } : {}),
+        eventKind: "failed",
       });
     } finally {
       this.#controllers.delete(initial.runId);
@@ -424,22 +472,29 @@ export class OperatorRunRegistry {
         | "phase"
         | "receipt"
         | "message"
-        | "summary"
-        | "durationMs"
         | "finishedAt"
         | "operatorHint"
         | "target"
+        | "summary"
+        | "durationMs"
       >
-    >,
-  ): void {
+    > & {
+      eventKind?: OperatorRunEventKind;
+    },
+  ): OperatorRunRecord {
     const current = this.#records.get(runId);
-    if (!current) return;
+    if (!current) {
+      throw new Error(`Unknown run ${runId}.`);
+    }
     const next: OperatorRunRecord = {
       ...current,
       ...update,
+      events: current.events ?? [],
       ...(update.receipt ? { receipt: structuredClone(update.receipt) } : {}),
       updatedAt: this.now(),
     };
+    delete (next as { eventKind?: OperatorRunEventKind }).eventKind;
+
     if (update.status && isTerminalRun(update.status)) {
       next.finishedAt = next.finishedAt ?? this.now();
       const started = Date.parse(next.startedAt);
@@ -449,8 +504,35 @@ export class OperatorRunRegistry {
       }
       next.summary = buildRunSummary(next);
     }
+
+    const eventKind = update.eventKind;
+    if (eventKind) {
+      let kind = eventKind;
+      const message = next.message ?? next.receipt?.errorMessage ?? "";
+      if (kind === "failed" && /cancelled by operator/i.test(message)) {
+        kind = "cancelled";
+      }
+      const summary = redactSecrets(
+        summarizeOperatorRunEvent({
+          kind,
+          phase: next.phase,
+          status: next.status,
+          publish: next.request.publish,
+          changedFileCount: next.receipt?.changedFiles?.length,
+        }),
+      );
+      next.events = appendOperatorRunEvent(next.events, {
+        at: this.now(),
+        phase: next.phase,
+        status: next.status,
+        kind,
+        summary,
+      });
+    }
+
     this.#records.set(runId, next);
     this.#persist();
+    return next;
   }
 
   #persist(): void {
