@@ -24,7 +24,7 @@ Demo mode is dry-run only. Real runs use the root project's GitHub App, provider
 ## Actions
 
 - `start-shipwright-run`: validates issue/PR URL (or `fromRunId`), verify preset/`verifyCommand`, timeout, and publication confirmation; launches one background run. Review mode uses server-resolved `skillId` (default `fix-review-findings`); absolute skill paths are not stored on durable records.
-- `list-verify-presets`: server-owned verification command presets.
+- `list-verify-presets`: server-owned verification command presets plus an optional target-aware recommendation (`selectionReason`). Host config: `SHIPWRIGHT_VERIFY_PRESETS_JSON` (non-secret JSON array of `{id,label,command,repositories?,repositoryGlobs?}`). Precedence: exact `owner/repo`, anchored glob, default `bun-test`. Explicit operator preset choice wins; Advanced raw commands stay opt-in and unchanged. Malformed host config fails closed.
 - `resolve-target`: preflight a GitHub issue/PR URL for allowlist, title, and pinned head metadata before starting a run.
 - `list-shipwright-runs` / `get-shipwright-run` / `cancel-shipwright-run`: searchable/filterable history with opaque cursor paging and retention summary, detail, cancel. Search covers target owner/repo/number/title, summary, and run-id prefix only — never receipt tails or error bodies. Terminal history is retained up to 500 records. Active/nonterminal runs and the operator-selected run (from list/get) are retention roots; each root keeps its lineage ancestors. Pruning runs only after a successful store save.
 - `get-host-readiness`: non-secret host readiness chips for provider, GitHub App, Docker socket, and state store (`ready` / `not_configured` / `unavailable`). Probes use configuration presence and path readability only — no model calls, GitHub HTTP, token validation, writes, or container launches. Ready is advisory and does not bypass start-time authorization.
@@ -45,7 +45,7 @@ All actions in this section are UI-only and unavailable to the in-app model, MCP
 
 The management console uses the private file-backed transactional control-plane store outside demo mode. Demo mode intentionally uses the process-local adapter so local UI demonstrations never mutate host state.
 
-Dry-run success offers **Start publish run (same inputs)** — a new publish run that reruns the agent (not an in-place promote). Demo mode refuses publish with a friendly error after confirm. When that CTA opens from a prior run, the confirmation sheet shows a bounded, redacted change-evidence card (verification result, changed-file names, pinned/commit SHAs, PR URL when present) derived only from durable receipt fields. Direct publish from new intake has no invented prior evidence.
+Start records persist `presetId`, resolved `verifyCommand`, and a non-secret `verifySelectionReason` for auditability. Dry-run success offers **Start publish run (same inputs)** — a new publish run that reruns the agent (not an in-place promote). Demo mode refuses publish with a friendly error after confirm. When that CTA opens from a prior run, the confirmation sheet shows a bounded, redacted change-evidence card (verification result, changed-file names, pinned/commit SHAs, PR URL when present) derived only from durable receipt fields. Direct publish from new intake has no invented prior evidence.
 
 ## Phase 2 control-plane and queue foundation
 
