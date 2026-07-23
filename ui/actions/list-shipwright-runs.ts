@@ -1,21 +1,23 @@
 import { defineAction } from "@agent-native/core/action";
-import { z } from "zod";
 
 import {
   getOperatorRunRegistry,
   isOperatorDemoMode,
 } from "../server/operator-runs";
+import { operatorRunListRequestSchema } from "../shared/operator-run";
 
 export default defineAction({
-  description: "List recent durable Shipwright operator runs, newest first.",
-  schema: z.object({
-    limit: z.number().int().min(1).max(200).default(50).optional(),
-  }),
+  description:
+    "List durable Shipwright operator runs with optional search, filters, and cursor paging.",
+  schema: operatorRunListRequestSchema,
   http: { method: "GET" },
   readOnly: true,
   toolCallable: false,
-  run: async ({ limit }) => ({
-    records: getOperatorRunRegistry().list(limit ?? 50),
-    demoMode: isOperatorDemoMode(),
-  }),
+  run: async (input) => {
+    const page = getOperatorRunRegistry().listPage(input);
+    return {
+      ...page,
+      demoMode: isOperatorDemoMode(),
+    };
+  },
 });
