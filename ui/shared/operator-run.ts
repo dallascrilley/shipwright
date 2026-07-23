@@ -238,6 +238,9 @@ export interface OperatorRunRecord {
   durationMs?: number;
   finishedAt?: string;
   operatorHint?: string;
+  /** Optional lineage from U4; retention preserves ancestors when present. */
+  parentRunId?: string;
+  rootRunId?: string;
   startedAt: string;
   updatedAt: string;
 }
@@ -264,6 +267,288 @@ export interface OperatorNextActionView {
   headline: string;
   primary: OperatorNextAction;
   secondary: OperatorNextAction[];
+}
+
+
+export const MAX_RETAINED_TERMINAL_RUNS = 500;
+export const DEFAULT_RUN_LIST_LIMIT = 50;
+export const MAX_RUN_LIST_LIMIT = 100;
+
+export const operatorRunListRequestSchema = z
+  .object({
+    query: z.string().trim().max(200).optional().default(""),
+    status: z
+      .enum(["queued", "running", "succeeded", "failed", "active", "terminal"])
+      .optional(),
+    mode: z.enum(["issue", "review"]).optional(),
+    /** Inclusive lower bound on startedAt (ISO-8601). */
+    from: z.string().trim().max(40).optional(),
+    /** Inclusive upper bound on startedAt (ISO-8601). */
+    to: z.string().trim().max(40).optional(),
+    /** Opaque cursor from a prior page response. */
+    cursor: z.string().trim().max(200).optional(),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_RUN_LIST_LIMIT)
+      .optional()
+      .default(DEFAULT_RUN_LIST_LIMIT),
+    /** Optional selected run kept stable across filter changes. */
+    selectedRunId: z.string().trim().max(64).optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.from && Number.isNaN(Date.parse(value.from))) {
+      context.addIssue({
+        code: "custom",
+        path: ["from"],
+        message: "from must be a valid ISO-8601 timestamp.",
+      });
+    }
+    if (value.to && Number.isNaN(Date.parse(value.to))) {
+      context.addIssue({
+        code: "custom",
+        path: ["to"],
+        message: "to must be a valid ISO-8601 timestamp.",
+      });
+    }
+  });
+
+export type OperatorRunListRequest = z.infer<typeof operatorRunListRequestSchema>;
+
+export interface OperatorRunListResponse {
+  records: OperatorRunRecord[];
+  total: number;
+  nextCursor?: string;
+  retainedCount: number;
+  earliestRetainedAt?: string;
+  demoMode?: boolean;
+}
+
+/** Safe searchable text only — no receipt tails, errors, skill bodies, or raw URLs. */
+export function buildOperatorRunSearchText(record: OperatorRunRecord): string {
+  // Intentionally excludes runId (prefix-matched separately), raw URLs,
+  // receipt tails, error bodies, and skill content.
+  const parts: string[] = [record.summary ?? ""];
+  if (record.target) {
+    parts.push(
+      record.target.owner,
+      record.target.repo,
+      String(record.target.number),
+      record.target.title ?? "",
+    );
+  }
+  return parts.join(" ").toLowerCase();
+}
+
+export function matchesOperatorRunListFilters(
+  record: OperatorRunRecord,
+  filters: Partial<
+    Pick<
+      OperatorRunListRequest,
+      "query" | "status" | "mode" | "from" | "to"
+    >
+  >,
+): boolean {
+  const query = (filters.query ?? "").trim().toLowerCase();
+  if (query) {
+    const haystack = buildOperatorRunSearchText(record);
+    const runId = record.runId.toLowerCase();
+    const tokens = query.split(/\s+/).filter(Boolean);
+    const ok = tokens.every((token) => {
+      if (haystack.includes(token)) return true;
+      // run id: prefix only (never substring inside the id)
+      return runId.startsWith(token);
+    });
+    if (!ok) return false;
+  }
+
+  if (filters.status === "active" && isTerminalRun(record.status)) return false;
+  if (filters.status === "terminal" && !isTerminalRun(record.status)) return false;
+  if (
+    filters.status &&
+    filters.status !== "active" &&
+    filters.status !== "terminal" &&
+    record.status !== filters.status
+  ) {
+    return false;
+  }
+
+  if (
+    filters.mode &&
+    record.kind !== filters.mode &&
+    record.request.mode !== filters.mode
+  ) {
+    return false;
+  }
+
+  if (filters.from) {
+    const fromMs = Date.parse(filters.from);
+    const startedMs = Date.parse(record.startedAt);
+    if (!Number.isNaN(fromMs) && !Number.isNaN(startedMs) && startedMs < fromMs) {
+      return false;
+    }
+  }
+  if (filters.to) {
+    const toMs = Date.parse(filters.to);
+    const startedMs = Date.parse(record.startedAt);
+    if (!Number.isNaN(toMs) && !Number.isNaN(startedMs) && startedMs > toMs) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function compareRunsNewestFirst(
+  left: OperatorRunRecord,
+  right: OperatorRunRecord,
+): number {
+  const byStarted = right.startedAt.localeCompare(left.startedAt);
+  if (byStarted !== 0) return byStarted;
+  return right.runId.localeCompare(left.runId);
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function toBase64Url(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  return bytesToBase64(bytes)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function fromBase64Url(value: string): string {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/");
+  const pad =
+    padded.length % 4 === 0 ? "" : "=".repeat(4 - (padded.length % 4));
+  const bytes = base64ToBytes(padded + pad);
+  return new TextDecoder().decode(bytes);
+}
+
+/** Opaque cursor — clients must not parse structure. */
+export function encodeRunListCursor(record: OperatorRunRecord): string {
+  return toBase64Url(
+    JSON.stringify({ startedAt: record.startedAt, runId: record.runId }),
+  );
+}
+
+export function decodeRunListCursor(
+  cursor: string | undefined,
+): { startedAt: string; runId: string } | undefined {
+  const raw = (cursor ?? "").trim();
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(fromBase64Url(raw)) as {
+      startedAt?: unknown;
+      runId?: unknown;
+    };
+    if (
+      typeof parsed.startedAt !== "string" ||
+      typeof parsed.runId !== "string" ||
+      !parsed.startedAt ||
+      !parsed.runId
+    ) {
+      return undefined;
+    }
+    return { startedAt: parsed.startedAt, runId: parsed.runId };
+  } catch {
+    return undefined;
+  }
+}
+
+export function paginateOperatorRuns(
+  records: readonly OperatorRunRecord[],
+  request: OperatorRunListRequest,
+): Pick<OperatorRunListResponse, "records" | "total" | "nextCursor"> {
+  const filtered = [...records]
+    .filter((record) => matchesOperatorRunListFilters(record, request))
+    .sort(compareRunsNewestFirst);
+
+  const limit = request.limit ?? DEFAULT_RUN_LIST_LIMIT;
+  const cursor = decodeRunListCursor(request.cursor);
+
+  const isAfterCursor = (record: OperatorRunRecord): boolean => {
+    if (!cursor) return true;
+    const startedCmp = record.startedAt.localeCompare(cursor.startedAt);
+    // newest-first: "after cursor" means older than cursor item
+    if (startedCmp < 0) return true;
+    if (startedCmp > 0) return false;
+    return record.runId.localeCompare(cursor.runId) < 0;
+  };
+
+  const offsetRecords = cursor ? filtered.filter(isAfterCursor) : filtered;
+  const page = offsetRecords.slice(0, limit);
+  const hasMore = offsetRecords.length > limit;
+
+  return {
+    records: page,
+    total: filtered.length,
+    ...(hasMore && page.length > 0
+      ? { nextCursor: encodeRunListCursor(page[page.length - 1]!) }
+      : {}),
+  };
+}
+
+/**
+ * Compute the retained set under the terminal ceiling.
+ * Never drops active/nonterminal records. Keeps lineage ancestors of
+ * protected records (active + optional selected). Pure: does not mutate inputs.
+ */
+export function selectRetainedOperatorRuns(
+  records: readonly OperatorRunRecord[],
+  options: { selectedRunId?: string; maxTerminal?: number } = {},
+): OperatorRunRecord[] {
+  const maxTerminal = options.maxTerminal ?? MAX_RETAINED_TERMINAL_RUNS;
+  const byId = new Map(records.map((record) => [record.runId, record]));
+  const protectedIds = new Set<string>();
+
+  for (const record of records) {
+    if (!isTerminalRun(record.status)) protectedIds.add(record.runId);
+  }
+  if (options.selectedRunId && byId.has(options.selectedRunId)) {
+    protectedIds.add(options.selectedRunId);
+  }
+
+  // Walk parents for every protected record.
+  for (const id of [...protectedIds]) {
+    let cursor = byId.get(id);
+    const seen = new Set<string>();
+    while (cursor?.parentRunId) {
+      const parentId = cursor.parentRunId;
+      if (seen.has(parentId)) break;
+      seen.add(parentId);
+      protectedIds.add(parentId);
+      cursor = byId.get(parentId);
+      if (!cursor) break;
+    }
+    if (cursor?.rootRunId) protectedIds.add(cursor.rootRunId);
+  }
+
+  const terminals = records
+    .filter((record) => isTerminalRun(record.status) && !protectedIds.has(record.runId))
+    .sort(compareRunsNewestFirst);
+
+  const keptTerminalIds = new Set(
+    terminals.slice(0, maxTerminal).map((record) => record.runId),
+  );
+
+  return records.filter(
+    (record) => protectedIds.has(record.runId) || keptTerminalIds.has(record.runId),
+  );
 }
 
 export function isTerminalRun(status: OperatorRunStatus): boolean {

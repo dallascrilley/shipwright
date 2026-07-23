@@ -21,7 +21,10 @@ import { redactSecrets } from "../../src/pipeline/secret-safety";
 import {
   buildRunSummary,
   isTerminalRun,
+  MAX_RETAINED_TERMINAL_RUNS,
+  paginateOperatorRuns,
   parseOperatorTarget,
+  selectRetainedOperatorRuns,
   targetUrl,
   appendOperatorRunEvent,
   summarizeOperatorRunEvent,
@@ -31,6 +34,8 @@ import {
   type OperatorRunRequest,
   type OperatorRunEvent,
   type OperatorRunEventKind,
+  type OperatorRunListRequest,
+  type OperatorRunListResponse,
 } from "../shared/operator-run";
 import { resolveTarget } from "./resolve-target";
 import {
@@ -401,12 +406,40 @@ export class OperatorRunRegistry {
     return record ? structuredClone(record) : undefined;
   }
 
+  /**
+   * Back-compat newest-first page. Prefer listPage for filters/cursors.
+   */
   list(limit = 50): OperatorRunRecord[] {
-    const bounded = Math.max(1, Math.min(limit, 200));
-    return [...this.#records.values()]
-      .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
-      .slice(0, bounded)
-      .map((record) => structuredClone(record));
+    return this.listPage({ limit }).records;
+  }
+
+  listPage(
+    request: Partial<OperatorRunListRequest> = {},
+  ): OperatorRunListResponse {
+    const all = [...this.#records.values()];
+    const page = paginateOperatorRuns(all, {
+      query: request.query ?? "",
+      status: request.status,
+      mode: request.mode,
+      from: request.from,
+      to: request.to,
+      cursor: request.cursor,
+      limit: request.limit,
+      selectedRunId: request.selectedRunId,
+    } as OperatorRunListRequest);
+
+    const retainedSorted = [...all].sort((left, right) =>
+      left.startedAt.localeCompare(right.startedAt),
+    );
+    const earliestRetainedAt = retainedSorted[0]?.startedAt;
+
+    return {
+      records: page.records.map((record) => structuredClone(record)),
+      total: page.total,
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      retainedCount: all.length,
+      ...(earliestRetainedAt ? { earliestRetainedAt } : {}),
+    };
   }
 
   cancel(runId: string): OperatorRunRecord {
@@ -544,8 +577,21 @@ export class OperatorRunRegistry {
     return next;
   }
 
-  #persist(): void {
-    this.store.save([...this.#records.values()]);
+  #persist(options: { selectedRunId?: string } = {}): void {
+    const current = [...this.#records.values()];
+    const retained = selectRetainedOperatorRuns(current, {
+      selectedRunId: options.selectedRunId,
+      maxTerminal: MAX_RETAINED_TERMINAL_RUNS,
+    });
+    // Save first. Only mutate in-memory map after a successful save so a
+    // throwing store leaves registry + disk unchanged.
+    this.store.save(retained);
+    if (retained.length !== current.length) {
+      const kept = new Set(retained.map((record) => record.runId));
+      for (const runId of [...this.#records.keys()]) {
+        if (!kept.has(runId)) this.#records.delete(runId);
+      }
+    }
   }
 }
 

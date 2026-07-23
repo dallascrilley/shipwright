@@ -65,6 +65,10 @@ interface VerifyPreset {
 
 interface OperatorRunListResponse {
   records: OperatorRunRecord[];
+  total: number;
+  nextCursor?: string;
+  retainedCount: number;
+  earliestRetainedAt?: string;
   demoMode: boolean;
 }
 
@@ -113,12 +117,35 @@ export function OperatorConsole() {
   );
   const [runId, setRunId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [historyQueryText, setHistoryQueryText] = useState("");
+  const [debouncedHistoryQuery, setDebouncedHistoryQuery] = useState("");
+  const [historyStatus, setHistoryStatus] = useState<string>("");
+  const [historyMode, setHistoryMode] = useState<string>("");
+  const [historyCursor, setHistoryCursor] = useState<string | undefined>(undefined);
+  const [historyCursorStack, setHistoryCursorStack] = useState<string[]>([]);
 
   const startRun = useActionMutation("start-shipwright-run");
   const cancelRun = useActionMutation("cancel-shipwright-run");
   const historyQuery = useActionQuery(
     "list-shipwright-runs",
-    { limit: 50 },
+    {
+      limit: 50,
+      query: debouncedHistoryQuery,
+      ...(historyStatus
+        ? {
+            status: historyStatus as
+              | "queued"
+              | "running"
+              | "succeeded"
+              | "failed"
+              | "active"
+              | "terminal",
+          }
+        : {}),
+      ...(historyMode ? { mode: historyMode as "issue" | "review" } : {}),
+      ...(historyCursor ? { cursor: historyCursor } : {}),
+      ...(runId ? { selectedRunId: runId } : {}),
+    },
     {
       refetchInterval: (query) => {
         const response = query.state.data as
@@ -169,6 +196,10 @@ export function OperatorConsole() {
     | OperatorRunListResponse
     | undefined;
   const history = historyResponse?.records ?? [];
+  const historyTotal = historyResponse?.total ?? history.length;
+  const historyRetained = historyResponse?.retainedCount ?? history.length;
+  const historyEarliest = historyResponse?.earliestRetainedAt;
+  const historyNextCursor = historyResponse?.nextCursor;
   const demoMode = historyResponse?.demoMode ?? false;
   const presets = (presetsQuery.data as VerifyPreset[] | undefined) ?? [];
   const readinessReport = readinessQuery.data as
@@ -191,6 +222,21 @@ export function OperatorConsole() {
     const detected = detectRunModeFromUrl(targetInput);
     if (detected) setMode(detected);
   }, [targetInput]);
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      setDebouncedHistoryQuery(historyQueryText.trim());
+      setHistoryCursor(undefined);
+      setHistoryCursorStack([]);
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [historyQueryText]);
+
+  useEffect(() => {
+    // Filter changes reset paging.
+    setHistoryCursor(undefined);
+    setHistoryCursorStack([]);
+  }, [historyStatus, historyMode]);
 
   useEffect(() => {
     if (!useRawVerify && presetId) {
@@ -437,6 +483,45 @@ export function OperatorConsole() {
               Durable records survive refresh.
             </p>
           </div>
+          <div className="space-y-2">
+            <Input
+              value={historyQueryText}
+              onChange={(event) => setHistoryQueryText(event.target.value)}
+              placeholder="Search target, summary, run id"
+              className="h-8 text-xs"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                value={historyStatus}
+                onChange={(event) => setHistoryStatus(event.target.value)}
+                className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 text-xs outline-none"
+              >
+                <option value="">All statuses</option>
+                <option value="active">Active</option>
+                <option value="terminal">Terminal</option>
+                <option value="succeeded">Succeeded</option>
+                <option value="failed">Failed</option>
+                <option value="queued">Queued</option>
+                <option value="running">Running</option>
+              </select>
+              <select
+                value={historyMode}
+                onChange={(event) => setHistoryMode(event.target.value)}
+                className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 text-xs outline-none"
+              >
+                <option value="">All modes</option>
+                <option value="issue">Issue</option>
+                <option value="review">Review</option>
+              </select>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              {historyTotal} match{historyTotal === 1 ? "" : "es"} · retained{" "}
+              {historyRetained}
+              {historyEarliest
+                ? ` · since ${new Date(historyEarliest).toLocaleDateString()}`
+                : ""}
+            </p>
+          </div>
           <ul className="max-h-[32rem] space-y-2 overflow-auto">
             {history.length === 0 ? (
               <li className="rounded-md border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">
@@ -480,6 +565,35 @@ export function OperatorConsole() {
               })
             )}
           </ul>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={historyCursorStack.length === 0}
+              onClick={() => {
+                const stack = [...historyCursorStack];
+                const prev = stack.pop();
+                setHistoryCursorStack(stack);
+                setHistoryCursor(prev);
+              }}
+            >
+              Previous
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!historyNextCursor}
+              onClick={() => {
+                if (!historyNextCursor) return;
+                setHistoryCursorStack((stack) => [...stack, historyCursor ?? ""]);
+                setHistoryCursor(historyNextCursor);
+              }}
+            >
+              Next
+            </Button>
+          </div>
         </aside>
 
         <form onSubmit={handleDryRun} className="space-y-6">

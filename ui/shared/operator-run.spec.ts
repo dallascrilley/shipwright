@@ -3,14 +3,20 @@ import { describe, expect, test } from "vitest";
 import {
   appendOperatorRunEvent,
   buildRunSummary,
+  decodeRunListCursor,
   detectRunModeFromUrl,
   OPERATOR_RUN_EVENT_LIMIT,
+  encodeRunListCursor,
+  matchesOperatorRunListFilters,
+  operatorRunListRequestSchema,
   operatorRunRequestSchema,
+  paginateOperatorRuns,
   parseOperatorTarget,
   resolveOperatorNextAction,
   resolveOperatorPublishConfirmation,
   summarizeOperatorRunEvent,
   type OperatorRunEvent,
+  selectRetainedOperatorRuns,
   type OperatorRunRecord,
 } from "./operator-run";
 
@@ -465,5 +471,207 @@ describe("appendOperatorRunEvent", () => {
       });
     }
     expect(events).toHaveLength(OPERATOR_RUN_EVENT_LIMIT);
+  });
+});
+
+describe("operator run history list", () => {
+  function rec(
+    overrides: Partial<OperatorRunRecord> & { runId: string },
+  ): OperatorRunRecord {
+    return baseRecord({
+      status: "succeeded",
+      phase: "complete",
+      startedAt: "2026-07-20T12:00:00.000Z",
+      updatedAt: "2026-07-20T12:01:00.000Z",
+      ...overrides,
+    });
+  }
+
+  test("search matches target fields and summary, not receipt error text", () => {
+    const record = rec({
+      runId: "abc123def",
+      summary: "verify passed · 2 files",
+      target: {
+        kind: "issue",
+        owner: "acme",
+        repo: "widgets",
+        number: 42,
+        url: "https://github.com/acme/widgets/issues/42",
+        title: "Fix flaky suite",
+      },
+      receipt: {
+        runId: "abc123def",
+        phase: "complete",
+        issueUrl: "https://github.com/acme/widgets/issues/42",
+        execution: {
+          runtime: "demo",
+          software: "demo",
+          provider: "demo",
+          model: "demo",
+        },
+        changedFiles: [],
+        verification: {
+          command: "bun test",
+          exitCode: 0,
+          passed: true,
+          stderrTail: "SECRET_TOKEN=super-secret-value",
+        },
+        errorMessage: "SECRET_TOKEN=super-secret-value",
+      },
+    });
+    expect(
+      matchesOperatorRunListFilters(record, { query: "widgets" }),
+    ).toBe(true);
+    expect(matchesOperatorRunListFilters(record, { query: "flaky" })).toBe(
+      true,
+    );
+    expect(matchesOperatorRunListFilters(record, { query: "abc12" })).toBe(
+      true,
+    );
+    // substring inside run id must not match
+    expect(matchesOperatorRunListFilters(record, { query: "c123" })).toBe(
+      false,
+    );
+    expect(
+      matchesOperatorRunListFilters(record, { query: "SECRET_TOKEN" }),
+    ).toBe(false);
+  });
+
+  test("status mode and date filters combine", () => {
+    const failed = rec({
+      runId: "f1",
+      status: "failed",
+      phase: "verify",
+      kind: "review",
+      request: {
+        ...baseRecord().request,
+        mode: "review",
+        pullRequestUrl: "https://github.com/dallascrilley/example/pull/9",
+        issueUrl: "",
+      },
+      startedAt: "2026-07-20T10:00:00.000Z",
+    });
+    expect(
+      matchesOperatorRunListFilters(failed, {
+        status: "failed",
+        mode: "review",
+        from: "2026-07-20T09:00:00.000Z",
+        to: "2026-07-20T11:00:00.000Z",
+      }),
+    ).toBe(true);
+    expect(
+      matchesOperatorRunListFilters(failed, { status: "succeeded" }),
+    ).toBe(false);
+    expect(matchesOperatorRunListFilters(failed, { mode: "issue" })).toBe(
+      false,
+    );
+  });
+
+  test("cursor paging is stable and opaque", () => {
+    const records = Array.from({ length: 5 }, (_, i) =>
+      rec({
+        runId: `run-${i}`,
+        startedAt: `2026-07-20T12:0${i}:00.000Z`,
+      }),
+    );
+    const page1 = paginateOperatorRuns(records, {
+      query: "",
+      limit: 2,
+    } as any);
+    expect(page1.records.map((r) => r.runId)).toEqual(["run-4", "run-3"]);
+    expect(page1.total).toBe(5);
+    expect(page1.nextCursor).toBeTruthy();
+    expect(page1.nextCursor!.includes("run-")).toBe(false);
+    expect(decodeRunListCursor(page1.nextCursor)).toEqual({
+      startedAt: "2026-07-20T12:03:00.000Z",
+      runId: "run-3",
+    });
+
+    const page2 = paginateOperatorRuns(records, {
+      query: "",
+      limit: 2,
+      cursor: page1.nextCursor,
+    } as any);
+    expect(page2.records.map((r) => r.runId)).toEqual(["run-2", "run-1"]);
+    expect(page2.nextCursor).toBeTruthy();
+
+    const page3 = paginateOperatorRuns(records, {
+      query: "",
+      limit: 2,
+      cursor: page2.nextCursor,
+    } as any);
+    expect(page3.records.map((r) => r.runId)).toEqual(["run-0"]);
+    expect(page3.nextCursor).toBeUndefined();
+  });
+
+  test("list request schema defaults limit and accepts legacy limit-only callers", () => {
+    const parsed = operatorRunListRequestSchema.parse({});
+    expect(parsed.limit).toBe(50);
+    expect(parsed.query).toBe("");
+    expect(operatorRunListRequestSchema.parse({ limit: 10 }).limit).toBe(10);
+  });
+
+  test("encode/decode cursor round-trips", () => {
+    const record = rec({ runId: "z1", startedAt: "2026-07-20T15:00:00.000Z" });
+    const cursor = encodeRunListCursor(record);
+    expect(cursor.includes("z1")).toBe(false);
+    expect(decodeRunListCursor(cursor)).toEqual({
+      startedAt: "2026-07-20T15:00:00.000Z",
+      runId: "z1",
+    });
+    expect(decodeRunListCursor("not-valid")).toBeUndefined();
+  });
+
+  test("retention keeps active records and drops oldest terminals over ceiling", () => {
+    const active = rec({
+      runId: "active",
+      status: "running",
+      phase: "agent",
+      startedAt: "2026-07-20T20:00:00.000Z",
+    });
+    const terminals = Array.from({ length: 5 }, (_, i) =>
+      rec({
+        runId: `t${i}`,
+        startedAt: `2026-07-20T1${i}:00:00.000Z`,
+      }),
+    );
+    const kept = selectRetainedOperatorRuns([active, ...terminals], {
+      maxTerminal: 3,
+    });
+    const ids = new Set(kept.map((r) => r.runId));
+    expect(ids.has("active")).toBe(true);
+    expect(kept.filter((r) => r.status !== "running")).toHaveLength(3);
+    // newest terminals kept
+    expect(ids.has("t4")).toBe(true);
+    expect(ids.has("t0")).toBe(false);
+  });
+
+  test("retention preserves lineage ancestors of active and selected runs", () => {
+    const root = rec({ runId: "root", rootRunId: "root", startedAt: "2026-07-20T10:00:00.000Z" });
+    const mid = rec({
+      runId: "mid",
+      parentRunId: "root",
+      rootRunId: "root",
+      startedAt: "2026-07-20T11:00:00.000Z",
+    });
+    const activeChild = rec({
+      runId: "child",
+      parentRunId: "mid",
+      rootRunId: "root",
+      status: "running",
+      phase: "agent",
+      startedAt: "2026-07-20T12:00:00.000Z",
+    });
+    const noise = Array.from({ length: 4 }, (_, i) =>
+      rec({ runId: `n${i}`, startedAt: `2026-07-20T1${i}:30:00.000Z` }),
+    );
+    const kept = selectRetainedOperatorRuns(
+      [root, mid, activeChild, ...noise],
+      { maxTerminal: 1 },
+    );
+    const ids = new Set(kept.map((r) => r.runId));
+    expect(ids.has("child")).toBe(true);
+    expect(ids.has("mid")).toBe(true);
+    expect(ids.has("root")).toBe(true);
   });
 });
