@@ -17,7 +17,6 @@ export type OperatorRunPhase = (typeof RUN_PHASES)[number];
 export type OperatorRunStatus = "queued" | "running" | "succeeded" | "failed";
 export type OperatorRunKind = "issue" | "review";
 
-
 export const OPERATOR_RUN_EVENT_KINDS = [
   "queued",
   "started",
@@ -103,7 +102,6 @@ export function appendOperatorRunEvent(
   if (current.length <= limit) return current;
   return current.slice(current.length - limit);
 }
-
 
 const ISSUE_URL_PATTERN =
   /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/issues\/([1-9]\d*)\/?$/;

@@ -391,7 +391,6 @@ describe("resolveOperatorPublishConfirmation", () => {
   });
 });
 
-
 describe("summarizeOperatorRunEvent", () => {
   test("uses closed static templates only", () => {
     expect(

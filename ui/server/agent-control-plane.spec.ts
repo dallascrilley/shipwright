@@ -317,7 +317,7 @@ describe("AgentControlPlane", () => {
         timeoutMinutes: 30,
       },
       events: [],
-        startedAt: "2026-07-21T00:00:00.000Z",
+      startedAt: "2026-07-21T00:00:00.000Z",
       updatedAt: "2026-07-21T00:01:00.000Z",
     };
 

@@ -25,6 +25,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 
+import type { HostReadinessReport } from "../../../shared/host-readiness";
 import {
   detectRunModeFromUrl,
   isTerminalRun,
@@ -40,7 +41,6 @@ import {
   type OperatorRunRequest,
   type ResolveTargetResult,
 } from "../../../shared/operator-run";
-import type { HostReadinessReport } from "../../../shared/host-readiness";
 import { HostReadinessPanel } from "./HostReadinessPanel";
 
 const PHASE_LABELS = {
@@ -171,11 +171,13 @@ export function OperatorConsole() {
   const history = historyResponse?.records ?? [];
   const demoMode = historyResponse?.demoMode ?? false;
   const presets = (presetsQuery.data as VerifyPreset[] | undefined) ?? [];
-  const readinessReport = readinessQuery.data as HostReadinessReport | undefined;
+  const readinessReport = readinessQuery.data as
+    | HostReadinessReport
+    | undefined;
   const liveStartBlocked = Boolean(
     readinessReport &&
-      !readinessReport.demoMode &&
-      readinessReport.blocksLiveStart,
+    !readinessReport.demoMode &&
+    readinessReport.blocksLiveStart,
   );
   const active = Boolean(record && !isTerminalRun(record.status));
   // Intake/dry-run busy only — readiness never blocks dry-run.
@@ -859,7 +861,6 @@ function RunProgress({
               </div>
             )}
 
-
             {record?.events && record.events.length > 0 ? (
               <div className="space-y-2">
                 <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -1085,5 +1086,3 @@ function StatusBadge({ record }: { record: OperatorRunRecord }) {
     </span>
   );
 }
-
-

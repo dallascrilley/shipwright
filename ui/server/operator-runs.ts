@@ -14,10 +14,10 @@ import {
 } from "../../src/cli/dependencies.js";
 import { resolveShipwrightStateDirectory } from "../../src/config/state.js";
 import type { RunReceipt } from "../../src/pipeline/receipt.js";
-import { redactSecrets } from "../../src/pipeline/secret-safety";
 import type { ReviewRunReceipt } from "../../src/pipeline/review-receipt.js";
 import { runReviewAgent } from "../../src/pipeline/review-run.js";
 import { runShipwright } from "../../src/pipeline/run.js";
+import { redactSecrets } from "../../src/pipeline/secret-safety";
 import {
   buildRunSummary,
   isTerminalRun,
@@ -32,16 +32,13 @@ import {
   type OperatorRunEvent,
   type OperatorRunEventKind,
 } from "../shared/operator-run";
+import { resolveTarget } from "./resolve-target";
 import {
   DEFAULT_REVIEW_SKILL_ID,
   resolveSkill,
   skillIdFromLegacyPath,
 } from "./skills";
-import { resolveTarget } from "./resolve-target";
-import {
-  assertSafeVerifyCommand,
-  resolveVerifyPreset,
-} from "./verify-presets";
+import { assertSafeVerifyCommand, resolveVerifyPreset } from "./verify-presets";
 
 type StoredRequest = import("../shared/operator-run").OperatorStoredRequest;
 
@@ -59,7 +56,9 @@ export interface OperatorRunStore {
   save(records: readonly OperatorRunRecord[]): void;
 }
 
-export type RunReceiptLoader = (runId: string) => OperatorRunReceipt | undefined;
+export type RunReceiptLoader = (
+  runId: string,
+) => OperatorRunReceipt | undefined;
 
 /** Deploy-level non-secret mode flag used by operator actions and execution. */
 export function isOperatorDemoMode(): boolean {
@@ -132,8 +131,7 @@ function sanitizeStoredRequest(
   let operatorHint: string | undefined;
   const legacyPath =
     typeof raw?.skillPath === "string" ? raw.skillPath.trim() : "";
-  let skillId =
-    typeof raw?.skillId === "string" ? raw.skillId.trim() : "";
+  let skillId = typeof raw?.skillId === "string" ? raw.skillId.trim() : "";
   if (legacyPath) {
     mutated = true;
     if (!skillId) {
@@ -168,8 +166,13 @@ function normalizeRecord(stored: OperatorRunRecord): {
   record: OperatorRunRecord;
   mutated: boolean;
 } {
-  const kind = stored.kind ?? (stored.request?.mode === "review" ? "review" : "issue");
-  const { request, operatorHint, mutated: requestMutated } = sanitizeStoredRequest(
+  const kind =
+    stored.kind ?? (stored.request?.mode === "review" ? "review" : "issue");
+  const {
+    request,
+    operatorHint,
+    mutated: requestMutated,
+  } = sanitizeStoredRequest(
     stored.request as Partial<LegacyStoredRequest> | undefined,
     kind,
   );
@@ -177,7 +180,8 @@ function normalizeRecord(stored: OperatorRunRecord): {
     stored.target ?? parseOperatorTarget(targetUrl(request)) ?? undefined;
   const legacyRequest = stored.request as LegacyStoredRequest | undefined;
   const hadSkillPath = Boolean(legacyRequest?.skillPath?.trim());
-  const mutated = requestMutated || hadSkillPath || (!stored.target && Boolean(target));
+  const mutated =
+    requestMutated || hadSkillPath || (!stored.target && Boolean(target));
   const events = Array.isArray(stored.events) ? stored.events : [];
   const eventsMutated = !Array.isArray(stored.events);
   const record: OperatorRunRecord = {
@@ -186,9 +190,7 @@ function normalizeRecord(stored: OperatorRunRecord): {
     request,
     events,
     ...(target ? { target } : {}),
-    ...(operatorHint && !stored.operatorHint
-      ? { operatorHint }
-      : {}),
+    ...(operatorHint && !stored.operatorHint ? { operatorHint } : {}),
   };
   return { record, mutated: mutated || eventsMutated };
 }
@@ -317,7 +319,8 @@ export class OperatorRunRegistry {
     }
 
     let skillId = base.skillId ?? "";
-    const mode = base.mode === "review" ? ("review" as const) : ("issue" as const);
+    const mode =
+      base.mode === "review" ? ("review" as const) : ("issue" as const);
     if (mode === "review") {
       skillId = skillId || DEFAULT_REVIEW_SKILL_ID;
       // resolve now so bad skill fails before queue
@@ -340,9 +343,15 @@ export class OperatorRunRegistry {
     const url = targetUrl(request);
     let target = parseOperatorTarget(url);
     if (target) {
-      const resolved = await resolveTarget(url, {}, { includeReviewThreads: false });
+      const resolved = await resolveTarget(
+        url,
+        {},
+        { includeReviewThreads: false },
+      );
       if (!resolved.allowed) {
-        throw new Error(resolved.denyReason ?? "Target could not be authorized.");
+        throw new Error(
+          resolved.denyReason ?? "Target could not be authorized.",
+        );
       }
       target = {
         ...target,
@@ -557,7 +566,9 @@ function toOperatorIssueReceipt(receipt: RunReceipt): OperatorRunReceipt {
   };
 }
 
-function toOperatorReviewReceipt(receipt: ReviewRunReceipt): OperatorRunReceipt {
+function toOperatorReviewReceipt(
+  receipt: ReviewRunReceipt,
+): OperatorRunReceipt {
   return {
     runId: receipt.runId,
     phase: receipt.phase,
@@ -625,7 +636,9 @@ async function executeDemo(
   signal?: AbortSignal,
 ): Promise<OperatorRunReceipt> {
   if (request.publish) {
-    throw new Error("Demo supports dry-run only; start a live publish run outside demo.");
+    throw new Error(
+      "Demo supports dry-run only; start a live publish run outside demo.",
+    );
   }
   const target =
     request.mode === "review" ? request.pullRequestUrl : request.issueUrl;
@@ -640,7 +653,9 @@ async function executeDemo(
       model: "demo",
     },
     branch:
-      request.mode === "review" ? `review/demo-${runId}` : `agent/demo-${runId}`,
+      request.mode === "review"
+        ? `review/demo-${runId}`
+        : `agent/demo-${runId}`,
     baseSha: "0123456789abcdef0123456789abcdef01234567",
     changedFiles: [],
     verification: {
@@ -756,7 +771,11 @@ function loadDurableReceipt(
       }
       return toOperatorIssueReceipt(parsed as RunReceipt);
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
         continue;
       }
       throw new Error(`could not load durable receipt for run ${runId}`, {
