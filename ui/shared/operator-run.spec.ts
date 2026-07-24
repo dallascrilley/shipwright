@@ -972,6 +972,24 @@ describe("resolveRecoverySelection", () => {
   test("returns undefined for empty history", () => {
     expect(resolveRecoverySelection([])).toBeUndefined();
   });
+
+  test("tie-breaks equal timestamps with stable runId order", () => {
+    const twinA = baseRecord({
+      runId: "run-aaa",
+      status: "succeeded",
+      startedAt: "2026-07-20T12:00:00.000Z",
+      updatedAt: "2026-07-20T12:00:00.000Z",
+    });
+    const twinB = baseRecord({
+      runId: "run-zzz",
+      status: "succeeded",
+      startedAt: "2026-07-20T12:00:00.000Z",
+      updatedAt: "2026-07-20T12:00:00.000Z",
+    });
+    // Input order reversed across calls must still pick the same record.
+    expect(resolveRecoverySelection([twinA, twinB])?.runId).toBe("run-zzz");
+    expect(resolveRecoverySelection([twinB, twinA])?.runId).toBe("run-zzz");
+  });
 });
 
 describe("resolveOperatorHint", () => {

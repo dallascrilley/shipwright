@@ -615,7 +615,6 @@ export function OperatorConsole() {
                       type="button"
                       onClick={() => {
                         operatorSelectedRun.current = true;
-                        setRecoveryDismissed(false);
                         setRunId(item.runId);
                       }}
                       className={`w-full rounded-md border px-3 py-2 text-left transition ${

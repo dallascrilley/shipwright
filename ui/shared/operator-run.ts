@@ -783,7 +783,10 @@ export function resolveRecoverySelection(
   const sorted = [...records].sort((left, right) => {
     const byStarted = right.startedAt.localeCompare(left.startedAt);
     if (byStarted !== 0) return byStarted;
-    return right.updatedAt.localeCompare(left.updatedAt);
+    const byUpdated = right.updatedAt.localeCompare(left.updatedAt);
+    if (byUpdated !== 0) return byUpdated;
+    // Stable final tie-break so equal timestamps do not depend on input order.
+    return right.runId.localeCompare(left.runId);
   });
   const active = sorted.find((record) => !isTerminalRun(record.status));
   if (active) return active;
