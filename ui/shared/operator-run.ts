@@ -731,9 +731,78 @@ export function detectRunModeFromUrl(
   return target.kind === "pull" ? "review" : "issue";
 }
 
+
+export const RUN_INTERRUPTED_BY_RESTART_MESSAGE =
+  "Run interrupted by service restart.";
+
+export function isRunInterruptedByRestart(record: OperatorRunRecord): boolean {
+  const message = record.message ?? "";
+  return message.includes(RUN_INTERRUPTED_BY_RESTART_MESSAGE);
+}
+
+/**
+ * Static, non-secret recovery hints. Classify only from stable status/phase/
+ * errorCode/restart markers — never from free-form pipeline or model text.
+ */
+export function resolveOperatorHint(
+  record: OperatorRunRecord,
+): string | undefined {
+  if (record.operatorHint) return record.operatorHint;
+  if (isRunInterruptedByRestart(record)) {
+    return "The host restarted while this run was active. Start a new dry-run with the same inputs; prior sandbox work is not resumed.";
+  }
+  if (record.receipt?.errorCode === "cancelled") {
+    return "Cancelled by operator. Retry starts a fresh run.";
+  }
+  if (
+    record.phase === "intake" ||
+    record.receipt?.errorCode === "unauthorized" ||
+    record.receipt?.errorCode === "not_allowlisted"
+  ) {
+    return "Fix the target URL or allowlist entry, then retry.";
+  }
+  if (
+    record.receipt?.verification &&
+    record.receipt.verification.exitCode !== null &&
+    !record.receipt.verification.passed
+  ) {
+    return "Verification failed. Edit the command or choose another preset, then retry.";
+  }
+  return undefined;
+}
+
+/**
+ * Deterministic recovery selection for refresh/restart.
+ * Priority: active → restart-interrupted → failed recoverable → latest terminal.
+ * Side-effect free; never starts, cancels, or publishes.
+ */
+export function resolveRecoverySelection(
+  records: OperatorRunRecord[],
+): OperatorRunRecord | undefined {
+  if (records.length === 0) return undefined;
+  const sorted = [...records].sort((left, right) => {
+    const byStarted = right.startedAt.localeCompare(left.startedAt);
+    if (byStarted !== 0) return byStarted;
+    const byUpdated = right.updatedAt.localeCompare(left.updatedAt);
+    if (byUpdated !== 0) return byUpdated;
+    // Stable final tie-break so equal timestamps do not depend on input order.
+    return right.runId.localeCompare(left.runId);
+  });
+  const active = sorted.find((record) => !isTerminalRun(record.status));
+  if (active) return active;
+  const interrupted = sorted.find((record) => isRunInterruptedByRestart(record));
+  if (interrupted) return interrupted;
+  const failed = sorted.find((record) => record.status === "failed");
+  if (failed) return failed;
+  return sorted[0];
+}
+
 export function buildRunSummary(record: OperatorRunRecord): string {
   const receipt = record.receipt;
   if (record.status === "failed") {
+    if (isRunInterruptedByRestart(record)) {
+      return "interrupted by restart";
+    }
     if (
       receipt?.errorCode === "cancelled" ||
       /cancelled/i.test(record.message ?? "")
@@ -843,6 +912,20 @@ export function resolveOperatorNextAction(
   }
 
   // failed
+  if (isRunInterruptedByRestart(record)) {
+    return {
+      headline: "Interrupted by service restart",
+      primary: {
+        type: "retry_dry_run",
+        label: "Retry dry-run",
+        runId: record.runId,
+      },
+      secondary: target
+        ? [{ type: "open_url", label: "Open target", url: target }]
+        : [],
+    };
+  }
+
   const code = record.receipt?.errorCode;
   const message =
     record.receipt?.errorMessage ?? record.message ?? "Run failed";

@@ -11,14 +11,18 @@ import {
   matchesOperatorRunListFilters,
   operatorRunListRequestSchema,
   OPERATOR_CHANGE_EVIDENCE_FILE_LIMIT,
+  isRunInterruptedByRestart,
   operatorRunRequestSchema,
   paginateOperatorRuns,
   parseOperatorTarget,
+  resolveOperatorHint,
   resolveOperatorNextAction,
   resolveOperatorPublishConfirmation,
   summarizeOperatorRunEvent,
   type OperatorRunEvent,
   selectRetainedOperatorRuns,
+  resolveRecoverySelection,
+  RUN_INTERRUPTED_BY_RESTART_MESSAGE,
   type OperatorRunRecord,
 } from "./operator-run";
 
@@ -861,5 +865,260 @@ test("redacts secret-like path segments and truncates file lists", () => {
     expect(evidence?.changedFiles[0]).not.toContain("github_pat_");
     expect(evidence?.pullRequestUrl).toContain("[REDACTED]");
     expect(evidence?.pullRequestUrl).not.toContain("github_pat_");
+  });
+});
+describe("resolveRecoverySelection", () => {
+  test("prefers active over terminal records", () => {
+    const selected = resolveRecoverySelection([
+      baseRecord({
+        runId: "old-success",
+        status: "succeeded",
+        startedAt: "2026-07-20T12:00:00.000Z",
+        updatedAt: "2026-07-20T12:01:00.000Z",
+      }),
+      baseRecord({
+        runId: "active",
+        status: "running",
+        phase: "agent",
+        startedAt: "2026-07-20T12:05:00.000Z",
+        updatedAt: "2026-07-20T12:06:00.000Z",
+      }),
+      baseRecord({
+        runId: "newer-failed",
+        status: "failed",
+        phase: "verify",
+        startedAt: "2026-07-20T12:10:00.000Z",
+        updatedAt: "2026-07-20T12:11:00.000Z",
+      }),
+    ]);
+    expect(selected?.runId).toBe("active");
+  });
+
+  test("prefers restart-interrupted over other failed runs", () => {
+    const selected = resolveRecoverySelection([
+      baseRecord({
+        runId: "verify-fail",
+        status: "failed",
+        phase: "verify",
+        startedAt: "2026-07-20T12:10:00.000Z",
+        updatedAt: "2026-07-20T12:11:00.000Z",
+        receipt: {
+          runId: "verify-fail",
+          phase: "verify",
+          issueUrl: "https://github.com/dallascrilley/example/issues/12",
+          execution: {
+            runtime: "demo",
+            software: "demo",
+            provider: "demo",
+            model: "demo",
+          },
+          changedFiles: [],
+          verification: {
+            command: "bun test",
+            exitCode: 1,
+            passed: false,
+          },
+        },
+      }),
+      baseRecord({
+        runId: "interrupted",
+        status: "failed",
+        phase: "agent",
+        message: RUN_INTERRUPTED_BY_RESTART_MESSAGE,
+        startedAt: "2026-07-20T12:00:00.000Z",
+        updatedAt: "2026-07-20T12:01:00.000Z",
+      }),
+    ]);
+    expect(selected?.runId).toBe("interrupted");
+  });
+
+  test("prefers failed recoverable over latest success", () => {
+    const selected = resolveRecoverySelection([
+      baseRecord({
+        runId: "success",
+        status: "succeeded",
+        startedAt: "2026-07-20T12:10:00.000Z",
+        updatedAt: "2026-07-20T12:11:00.000Z",
+      }),
+      baseRecord({
+        runId: "failed",
+        status: "failed",
+        phase: "agent",
+        startedAt: "2026-07-20T12:00:00.000Z",
+        updatedAt: "2026-07-20T12:01:00.000Z",
+      }),
+    ]);
+    expect(selected?.runId).toBe("failed");
+  });
+
+  test("falls back to latest terminal when no active or failed", () => {
+    const selected = resolveRecoverySelection([
+      baseRecord({
+        runId: "older",
+        status: "succeeded",
+        startedAt: "2026-07-20T12:00:00.000Z",
+        updatedAt: "2026-07-20T12:01:00.000Z",
+      }),
+      baseRecord({
+        runId: "newer",
+        status: "succeeded",
+        startedAt: "2026-07-20T12:10:00.000Z",
+        updatedAt: "2026-07-20T12:11:00.000Z",
+      }),
+    ]);
+    expect(selected?.runId).toBe("newer");
+  });
+
+  test("returns undefined for empty history", () => {
+    expect(resolveRecoverySelection([])).toBeUndefined();
+  });
+
+  test("tie-breaks equal timestamps with stable runId order", () => {
+    const twinA = baseRecord({
+      runId: "run-aaa",
+      status: "succeeded",
+      startedAt: "2026-07-20T12:00:00.000Z",
+      updatedAt: "2026-07-20T12:00:00.000Z",
+    });
+    const twinB = baseRecord({
+      runId: "run-zzz",
+      status: "succeeded",
+      startedAt: "2026-07-20T12:00:00.000Z",
+      updatedAt: "2026-07-20T12:00:00.000Z",
+    });
+    // Input order reversed across calls must still pick the same record.
+    expect(resolveRecoverySelection([twinA, twinB])?.runId).toBe("run-zzz");
+    expect(resolveRecoverySelection([twinB, twinA])?.runId).toBe("run-zzz");
+  });
+});
+
+describe("resolveOperatorHint", () => {
+  test("uses fixed restart interruption hint", () => {
+    const record = baseRecord({
+      status: "failed",
+      phase: "agent",
+      message: RUN_INTERRUPTED_BY_RESTART_MESSAGE,
+    });
+    expect(isRunInterruptedByRestart(record)).toBe(true);
+    expect(resolveOperatorHint(record)).toMatch(/host restarted/i);
+  });
+
+  test("uses fixed cancellation hint from errorCode", () => {
+    const record = baseRecord({
+      status: "failed",
+      receipt: {
+        runId: "run-1",
+        phase: "agent",
+        issueUrl: "https://github.com/dallascrilley/example/issues/12",
+        execution: {
+          runtime: "demo",
+          software: "demo",
+          provider: "demo",
+          model: "demo",
+        },
+        changedFiles: [],
+        verification: {
+          command: "bun test",
+          exitCode: null,
+          passed: false,
+        },
+        errorCode: "cancelled",
+      },
+    });
+    expect(resolveOperatorHint(record)).toMatch(/Cancelled by operator/i);
+  });
+
+  test("uses fixed authorization hint from errorCode", () => {
+    const record = baseRecord({
+      status: "failed",
+      phase: "intake",
+      receipt: {
+        runId: "run-1",
+        phase: "intake",
+        issueUrl: "https://github.com/dallascrilley/example/issues/12",
+        execution: {
+          runtime: "demo",
+          software: "demo",
+          provider: "demo",
+          model: "demo",
+        },
+        changedFiles: [],
+        verification: {
+          command: "bun test",
+          exitCode: null,
+          passed: false,
+        },
+        errorCode: "not_allowlisted",
+        errorMessage: "secret-looking pipeline detail must not leak into hint",
+      },
+    });
+    const hint = resolveOperatorHint(record);
+    expect(hint).toMatch(/allowlist/i);
+    expect(hint).not.toMatch(/secret-looking/i);
+  });
+
+  test("uses fixed verification hint from verification outcome", () => {
+    const record = baseRecord({
+      status: "failed",
+      phase: "verify",
+      receipt: {
+        runId: "run-1",
+        phase: "verify",
+        issueUrl: "https://github.com/dallascrilley/example/issues/12",
+        execution: {
+          runtime: "demo",
+          software: "demo",
+          provider: "demo",
+          model: "demo",
+        },
+        changedFiles: [],
+        verification: {
+          command: "bun test",
+          exitCode: 2,
+          passed: false,
+        },
+      },
+    });
+    expect(resolveOperatorHint(record)).toMatch(/Verification failed/i);
+  });
+
+  test("preserves durable operatorHint when already set", () => {
+    const record = baseRecord({
+      operatorHint: "re-run required: legacy skill path removed",
+      status: "failed",
+      phase: "agent",
+      message: RUN_INTERRUPTED_BY_RESTART_MESSAGE,
+    });
+    expect(resolveOperatorHint(record)).toBe(
+      "re-run required: legacy skill path removed",
+    );
+  });
+});
+
+describe("resolveOperatorNextAction restart interruption", () => {
+  test("restart interruption offers retry dry-run", () => {
+    const view = resolveOperatorNextAction(
+      baseRecord({
+        status: "failed",
+        phase: "agent",
+        message: RUN_INTERRUPTED_BY_RESTART_MESSAGE,
+      }),
+    );
+    expect(view.headline).toMatch(/Interrupted by service restart/i);
+    expect(view.primary.type).toBe("retry_dry_run");
+  });
+});
+
+describe("buildRunSummary restart interruption", () => {
+  test("summarizes restart interruption", () => {
+    expect(
+      buildRunSummary(
+        baseRecord({
+          status: "failed",
+          phase: "agent",
+          message: RUN_INTERRUPTED_BY_RESTART_MESSAGE,
+        }),
+      ),
+    ).toBe("interrupted by restart");
   });
 });
