@@ -871,8 +871,26 @@ export function hydrateIntakeFromRecord(record: OperatorRunRecord): {
   useRawVerify: boolean;
   timeoutMinutes: number;
   advancedOpen: boolean;
+} {
+  const presetId = (record.request.presetId ?? "").trim();
+  const useRawVerify = !presetId;
+  return {
+    targetInput: targetUrl(record.request),
+    mode: record.request.mode,
+    skillId: record.request.skillId || "fix-review-findings",
+    presetId,
+    verifyCommand: record.request.verifyCommand,
+    useRawVerify,
+    timeoutMinutes: record.request.timeoutMinutes,
+    advancedOpen: record.request.mode === "review" || useRawVerify,
+  };
 }
 
+/**
+ * Deterministic recovery selection for refresh/restart.
+ * Priority: active → restart-interrupted → failed recoverable → latest terminal.
+ * Side-effect free; never starts, cancels, or publishes.
+ */
 export function resolveRecoverySelection(
   records: OperatorRunRecord[],
 ): OperatorRunRecord | undefined {
