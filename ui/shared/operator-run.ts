@@ -121,6 +121,8 @@ export const operatorRunRequestSchema = z
     publishConfirmed: z.boolean().default(false),
     timeoutMinutes: z.number().int().min(1).max(60).default(30),
     fromRunId: z.string().trim().max(64).optional(),
+    /** Advanced path: treat verifyCommand as raw; not persisted on durable records. */
+    useRawVerify: z.boolean().optional(),
   })
   .superRefine((value, context) => {
     if (value.publish && !value.publishConfirmed) {
@@ -218,7 +220,7 @@ export interface OperatorRunReceipt {
 
 export type OperatorStoredRequest = Omit<
   OperatorRunRequest,
-  "publishConfirmed" | "fromRunId"
+  "publishConfirmed" | "fromRunId" | "useRawVerify"
 >;
 
 export interface OperatorRunRecord {
@@ -242,6 +244,8 @@ export interface OperatorRunRecord {
   /** Optional lineage from U4; retention preserves ancestors when present. */
   parentRunId?: string;
   rootRunId?: string;
+  /** Non-secret explanation of how verify preset/command was chosen. */
+  verifySelectionReason?: string;
   startedAt: string;
   updatedAt: string;
 }

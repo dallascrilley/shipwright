@@ -43,7 +43,9 @@ import {
   resolveSkill,
   skillIdFromLegacyPath,
 } from "./skills";
-import { assertSafeVerifyCommand, resolveVerifyPreset } from "./verify-presets";
+import {
+  resolveStartVerifySelection,
+} from "./verify-presets";
 
 type StoredRequest = import("../shared/operator-run").OperatorStoredRequest;
 
@@ -321,17 +323,6 @@ export class OperatorRunRegistry {
       // publishConfirmed enforced by schema when publish true
     }
 
-    // Expand preset / validate raw command
-    let verifyCommand = base.verifyCommand ?? "";
-    let presetId = base.presetId ?? "";
-    if (presetId) {
-      const preset = resolveVerifyPreset(presetId);
-      verifyCommand = preset.command;
-      presetId = preset.id;
-    } else {
-      verifyCommand = assertSafeVerifyCommand(verifyCommand);
-    }
-
     let skillId = base.skillId ?? "";
     const mode =
       base.mode === "review" ? ("review" as const) : ("issue" as const);
@@ -342,6 +333,35 @@ export class OperatorRunRegistry {
     } else {
       skillId = "";
     }
+
+    const url = targetUrl({
+      mode,
+      issueUrl: base.issueUrl ?? "",
+      pullRequestUrl: base.pullRequestUrl ?? "",
+    });
+    let target = parseOperatorTarget(url);
+    if (target) {
+      const resolved = await resolveTarget(url, {}, { includeReviewThreads: false });
+      if (!resolved.allowed) {
+        throw new Error(resolved.denyReason ?? "Target could not be authorized.");
+      }
+      target = {
+        ...target,
+        ...(resolved.title ? { title: resolved.title } : {}),
+      };
+    }
+
+    // Expand preset / validate raw command against the canonical parsed target.
+    const requestedPresetId = (base.presetId ?? "").trim();
+    const selection = resolveStartVerifySelection({
+      owner: target?.owner,
+      repo: target?.repo,
+      requestedPresetId,
+      useRawCommand: Boolean(input.useRawVerify),
+      rawVerifyCommand: base.verifyCommand ?? "",
+    });
+    const verifyCommand = selection.verifyCommand;
+    const presetId = selection.presetId;
 
     const request: StoredRequest = {
       mode,
@@ -354,24 +374,6 @@ export class OperatorRunRegistry {
       timeoutMinutes: base.timeoutMinutes ?? 30,
     };
 
-    const url = targetUrl(request);
-    let target = parseOperatorTarget(url);
-    if (target) {
-      const resolved = await resolveTarget(
-        url,
-        {},
-        { includeReviewThreads: false },
-      );
-      if (!resolved.allowed) {
-        throw new Error(
-          resolved.denyReason ?? "Target could not be authorized.",
-        );
-      }
-      target = {
-        ...target,
-        ...(resolved.title ? { title: resolved.title } : {}),
-      };
-    }
     const record: OperatorRunRecord = {
       runId,
       status: "queued",
@@ -393,6 +395,7 @@ export class OperatorRunRegistry {
           ),
         },
       ],
+      verifySelectionReason: selection.selectionReason,
       ...(target ? { target } : {}),
       startedAt: now,
       updatedAt: now,

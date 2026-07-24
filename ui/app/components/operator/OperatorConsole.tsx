@@ -63,6 +63,21 @@ interface VerifyPreset {
   id: string;
   label: string;
   command: string;
+  repositories?: string[];
+  repositoryGlobs?: string[];
+}
+
+interface VerifyPresetRecommendation {
+  presetId: string;
+  command: string;
+  label: string;
+  selectionReason: string;
+  source: string;
+}
+
+interface VerifyPresetListResponse {
+  presets: VerifyPreset[];
+  recommendation: VerifyPresetRecommendation;
 }
 
 interface OperatorRunListResponse {
@@ -108,7 +123,7 @@ export function OperatorConsole() {
   const [targetInput, setTargetInput] = useState("");
   const [mode, setMode] = useState<"issue" | "review">("issue");
   const [skillId, setSkillId] = useState(DEFAULT_SKILL_ID);
-  const [presetId, setPresetId] = useState("bun-test");
+  const [presetId, setPresetId] = useState("");
   const [verifyCommand, setVerifyCommand] = useState(DEFAULT_VERIFY_COMMAND);
   const [timeoutMinutes, setTimeoutMinutes] = useState(30);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -161,7 +176,10 @@ export function OperatorConsole() {
       },
     },
   );
-  const presetsQuery = useActionQuery("list-verify-presets", {});
+  const presetsQuery = useActionQuery("list-verify-presets", {
+    issueUrl: mode === "issue" ? targetInput.trim() : undefined,
+    pullRequestUrl: mode === "review" ? targetInput.trim() : undefined,
+  });
   const readinessQuery = useActionQuery(
     "get-host-readiness",
     {},
@@ -205,7 +223,16 @@ export function OperatorConsole() {
   const historyEarliest = historyResponse?.earliestRetainedAt;
   const historyNextCursor = historyResponse?.nextCursor;
   const demoMode = historyResponse?.demoMode ?? false;
-  const presets = (presetsQuery.data as VerifyPreset[] | undefined) ?? [];
+  const presetResponse = presetsQuery.data as
+    | VerifyPresetListResponse
+    | VerifyPreset[]
+    | undefined;
+  const presets = Array.isArray(presetResponse)
+    ? presetResponse
+    : (presetResponse?.presets ?? []);
+  const recommendation = Array.isArray(presetResponse)
+    ? undefined
+    : presetResponse?.recommendation;
   const readinessReport = readinessQuery.data as
     | HostReadinessReport
     | undefined;
@@ -243,11 +270,16 @@ export function OperatorConsole() {
   }, [historyStatus, historyMode]);
 
   useEffect(() => {
-    if (!useRawVerify && presetId) {
+    if (useRawVerify) return;
+    if (presetId) {
       const preset = presets.find((entry) => entry.id === presetId);
       if (preset) setVerifyCommand(preset.command);
+      return;
     }
-  }, [presetId, presets, useRawVerify]);
+    if (recommendation?.command) {
+      setVerifyCommand(recommendation.command);
+    }
+  }, [presetId, presets, recommendation, useRawVerify]);
 
   function buildRequest(publish: boolean): OperatorRunRequest | null {
     if (canPreflight && preflightPending) {
@@ -266,6 +298,7 @@ export function OperatorConsole() {
       pullRequestUrl,
       skillId: mode === "review" ? skillId : "",
       presetId: useRawVerify ? "" : presetId,
+      useRawVerify,
       verifyCommand,
       timeoutMinutes,
       publish,
@@ -695,6 +728,11 @@ export function OperatorConsole() {
                 }}
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none"
               >
+                <option value="">
+                  {recommendation
+                    ? `Recommended for this target (${recommendation.label})`
+                    : "Recommended for this target"}
+                </option>
                 {(presets.length
                   ? presets
                   : [
@@ -713,6 +751,14 @@ export function OperatorConsole() {
               <p className="font-mono text-xs text-muted-foreground">
                 {verifyCommand}
               </p>
+              {!useRawVerify && (
+                <p className="text-xs text-muted-foreground">
+                  {presetId
+                    ? `Using operator-selected preset ${presetId}.`
+                    : recommendation?.selectionReason ??
+                      "Server will choose the default verification preset for this target."}
+                </p>
+              )}
             </div>
 
             <details
@@ -1048,6 +1094,11 @@ function RunProgress({
                   {record?.operatorHint && (
                     <p className="mt-1 text-xs text-muted-foreground">
                       {record.operatorHint}
+                    </p>
+                  )}
+                  {record?.verifySelectionReason && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Verify: {record.verifySelectionReason}
                     </p>
                   )}
                   {nextActions.primary.caveat && (
