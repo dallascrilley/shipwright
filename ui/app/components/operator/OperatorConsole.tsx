@@ -665,18 +665,13 @@ export function OperatorConsole() {
               history.map((item) => {
                 const selected = item.runId === runId;
                 return (
-                  <li key={item.runId}>
+                  <li key={item.runId} className="space-y-1">
                     <button
                       type="button"
                       onClick={() => {
                         operatorSelectedRun.current = true;
                         selectHistoryRecord(item.runId);
                       }}
-                      onClick={() => {
-                        operatorSelectedRun.current = true;
-                        selectHistoryRecord(item.runId);
-                      }}
->>>>>>> 39b99d1 (feat(ui): add linked run lineage and history draft replay (td-ba32d0))
                       className={`w-full rounded-md border px-3 py-2 text-left transition ${
                         selected
                           ? "border-primary bg-primary/5"
@@ -701,6 +696,25 @@ export function OperatorConsole() {
                       <span className="mt-1 block font-mono text-[10px] text-muted-foreground/80">
                         {item.runId.slice(0, 10)}
                       </span>
+                      {item.parentRunId ? (
+                        <span className="mt-1 block text-[10px] text-muted-foreground">
+                          From {item.parentRunId.slice(0, 10)}
+                          {item.rootRunId && item.rootRunId !== item.parentRunId
+                            ? ` · root ${item.rootRunId.slice(0, 10)}`
+                            : ""}
+                        </span>
+                      ) : item.rootRunId && item.rootRunId !== item.runId ? (
+                        <span className="mt-1 block text-[10px] text-muted-foreground">
+                          Root {item.rootRunId.slice(0, 10)}
+                        </span>
+                      ) : null}
+                    </button>
+                    <button
+                      type="button"
+                      className="w-full rounded-md border border-dashed border-border px-2 py-1 text-left text-[11px] text-muted-foreground hover:bg-muted/40"
+                      onClick={() => loadHistoryAsDraft(item)}
+                    >
+                      Load as draft
                     </button>
                   </li>
                 );
