@@ -10,7 +10,7 @@ import {
   IconPlayerStop,
   IconTerminal2,
 } from "@tabler/icons-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -29,11 +29,14 @@ import type { HostReadinessReport } from "../../../shared/host-readiness";
 import {
   buildOperatorChangeEvidence,
   detectRunModeFromUrl,
+  isRunInterruptedByRestart,
   isTerminalRun,
   operatorRunRequestSchema,
   phaseIndex,
+  resolveOperatorHint,
   resolveOperatorNextAction,
   resolveOperatorPublishConfirmation,
+  resolveRecoverySelection,
   RUN_PHASES,
   targetUrl,
   type OperatorChangeEvidence,
@@ -142,6 +145,9 @@ export function OperatorConsole() {
     undefined,
   );
   const [historyCursorStack, setHistoryCursorStack] = useState<string[]>([]);
+  const [recoveryDismissed, setRecoveryDismissed] = useState(false);
+  const recoveryBootstrapped = useRef(false);
+  const operatorSelectedRun = useRef(false);
 
   const startRun = useActionMutation("start-shipwright-run");
   const cancelRun = useActionMutation("cancel-shipwright-run");
@@ -248,6 +254,35 @@ export function OperatorConsole() {
     () => (record ? resolveOperatorNextAction(record) : null),
     [record],
   );
+  const recoveryRecord = useMemo(
+    () => resolveRecoverySelection(history),
+    [history],
+  );
+  const showRecoveryStrip = Boolean(
+    recoveryRecord &&
+      record?.runId === recoveryRecord.runId &&
+      !recoveryDismissed &&
+      (!isTerminalRun(recoveryRecord.status) ||
+        isRunInterruptedByRestart(recoveryRecord) ||
+        recoveryRecord.status === "failed"),
+  );
+
+  // Seed selection from recovery only when the operator has not chosen a run.
+  useEffect(() => {
+    if (
+      recoveryBootstrapped.current ||
+      operatorSelectedRun.current ||
+      runId !== null ||
+      history.length === 0
+    ) {
+      return;
+    }
+    const selected = resolveRecoverySelection(history);
+    if (selected) {
+      setRunId(selected.runId);
+    }
+    recoveryBootstrapped.current = true;
+  }, [history, runId]);
 
   useEffect(() => {
     const detected = detectRunModeFromUrl(targetInput);
@@ -319,6 +354,8 @@ export function OperatorConsole() {
     try {
       const started = (await startRun.mutateAsync(input)) as OperatorRunRecord;
       setRunId(started.runId);
+      setRecoveryDismissed(true);
+      operatorSelectedRun.current = true;
       setConfirmOpen(false);
       setPublishSource(null);
       void historyQuery.refetch();
@@ -421,6 +458,8 @@ export function OperatorConsole() {
           timeoutMinutes: record?.request.timeoutMinutes ?? timeoutMinutes,
         })) as OperatorRunRecord;
         setRunId(started.runId);
+      setRecoveryDismissed(true);
+      operatorSelectedRun.current = true;
         void historyQuery.refetch();
       } catch (error) {
         setFormError(
@@ -450,6 +489,8 @@ export function OperatorConsole() {
           timeoutMinutes: publishSource.request.timeoutMinutes,
         })) as OperatorRunRecord;
         setRunId(started.runId);
+      setRecoveryDismissed(true);
+      operatorSelectedRun.current = true;
         setConfirmOpen(false);
         setPublishSource(null);
         void historyQuery.refetch();
@@ -572,7 +613,10 @@ export function OperatorConsole() {
                   <li key={item.runId}>
                     <button
                       type="button"
-                      onClick={() => setRunId(item.runId)}
+                      onClick={() => {
+                        operatorSelectedRun.current = true;
+                        setRunId(item.runId);
+                      }}
                       className={`w-full rounded-md border px-3 py-2 text-left transition ${
                         selected
                           ? "border-primary bg-primary/5"
@@ -874,6 +918,8 @@ export function OperatorConsole() {
           nextActions={nextActions}
           onAction={(action) => void handleNextAction(action)}
           actionPending={startRun.isPending || cancelRun.isPending}
+          showRecoveryStrip={showRecoveryStrip}
+          onDismissRecovery={() => setRecoveryDismissed(true)}
         />
       </div>
 
@@ -1044,12 +1090,16 @@ function RunProgress({
   nextActions,
   onAction,
   actionPending,
+  showRecoveryStrip,
+  onDismissRecovery,
 }: {
   record?: OperatorRunRecord;
   loading: boolean;
   nextActions: OperatorNextActionView | null;
   onAction: (action: OperatorNextAction) => void;
   actionPending: boolean;
+  showRecoveryStrip?: boolean;
+  onDismissRecovery?: () => void;
 }) {
   const visiblePhases = RUN_PHASES.filter((phase) => {
     if (phase === "publish") return Boolean(record?.request.publish);
@@ -1082,6 +1132,40 @@ function RunProgress({
           </div>
         ) : (
           <>
+            {showRecoveryStrip && record ? (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-4 text-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-medium">Recovery</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {!isTerminalRun(record.status)
+                        ? "An active run was restored after refresh."
+                        : isRunInterruptedByRestart(record)
+                          ? "This run was interrupted when the service restarted."
+                          : "Showing the most recent recoverable run."}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Updated {new Date(record.updatedAt).toLocaleString()}
+                      {record.summary ? ` · ${record.summary}` : ""}
+                    </p>
+                    {resolveOperatorHint(record) ? (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {resolveOperatorHint(record)}
+                      </p>
+                    ) : null}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={onDismissRecovery}
+                  >
+                    Dismiss
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
             {nextActions && (
               <div className="space-y-3 rounded-md border border-border bg-muted/20 p-4">
                 <div>
@@ -1091,11 +1175,11 @@ function RunProgress({
                   <p className="mt-1 text-base font-semibold">
                     {nextActions.headline}
                   </p>
-                  {record?.operatorHint && (
+                  {record && resolveOperatorHint(record) ? (
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {record.operatorHint}
+                      {resolveOperatorHint(record)}
                     </p>
-                  )}
+                  ) : null}
                   {record?.verifySelectionReason && (
                     <p className="mt-1 text-xs text-muted-foreground">
                       Verify: {record.verifySelectionReason}
