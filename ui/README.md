@@ -45,7 +45,7 @@ All actions in this section are UI-only and unavailable to the in-app model, MCP
 
 The management console uses the private file-backed transactional control-plane store outside demo mode. Demo mode intentionally uses the process-local adapter so local UI demonstrations never mutate host state.
 
-Dry-run success offers **Start publish run (same inputs)** — a new publish run that reruns the agent (not an in-place promote). Demo mode refuses publish with a friendly error after confirm.
+Dry-run success offers **Start publish run (same inputs)** — a new publish run that reruns the agent (not an in-place promote). Demo mode refuses publish with a friendly error after confirm. When that CTA opens from a prior run, the confirmation sheet shows a bounded, redacted change-evidence card (verification result, changed-file names, pinned/commit SHAs, PR URL when present) derived only from durable receipt fields. Direct publish from new intake has no invented prior evidence.
 
 ## Phase 2 control-plane and queue foundation
 

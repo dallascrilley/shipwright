@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   appendOperatorRunEvent,
+  buildOperatorChangeEvidence,
   buildRunSummary,
   decodeRunListCursor,
   detectRunModeFromUrl,
@@ -9,6 +10,7 @@ import {
   encodeRunListCursor,
   matchesOperatorRunListFilters,
   operatorRunListRequestSchema,
+  OPERATOR_CHANGE_EVIDENCE_FILE_LIMIT,
   operatorRunRequestSchema,
   paginateOperatorRuns,
   parseOperatorTarget,
@@ -701,5 +703,163 @@ describe("operator run history list", () => {
     const ids = new Set(kept.map((r) => r.runId));
     expect(ids.has("sel")).toBe(true);
     expect(ids.has("root")).toBe(true);
+  });
+});
+
+
+describe("buildOperatorChangeEvidence", () => {
+  const receiptBase = {
+    runId: "run-1",
+    phase: "complete" as const,
+    issueUrl: "https://github.com/dallascrilley/example/issues/12",
+    execution: {
+      runtime: "demo",
+      software: "demo",
+      provider: "demo",
+      model: "demo",
+    } as const,
+    changedFiles: ["src/a.ts", "src/b.ts"],
+    verification: { command: "bun test", exitCode: 0, passed: true },
+    baseSha: "abcdef1234567890",
+    commitSha: "1234567890abcdef",
+    branch: "shipwright/issue-12",
+  };
+
+  test("returns null without a durable receipt", () => {
+    expect(buildOperatorChangeEvidence(baseRecord({ receipt: undefined }))).toBeNull();
+    expect(buildOperatorChangeEvidence(null)).toBeNull();
+  });
+
+  test("projects safe dry-run success fields", () => {
+    const evidence = buildOperatorChangeEvidence(
+      baseRecord({
+        durationMs: 120000,
+        finishedAt: "2026-07-20T12:02:00.000Z",
+        receipt: receiptBase,
+      }),
+    );
+    expect(evidence).toMatchObject({
+      sourceRunId: "run-1",
+      target: "https://github.com/dallascrilley/example/issues/12",
+      mode: "issue",
+      publish: false,
+      startedAt: "2026-07-20T12:00:00.000Z",
+      finishedAt: "2026-07-20T12:02:00.000Z",
+      durationMs: 120000,
+      verification: { command: "bun test", passed: true, exitCode: 0 },
+      changedFileCount: 2,
+      changedFiles: ["src/a.ts", "src/b.ts"],
+      changedFilesTruncated: false,
+      baseSha: "abcdef1234567890",
+      commitSha: "1234567890abcdef",
+      branch: "shipwright/issue-12",
+    });
+  });
+
+  test("confirmation projection uses the prior record only", () => {
+    const selectedRun = baseRecord({
+      runId: "run-prior",
+      receipt: {
+        ...receiptBase,
+        runId: "run-prior",
+        changedFiles: ["src/from-prior.ts"],
+        verification: { command: "bun test", exitCode: 0, passed: true },
+      },
+    });
+    const confirmation = resolveOperatorPublishConfirmation(selectedRun, {
+      ...baseRecord().request,
+      issueUrl: "https://github.com/dallascrilley/example/issues/999",
+      verifyCommand: "bun run verify",
+    });
+    const evidence = buildOperatorChangeEvidence(selectedRun);
+    expect(confirmation.sourceRunId).toBe("run-prior");
+    expect(confirmation.target).toBe(
+      "https://github.com/dallascrilley/example/issues/12",
+    );
+    expect(evidence?.sourceRunId).toBe("run-prior");
+    expect(evidence?.changedFiles).toEqual(["src/from-prior.ts"]);
+    expect(evidence?.target).not.toContain("issues/999");
+  });
+
+  test("supports failed dry runs without inventing publish artifacts", () => {
+    const evidence = buildOperatorChangeEvidence(
+      baseRecord({
+        status: "failed",
+        phase: "verify",
+        receipt: {
+          ...receiptBase,
+          phase: "verify",
+          verification: { command: "bun test", exitCode: 1, passed: false },
+          commitSha: undefined,
+          pullRequestUrl: undefined,
+        },
+      }),
+    );
+    expect(evidence?.verification.passed).toBe(false);
+    expect(evidence?.commitSha).toBeUndefined();
+    expect(evidence?.pullRequestUrl).toBeUndefined();
+  });
+
+  test("includes PR URL for published prior runs", () => {
+    const evidence = buildOperatorChangeEvidence(
+      baseRecord({
+        request: { ...baseRecord().request, publish: true },
+        receipt: {
+          ...receiptBase,
+          pullRequestUrl: "https://github.com/dallascrilley/example/pull/9",
+        },
+      }),
+    );
+    expect(evidence?.publish).toBe(true);
+    expect(evidence?.pullRequestUrl).toBe(
+      "https://github.com/dallascrilley/example/pull/9",
+    );
+  });
+
+  
+  test("collapses absolute host paths to basename only", () => {
+    const evidence = buildOperatorChangeEvidence(
+      baseRecord({
+        receipt: {
+          ...receiptBase,
+          changedFiles: [
+            "/Users/dallascrilley/Code/shipwright/src/ops/run.ts",
+            "C:\\Users\\dallascrilley\\repo\\pkg\\main.ts",
+            "src/relative/keep.ts",
+          ],
+        },
+      }),
+    );
+    expect(evidence?.changedFiles).toEqual([
+      "run.ts",
+      "main.ts",
+      "src/relative/keep.ts",
+    ]);
+    expect(evidence?.changedFiles.join(" ")).not.toContain("Users");
+    expect(evidence?.changedFiles.join(" ")).not.toContain("dallascrilley");
+  });
+
+test("redacts secret-like path segments and truncates file lists", () => {
+    const files = Array.from({ length: OPERATOR_CHANGE_EVIDENCE_FILE_LIMIT + 3 }, (_, i) => {
+      if (i === 0) return "src/tokens/github_pat_abcdefghijklmnopqrstuvwxyz0123456789.ts";
+      return `src/file-${i}.ts`;
+    });
+    const evidence = buildOperatorChangeEvidence(
+      baseRecord({
+        receipt: {
+          ...receiptBase,
+          changedFiles: files,
+          pullRequestUrl:
+            "https://x-access-token:github_pat_abcdefghijklmnopqrstuvwxyz0123456789@github.com/dallascrilley/example/pull/9",
+        },
+      }),
+    );
+    expect(evidence?.changedFileCount).toBe(files.length);
+    expect(evidence?.changedFiles).toHaveLength(OPERATOR_CHANGE_EVIDENCE_FILE_LIMIT);
+    expect(evidence?.changedFilesTruncated).toBe(true);
+    expect(evidence?.changedFiles[0]).toContain("[REDACTED]");
+    expect(evidence?.changedFiles[0]).not.toContain("github_pat_");
+    expect(evidence?.pullRequestUrl).toContain("[REDACTED]");
+    expect(evidence?.pullRequestUrl).not.toContain("github_pat_");
   });
 });

@@ -27,6 +27,7 @@ import {
 
 import type { HostReadinessReport } from "../../../shared/host-readiness";
 import {
+  buildOperatorChangeEvidence,
   detectRunModeFromUrl,
   isTerminalRun,
   operatorRunRequestSchema,
@@ -35,6 +36,7 @@ import {
   resolveOperatorPublishConfirmation,
   RUN_PHASES,
   targetUrl,
+  type OperatorChangeEvidence,
   type OperatorNextAction,
   type OperatorNextActionView,
   type OperatorRunRecord,
@@ -442,6 +444,7 @@ export function OperatorConsole() {
   const confirmMode = confirmation.mode;
   const confirmSkillId = confirmation.skillId;
   const pinnedSha = confirmation.pinnedSha;
+  const changeEvidence = buildOperatorChangeEvidence(publishSource);
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-6 lg:px-8 lg:py-10">
@@ -864,6 +867,9 @@ export function OperatorConsole() {
               </p>
             )}
           </div>
+          {changeEvidence ? (
+            <ChangeEvidenceCard evidence={changeEvidence} />
+          ) : null}
           <SheetFooter>
             <Button
               variant="outline"
@@ -884,6 +890,104 @@ export function OperatorConsole() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
+    </div>
+  );
+}
+
+
+function formatEvidenceSha(value: string | undefined): string {
+  if (!value) return "";
+  return value.length > 10 ? value.slice(0, 10) : value;
+}
+
+function formatEvidenceDuration(ms: number | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return "";
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return sec ? `${min}m ${sec}s` : `${min}m`;
+}
+
+function ChangeEvidenceCard({ evidence }: { evidence: OperatorChangeEvidence }) {
+  const duration = formatEvidenceDuration(evidence.durationMs);
+  return (
+    <div className="mb-6 space-y-3 rounded-md border border-border p-4 text-sm">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Prior dry-run evidence
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          From run {evidence.sourceRunId}
+          {` · started ${new Date(evidence.startedAt).toLocaleString()}`}
+          {duration ? ` · ${duration}` : ""}
+          {evidence.finishedAt
+            ? ` · finished ${new Date(evidence.finishedAt).toLocaleString()}`
+            : ""}
+          . Publication starts a new run and re-verifies; it does not promote this
+          workspace.
+        </p>
+      </div>
+      <dl className="grid gap-2 sm:grid-cols-2">
+        <div>
+          <dt className="text-xs text-muted-foreground">Verification</dt>
+          <dd className="font-medium">
+            {evidence.verification.passed
+              ? "Passed"
+              : evidence.verification.exitCode == null
+                ? "Pending"
+                : `Failed (exit ${evidence.verification.exitCode})`}
+          </dd>
+          <dd className="font-mono text-xs text-muted-foreground break-all">
+            {evidence.verification.command}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Changed files</dt>
+          <dd className="font-medium">{evidence.changedFileCount}</dd>
+        </div>
+        {evidence.baseSha ? (
+          <div>
+            <dt className="text-xs text-muted-foreground">Pinned head</dt>
+            <dd className="font-mono text-xs">{formatEvidenceSha(evidence.baseSha)}</dd>
+          </div>
+        ) : null}
+        {evidence.commitSha ? (
+          <div>
+            <dt className="text-xs text-muted-foreground">Commit</dt>
+            <dd className="font-mono text-xs">{formatEvidenceSha(evidence.commitSha)}</dd>
+          </div>
+        ) : null}
+        {evidence.branch ? (
+          <div className="sm:col-span-2">
+            <dt className="text-xs text-muted-foreground">Branch</dt>
+            <dd className="font-mono text-xs break-all">{evidence.branch}</dd>
+          </div>
+        ) : null}
+        {evidence.pullRequestUrl ? (
+          <div className="sm:col-span-2">
+            <dt className="text-xs text-muted-foreground">Prior pull request</dt>
+            <dd className="font-mono text-xs break-all">{evidence.pullRequestUrl}</dd>
+          </div>
+        ) : null}
+      </dl>
+      {evidence.changedFiles.length > 0 ? (
+        <div>
+          <p className="mb-1 text-xs text-muted-foreground">
+            Files
+            {evidence.changedFilesTruncated
+              ? ` (first ${evidence.changedFiles.length} of ${evidence.changedFileCount})`
+              : ""}
+          </p>
+          <ul className="max-h-36 space-y-1 overflow-auto font-mono text-xs">
+            {evidence.changedFiles.map((file) => (
+              <li key={file} className="break-all">
+                {file}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }
