@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { RunExecution } from "../../src/pipeline/receipt";
+import { redactSecrets } from "../../src/pipeline/secret-safety";
 
 export const RUN_PHASES = [
   "intake",
@@ -584,6 +585,93 @@ export interface OperatorPublishConfirmation {
   mode: OperatorRunKind;
   skillId: string;
   pinnedSha?: string;
+}
+
+
+export const OPERATOR_CHANGE_EVIDENCE_FILE_LIMIT = 10;
+
+export interface OperatorChangeEvidence {
+  sourceRunId: string;
+  target: string;
+  mode: OperatorRunKind;
+  startedAt: string;
+  finishedAt?: string;
+  durationMs?: number;
+  publish: boolean;
+  verification: {
+    command: string;
+    passed: boolean;
+    exitCode: number | null;
+  };
+  changedFileCount: number;
+  changedFiles: string[];
+  changedFilesTruncated: boolean;
+  baseSha?: string;
+  commitSha?: string;
+  branch?: string;
+  pullRequestUrl?: string;
+}
+
+function basenamePreservingPath(value: string): string {
+  const normalized = value.replace(/\\/g, "/").trim();
+  if (!normalized) return "";
+  const isAbsolute =
+    normalized.startsWith("/") ||
+    /^[A-Za-z]:[\\/]/.test(value) ||
+    normalized.startsWith("//");
+  const redacted = redactSecrets(normalized).trim();
+  if (!redacted) return "";
+  const parts = redacted
+    .replace(/^[A-Za-z]:\//, "")
+    .replace(/^\/+/, "")
+    .split("/")
+    .filter((part) => part && part !== "." && part !== "..");
+  if (parts.length === 0) return "";
+  // Absolute host paths must not leak directory layout; keep basename only.
+  if (isAbsolute) {
+    return parts[parts.length - 1]!;
+  }
+  return parts.join("/");
+}
+
+/**
+ * Pure pre-publish evidence projection from a durable prior run.
+ * Returns null when no receipt exists so intake-only publish never invents evidence.
+ */
+export function buildOperatorChangeEvidence(
+  record: OperatorRunRecord | null | undefined,
+): OperatorChangeEvidence | null {
+  if (!record?.receipt) return null;
+  const receipt = record.receipt;
+  const rawFiles = Array.isArray(receipt.changedFiles) ? receipt.changedFiles : [];
+  const normalized = rawFiles
+    .map((file) => basenamePreservingPath(String(file)))
+    .filter(Boolean);
+  const changedFiles = normalized.slice(0, OPERATOR_CHANGE_EVIDENCE_FILE_LIMIT);
+  const verificationCommand = redactSecrets(receipt.verification.command);
+  return {
+    sourceRunId: record.runId,
+    target: record.target?.url ?? targetUrl(record.request),
+    mode: record.kind,
+    startedAt: record.startedAt,
+    ...(record.finishedAt ? { finishedAt: record.finishedAt } : {}),
+    ...(typeof record.durationMs === "number" ? { durationMs: record.durationMs } : {}),
+    publish: Boolean(record.request.publish),
+    verification: {
+      command: verificationCommand,
+      passed: Boolean(receipt.verification.passed),
+      exitCode: receipt.verification.exitCode,
+    },
+    changedFileCount: normalized.length,
+    changedFiles,
+    changedFilesTruncated: normalized.length > changedFiles.length,
+    ...(receipt.baseSha ? { baseSha: receipt.baseSha } : {}),
+    ...(receipt.commitSha ? { commitSha: receipt.commitSha } : {}),
+    ...(receipt.branch ? { branch: redactSecrets(receipt.branch) } : {}),
+    ...(receipt.pullRequestUrl
+      ? { pullRequestUrl: redactSecrets(receipt.pullRequestUrl) }
+      : {}),
+  };
 }
 
 export function resolveOperatorPublishConfirmation(
