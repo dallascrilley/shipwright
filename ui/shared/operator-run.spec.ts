@@ -24,6 +24,9 @@ import {
   resolveRecoverySelection,
   RUN_INTERRUPTED_BY_RESTART_MESSAGE,
   type OperatorRunRecord,
+  hydrateIntakeFromRecord,
+  resolveOperatorRunLineage,
+  MAX_LINEAGE_DEPTH,
 } from "./operator-run";
 
 const validInput = {
@@ -1120,5 +1123,148 @@ describe("buildRunSummary restart interruption", () => {
         }),
       ),
     ).toBe("interrupted by restart");
+  });
+});
+
+describe("resolveOperatorRunLineage", () => {
+  test("fresh root has self root and empty ancestors", () => {
+    const root = baseRecord({ runId: "root", rootRunId: "root" });
+    const lineage = resolveOperatorRunLineage(root, [root]);
+    expect(lineage).toMatchObject({
+      runId: "root",
+      rootRunId: "root",
+      ancestors: [],
+      truncated: false,
+    });
+    expect(lineage.parentRunId).toBeUndefined();
+  });
+
+  test("dry→retry→publish chain walks parent links", () => {
+    const dry = baseRecord({
+      runId: "dry",
+      rootRunId: "dry",
+      startedAt: "2026-07-20T12:00:00.000Z",
+    });
+    const retry = baseRecord({
+      runId: "retry",
+      parentRunId: "dry",
+      rootRunId: "dry",
+      startedAt: "2026-07-20T12:05:00.000Z",
+    });
+    const publish = baseRecord({
+      runId: "publish",
+      parentRunId: "retry",
+      rootRunId: "dry",
+      request: {
+        ...baseRecord().request,
+        publish: true,
+      },
+      startedAt: "2026-07-20T12:10:00.000Z",
+    });
+    const lineage = resolveOperatorRunLineage(publish, [dry, retry, publish]);
+    expect(lineage.parentRunId).toBe("retry");
+    expect(lineage.rootRunId).toBe("dry");
+    expect(lineage.ancestors.map((entry) => entry.runId)).toEqual([
+      "retry",
+      "dry",
+    ]);
+    expect(lineage.truncated).toBe(false);
+  });
+
+  test("tolerates missing parent without inventing links", () => {
+    const orphan = baseRecord({
+      runId: "child",
+      parentRunId: "gone",
+      rootRunId: "gone",
+    });
+    const lineage = resolveOperatorRunLineage(orphan, [orphan]);
+    expect(lineage.ancestors).toEqual([{ runId: "gone", missing: true }]);
+    expect(lineage.truncated).toBe(true);
+  });
+
+  test("guards against cycles", () => {
+    const a = baseRecord({
+      runId: "a",
+      parentRunId: "b",
+      rootRunId: "a",
+    });
+    const b = baseRecord({
+      runId: "b",
+      parentRunId: "a",
+      rootRunId: "a",
+    });
+    const lineage = resolveOperatorRunLineage(a, [a, b]);
+    expect(lineage.ancestors.map((entry) => entry.runId)).toEqual(["b"]);
+    expect(lineage.truncated).toBe(true);
+  });
+
+  test("legacy records without lineage stay standalone", () => {
+    const legacy = baseRecord({ runId: "legacy" });
+    const lineage = resolveOperatorRunLineage(legacy, [legacy]);
+    expect(lineage.parentRunId).toBeUndefined();
+    expect(lineage.rootRunId).toBe("legacy");
+    expect(lineage.ancestors).toEqual([]);
+    expect(lineage.truncated).toBe(false);
+  });
+
+  test("depth cutoff marks lineage truncated", () => {
+    const records: OperatorRunRecord[] = [];
+    for (let i = 0; i <= MAX_LINEAGE_DEPTH + 2; i += 1) {
+      const runId = `n${i}`;
+      records.push(
+        baseRecord({
+          runId,
+          parentRunId: i === 0 ? undefined : `n${i - 1}`,
+          rootRunId: "n0",
+        }),
+      );
+    }
+    const leaf = records[records.length - 1]!;
+    const lineage = resolveOperatorRunLineage(leaf, records);
+    expect(lineage.ancestors.length).toBe(MAX_LINEAGE_DEPTH);
+    expect(lineage.truncated).toBe(true);
+  });
+});
+
+describe("hydrateIntakeFromRecord", () => {
+  test("hydrates mode target skill preset raw verify and timeout without publish", () => {
+    const record = baseRecord({
+      runId: "hist-1",
+      request: {
+        mode: "review",
+        issueUrl: "",
+        pullRequestUrl: "https://github.com/dallascrilley/example/pull/9",
+        skillId: "fix-review-findings",
+        presetId: "",
+        verifyCommand: "bun run verify",
+        publish: true,
+        timeoutMinutes: 45,
+      },
+    });
+    const draft = hydrateIntakeFromRecord(record);
+    expect(draft).toEqual({
+      targetInput: "https://github.com/dallascrilley/example/pull/9",
+      mode: "review",
+      skillId: "fix-review-findings",
+      presetId: "",
+      verifyCommand: "bun run verify",
+      useRawVerify: true,
+      timeoutMinutes: 45,
+      advancedOpen: true,
+    });
+  });
+
+  test("preset path keeps raw verify off", () => {
+    const draft = hydrateIntakeFromRecord(
+      baseRecord({
+        request: {
+          ...baseRecord().request,
+          presetId: "bun-test",
+          verifyCommand: "bun test",
+        },
+      }),
+    );
+    expect(draft.useRawVerify).toBe(false);
+    expect(draft.presetId).toBe("bun-test");
   });
 });

@@ -827,4 +827,48 @@ describe("OperatorRunRegistry", () => {
     }
   });
 
+
+  test("persists parent and root lineage on fromRunId chains", async () => {
+    const registry = new OperatorRunRegistry(
+      async () => completeReceipt,
+      (() => {
+        let n = 0;
+        return () => `run-${++n}`;
+      })(),
+    );
+    const fresh = await registry.start(request);
+    await flushMicrotasks();
+    expect(fresh.rootRunId).toBe("run-1");
+    expect(fresh.parentRunId).toBeUndefined();
+    expect(registry.get("run-1")?.rootRunId).toBe("run-1");
+
+    await registry.start({
+      fromRunId: "run-1",
+      verifyCommand: "bun test",
+      publish: false,
+      publishConfirmed: false,
+      timeoutMinutes: 30,
+    } as any);
+    await flushMicrotasks();
+    const retry = registry.get("run-2");
+    expect(retry).toMatchObject({
+      parentRunId: "run-1",
+      rootRunId: "run-1",
+    });
+
+    await registry.start({
+      fromRunId: "run-2",
+      verifyCommand: "bun test",
+      publish: true,
+      publishConfirmed: true,
+      timeoutMinutes: 30,
+    } as any);
+    await flushMicrotasks();
+    const publish = registry.get("run-3");
+    expect(publish).toMatchObject({
+      parentRunId: "run-2",
+      rootRunId: "run-1",
+      request: expect.objectContaining({ publish: true }),
+    });
+  });
 });
