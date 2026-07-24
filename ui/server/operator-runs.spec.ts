@@ -26,6 +26,7 @@ const request = {
   timeoutMinutes: 30,
   skillPath: undefined,
   fromRunId: undefined,
+  useRawVerify: false,
 };
 
 const completeReceipt: RunReceipt = {
@@ -431,6 +432,7 @@ describe("OperatorRunRegistry", () => {
         fromRunId: "run-1",
         presetId: "",
         verifyCommand: "bun run verify",
+        useRawVerify: true,
         publish: false,
         publishConfirmed: false,
         timeoutMinutes: 30,
@@ -783,4 +785,46 @@ describe("OperatorRunRegistry", () => {
 
     rmSync(dir, { recursive: true, force: true });
   });
+
+  test("persists target-aware verify selection reason on start", async () => {
+    const previous = process.env.SHIPWRIGHT_VERIFY_PRESETS_JSON;
+    process.env.SHIPWRIGHT_VERIFY_PRESETS_JSON = JSON.stringify([
+      {
+        id: "exact-preset",
+        label: "exact",
+        command: "bun test exact",
+        repositories: ["dallascrilley/example"],
+      },
+    ]);
+    try {
+      const { resetVerifyPresetCache } = await import("./verify-presets");
+      resetVerifyPresetCache();
+      const registry = new OperatorRunRegistry(
+        async () => completeReceipt,
+        () => "preset-audit-1",
+      );
+      // empty presetId triggers target-aware recommendation
+      const started = await registry.start({
+        ...request,
+        presetId: "",
+        verifyCommand: "bun test",
+        useRawVerify: false,
+      });
+      await flushMicrotasks();
+      const record = registry.get("preset-audit-1");
+      expect(record?.request.presetId).toBe("exact-preset");
+      expect(record?.request.verifyCommand).toBe("bun test exact");
+      expect(record?.verifySelectionReason).toMatch(/Exact repository match/i);
+      expect(started.verifySelectionReason).toMatch(/Exact repository match/i);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.SHIPWRIGHT_VERIFY_PRESETS_JSON;
+      } else {
+        process.env.SHIPWRIGHT_VERIFY_PRESETS_JSON = previous;
+      }
+      const { resetVerifyPresetCache } = await import("./verify-presets");
+      resetVerifyPresetCache();
+    }
+  });
+
 });
