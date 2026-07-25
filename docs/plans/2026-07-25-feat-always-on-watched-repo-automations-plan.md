@@ -29,7 +29,7 @@ After this work, an operator can:
 - [x] (2026-07-25) Import epic td-a4dc59 with U1-U6
 - [x] (2026-07-25) U1 runbook written (`docs/runbooks/always-on-activation.md`); remote pin dry-run proof still open
 - [x] (2026-07-25) U2 action presets landed on `feat/action-presets` (td-3bd33e); review/merge pending
-- [ ] U3 Template agents
+- [x] U3 Template agents (PR #76)
 - [ ] U4 Publish-stage security criteria + selective `publish_allowed`
 - [ ] U5 Fleet-watch decommission for one covered repo
 - [ ] U6 End-to-end remote + browser proof
