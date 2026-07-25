@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/sheet";
 
 import type {
+  ActionPreset,
   AgentDraft,
   AgentDefinition,
   AgentTrigger,
@@ -42,9 +43,11 @@ import type {
   GithubTriggerConditionInput,
 } from "../../../shared/agent-definition";
 import {
+  ACTION_PRESET_CHOICES,
   GITHUB_TRIGGER_CONDITION_CATALOG,
   GITHUB_TRIGGER_CONDITION_LIMITS,
   GITHUB_TRIGGER_CHOICES,
+  defaultSkillIdForActionPreset,
   type GithubTriggerChoiceId,
 } from "../../../shared/agent-definition";
 import type {
@@ -64,7 +67,8 @@ import {
 const DEFAULT_DRAFT: AgentDraft = {
   name: "",
   instructions: "",
-  skillId: "fix-review-findings",
+  actionPreset: "fix_issue",
+  skillId: "",
   allowedTools: ["github", "terminal"],
   targetScope: { repository: "", branch: "main" },
   verification: { presetId: "bun-test" },
@@ -75,6 +79,7 @@ const DEFAULT_DRAFT: AgentDraft = {
 type DraftForm = {
   name: string;
   instructions: string;
+  actionPreset: ActionPreset;
   skillId: string;
   allowedTools: string;
   repository: string;
@@ -126,6 +131,7 @@ function toDraftForm(draft: AgentDraft): DraftForm {
   return {
     name: draft.name,
     instructions: draft.instructions,
+    actionPreset: draft.actionPreset,
     skillId: draft.skillId,
     allowedTools: draft.allowedTools.join(", "),
     repository: draft.targetScope.repository,
@@ -137,6 +143,21 @@ function toDraftForm(draft: AgentDraft): DraftForm {
   };
 }
 
+function applyActionPresetChange(
+  form: DraftForm,
+  nextPreset: ActionPreset,
+): DraftForm {
+  const previousDefault = defaultSkillIdForActionPreset(form.actionPreset);
+  const nextDefault = defaultSkillIdForActionPreset(nextPreset);
+  const shouldUpdateSkill =
+    !form.skillId.trim() || form.skillId === previousDefault;
+  return {
+    ...form,
+    actionPreset: nextPreset,
+    skillId: shouldUpdateSkill ? nextDefault : form.skillId,
+  };
+}
+
 function toDraft(form: DraftForm): AgentDraft {
   const allowedTools = form.allowedTools
     .split(",")
@@ -145,6 +166,7 @@ function toDraft(form: DraftForm): AgentDraft {
   return {
     name: form.name,
     instructions: form.instructions,
+    actionPreset: form.actionPreset,
     skillId: form.skillId,
     allowedTools,
     targetScope: {
@@ -1501,15 +1523,41 @@ function DraftFields({
             required
           />
         </Field>
-        <Field label="Skill ID">
-          <Input
-            value={form.skillId}
+        <Field label="Action preset">
+          <select
+            value={form.actionPreset}
             disabled={disabled}
-            onChange={(event) => update("skillId", event.target.value)}
-            required
-          />
+            onChange={(event) =>
+              onChange(
+                applyActionPresetChange(
+                  form,
+                  event.target.value as ActionPreset,
+                ),
+              )
+            }
+            className="input-shell"
+          >
+            {ACTION_PRESET_CHOICES.map((choice) => (
+              <option key={choice.id} value={choice.id}>
+                {choice.label}
+              </option>
+            ))}
+          </select>
         </Field>
       </div>
+      <Field label="Skill ID">
+        <Input
+          value={form.skillId}
+          disabled={disabled}
+          onChange={(event) => update("skillId", event.target.value)}
+          placeholder={
+            form.actionPreset === "fix_issue"
+              ? "Leave empty for issue mode"
+              : "fix-review-findings"
+          }
+          required={form.actionPreset === "resolve_pr_feedback"}
+        />
+      </Field>
       <Field label="Instructions">
         <textarea
           value={form.instructions}

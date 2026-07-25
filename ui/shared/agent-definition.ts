@@ -45,11 +45,53 @@ export const publicationPolicySchema = z.enum([
   "publish_allowed",
 ]);
 
-export const agentDraftSchema = z
+export const ACTION_PRESET_CHOICES = [
+  { id: "fix_issue", label: "Fix issue" },
+  { id: "resolve_pr_feedback", label: "Resolve PR feedback" },
+] as const;
+
+export type ActionPreset = (typeof ACTION_PRESET_CHOICES)[number]["id"];
+
+export const actionPresetSchema = z.enum(["fix_issue", "resolve_pr_feedback"]);
+
+const skillIdSchema = z.union([z.literal(""), identifierSchema]);
+
+export function defaultSkillIdForActionPreset(preset: ActionPreset): string {
+  return preset === "resolve_pr_feedback" ? "fix-review-findings" : "";
+}
+
+export function inferActionPresetFromLegacyDraft(
+  input: Record<string, unknown>,
+  triggers?: readonly { kind: string; config?: unknown }[],
+): ActionPreset {
+  const skillId = typeof input.skillId === "string" ? input.skillId.trim() : "";
+  const githubTriggers =
+    triggers?.filter((trigger) => trigger.kind === "github") ?? [];
+
+  if (githubTriggers.length > 0) {
+    let hasIssues = false;
+    let hasPullRequest = false;
+    for (const trigger of githubTriggers) {
+      const config = trigger.config;
+      if (!config || typeof config !== "object") continue;
+      const event = (config as { event?: unknown }).event;
+      if (event === "issues") hasIssues = true;
+      if (event === "pull_request") hasPullRequest = true;
+    }
+    if (hasIssues && !hasPullRequest) return "fix_issue";
+    if (hasPullRequest && !hasIssues) return "resolve_pr_feedback";
+  }
+
+  if (skillId === "fix-review-findings") return "resolve_pr_feedback";
+  return "fix_issue";
+}
+
+const agentDraftObjectSchema = z
   .object({
     name: safeText(120),
     instructions: safeText(12_000),
-    skillId: identifierSchema,
+    skillId: skillIdSchema,
+    actionPreset: actionPresetSchema,
     allowedTools: z.array(identifierSchema).min(1).max(32),
     targetScope: z
       .object({
@@ -66,7 +108,27 @@ export const agentDraftSchema = z
     failureThreshold: z.number().int().min(1).max(100).optional(),
     cancelInFlight: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.actionPreset === "resolve_pr_feedback" && !value.skillId) {
+      context.addIssue({
+        code: "custom",
+        path: ["skillId"],
+        message: "Resolve PR feedback requires a review skillId.",
+      });
+    }
+  });
+
+export const agentDraftSchema = z.preprocess((input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return input;
+  }
+  const record = { ...(input as Record<string, unknown>) };
+  if (record.actionPreset === undefined) {
+    record.actionPreset = inferActionPresetFromLegacyDraft(record);
+  }
+  return record;
+}, agentDraftObjectSchema);
 
 export type AgentDraft = z.output<typeof agentDraftSchema>;
 export type AgentDraftInput = z.input<typeof agentDraftSchema>;
@@ -269,6 +331,52 @@ export function findGithubTriggerChoice(
     (choice) =>
       choice.event === config.event && choice.action === config.actions[0],
   );
+}
+
+export function githubEventAllowedForActionPreset(
+  preset: ActionPreset,
+  event: "issues" | "pull_request",
+): boolean {
+  return preset === "fix_issue" ? event === "issues" : event === "pull_request";
+}
+
+export function githubTriggerConfigAllowedForActionPreset(
+  preset: ActionPreset,
+  config: GithubTriggerConfig,
+): boolean {
+  return githubEventAllowedForActionPreset(preset, config.event);
+}
+
+export function validateActionPresetGithubTriggerConsistency(
+  preset: ActionPreset,
+  config: GithubTriggerConfig,
+): string | undefined {
+  if (githubTriggerConfigAllowedForActionPreset(preset, config)) {
+    return undefined;
+  }
+  const choice = findGithubTriggerChoice(config);
+  const triggerLabel =
+    choice?.label ?? `${config.event}.${config.actions.join("/")}`;
+  const expected =
+    preset === "fix_issue"
+      ? "issue triggers (created or edited)"
+      : "pull request triggers (opened or synchronize)";
+  return `Action preset "${preset}" cannot use ${triggerLabel}. Use ${expected}.`;
+}
+
+export function validateActionPresetAgainstAgentTriggers(
+  preset: ActionPreset,
+  triggers: readonly Pick<AgentTrigger, "kind" | "config">[],
+): string | undefined {
+  for (const trigger of triggers) {
+    if (trigger.kind !== "github") continue;
+    const message = validateActionPresetGithubTriggerConsistency(
+      preset,
+      trigger.config as GithubTriggerConfig,
+    );
+    if (message) return message;
+  }
+  return undefined;
 }
 
 export const curatedGithubTriggerConfigSchema =

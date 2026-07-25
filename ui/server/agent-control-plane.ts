@@ -18,11 +18,15 @@ import {
   curatedGithubTriggerConfigSchema,
   lifecycleEventSchema,
   type AgentControlPlaneSnapshot,
+  validateActionPresetAgainstAgentTriggers,
+  validateActionPresetGithubTriggerConsistency,
   type AgentDefinition,
+  type AgentDraft,
   type AgentDraftInput,
   type AgentRevision,
   type AgentTrigger,
   type AgentTriggerInput,
+  type GithubTriggerConfig,
   type LifecycleEvent,
   type QueueEntry,
 } from "../shared/agent-definition";
@@ -182,6 +186,7 @@ export class AgentControlPlane {
     return this.store.transaction((snapshot) => {
       const agent = this.requireAgent(snapshot, agentId);
       this.assertRevision(agent, expectedRevision);
+      this.assertDraftTriggerConsistency(snapshot, agent.agentId, draft);
       const previous = this.requireRevision(
         snapshot,
         agent.agentId,
@@ -403,6 +408,38 @@ export class AgentControlPlane {
     );
   }
 
+  private assertDraftTriggerConsistency(
+    snapshot: AgentControlPlaneSnapshot,
+    agentId: string,
+    draft: AgentDraft,
+  ): void {
+    const triggers = snapshot.triggers.filter(
+      (trigger) => trigger.agentId === agentId,
+    );
+    const message = validateActionPresetAgainstAgentTriggers(
+      draft.actionPreset,
+      triggers,
+    );
+    if (message) throw new Error(message);
+  }
+
+  private assertGithubTriggerAllowedForAgent(
+    snapshot: AgentControlPlaneSnapshot,
+    agent: AgentDefinition,
+    config: GithubTriggerConfig,
+  ): void {
+    const revision = this.requireRevision(
+      snapshot,
+      agent.agentId,
+      agent.currentRevision,
+    );
+    const message = validateActionPresetGithubTriggerConsistency(
+      revision.draft.actionPreset,
+      config,
+    );
+    if (message) throw new Error(message);
+  }
+
   private buildTrigger(
     agent: AgentDefinition,
     input: Pick<CreateTriggerInput, "kind" | "config">,
@@ -410,6 +447,11 @@ export class AgentControlPlane {
   ): AgentTrigger {
     if (input.kind === "github") {
       curatedGithubTriggerConfigSchema.parse(input.config);
+      this.assertGithubTriggerAllowedForAgent(
+        this.store.load(),
+        agent,
+        input.config as GithubTriggerConfig,
+      );
     }
     const scheduleConfig =
       input.kind === "schedule" && "schedule" in input.config

@@ -18,7 +18,8 @@ import {
 const draft = {
   name: "Issue triage",
   instructions: "Triage allowlisted issues and prepare a dry run.",
-  skillId: "fix-review-findings",
+  actionPreset: "fix_issue" as const,
+  skillId: "",
   allowedTools: ["github", "sandbox"],
   targetScope: {
     repository: "dallascrilley/shipwright",
@@ -274,6 +275,15 @@ describe("AgentControlPlane", () => {
         config: { event: "pull_request", actions: ["closed"] },
       }),
     ).toThrow(/supported GitHub trigger/i);
+    expect(() =>
+      controlPlane.replaceTrigger({
+        agentId: agent.agentId,
+        expectedRevision: agent.currentRevision,
+        triggerId: original.triggerId,
+        kind: "github",
+        config: { event: "pull_request", actions: ["synchronize"] },
+      }),
+    ).toThrow(/cannot use Commits pushed to pull request/i);
     expect(store.load().triggers).toEqual([original]);
 
     const replacement = controlPlane.replaceTrigger({
@@ -281,14 +291,14 @@ describe("AgentControlPlane", () => {
       expectedRevision: agent.currentRevision,
       triggerId: original.triggerId,
       kind: "github",
-      config: { event: "pull_request", actions: ["synchronize"] },
+      config: { event: "issues", actions: ["edited"] },
     });
 
     expect(replacement).toMatchObject({
       agentId: agent.agentId,
       agentRevision: agent.currentRevision,
       kind: "github",
-      config: { event: "pull_request", actions: ["synchronize"] },
+      config: { event: "issues", actions: ["edited"] },
     });
     expect(replacement.triggerId).not.toBe(original.triggerId);
     expect(store.load().triggers).toEqual([replacement]);
@@ -369,5 +379,41 @@ describe("AgentControlPlane", () => {
     expect(() => new JsonFileAgentControlPlaneStore(path).load()).toThrow(
       `could not load agent control-plane state at ${path}`,
     );
+  });
+  test("rejects github triggers that conflict with the agent action preset", () => {
+    const controlPlane = createControlPlane();
+    const agent = controlPlane.createAgent({
+      ...draft,
+      actionPreset: "resolve_pr_feedback",
+      skillId: "fix-review-findings",
+    });
+
+    expect(() =>
+      controlPlane.createTrigger({
+        agentId: agent.agentId,
+        expectedRevision: agent.currentRevision,
+        kind: "github",
+        config: { event: "issues", actions: ["opened"], conditions: [] },
+      }),
+    ).toThrow(/cannot use Issue created/);
+  });
+
+  test("rejects saving a preset that conflicts with existing github triggers", () => {
+    const controlPlane = createControlPlane();
+    const agent = controlPlane.createAgent(draft);
+    controlPlane.createTrigger({
+      agentId: agent.agentId,
+      expectedRevision: agent.currentRevision,
+      kind: "github",
+      config: { event: "issues", actions: ["opened"], conditions: [] },
+    });
+
+    expect(() =>
+      controlPlane.updateAgent(agent.agentId, agent.currentRevision, {
+        ...draft,
+        actionPreset: "resolve_pr_feedback",
+        skillId: "fix-review-findings",
+      }),
+    ).toThrow(/cannot use Issue created/);
   });
 });

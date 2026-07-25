@@ -13,7 +13,8 @@ import {
 const draft = {
   name: "Issue triage",
   instructions: "Triage allowlisted issues and prepare a dry run.",
-  skillId: "fix-review-findings",
+  actionPreset: "fix_issue" as const,
+  skillId: "",
   allowedTools: ["github", "sandbox"],
   targetScope: {
     repository: "dallascrilley/shipwright",
@@ -224,8 +225,12 @@ describe("agent management trigger projections", () => {
       version: 2,
       revision: 2,
       enabled: false,
-      configuration: draft,
+      configuration: {
+        ...draft,
+        actionPreset: "fix_issue",
+      },
     });
+    expect(document.configuration.actionPreset).toBe("fix_issue");
     expect(document.triggers.map((trigger) => trigger.kind)).toEqual([
       "github",
       "github",
@@ -294,5 +299,10 @@ describe("agent management trigger projections", () => {
 
     expect(agentDefinitionExportV1Schema.parse(versionOne)).toEqual(versionOne);
     expect(agentDefinitionExportSchema.parse(versionOne)).toEqual(versionOne);
+  });
+  test("export includes actionPreset in configuration", () => {
+    const snapshot = createSnapshot();
+    const document = buildAgentDefinitionDocument(snapshot, "agent-1");
+    expect(document.configuration.actionPreset).toBe("fix_issue");
   });
 });

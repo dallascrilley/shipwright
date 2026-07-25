@@ -8,17 +8,22 @@ import {
   agentDraftSchema,
   agentTriggerSchema,
   curatedGithubTriggerConfigSchema,
+  defaultSkillIdForActionPreset,
   executionRequestSchema,
   findGithubTriggerChoice,
+  githubEventAllowedForActionPreset,
   githubTriggerConditionSchema,
+  inferActionPresetFromLegacyDraft,
   lifecycleEventSchema,
   queueEntrySchema,
+  validateActionPresetGithubTriggerConsistency,
 } from "./agent-definition";
 
 const draft = {
   name: "Issue triage",
   instructions: "Triage allowlisted issues and prepare a dry run.",
-  skillId: "fix-review-findings",
+  actionPreset: "fix_issue" as const,
+  skillId: "",
   allowedTools: ["github", "sandbox"],
   targetScope: {
     repository: "dallascrilley/shipwright",
@@ -219,6 +224,7 @@ describe("agentDefinition contracts", () => {
   test("accepts an allowlisted dry-run draft", () => {
     expect(agentDraftSchema.parse(draft)).toMatchObject({
       name: "Issue triage",
+      actionPreset: "fix_issue",
       publicationPolicy: "dry_run",
       targetScope: { repository: "dallascrilley/shipwright" },
     });
@@ -434,5 +440,74 @@ describe("agentDefinition contracts", () => {
         createdAt: "2026-07-21T00:00:00.000Z",
       }),
     ).toMatchObject({ agentRevision: 2, source: "test" });
+  });
+});
+
+describe("action preset contracts", () => {
+  test("infers resolve_pr_feedback from legacy review skillId", () => {
+    expect(
+      agentDraftSchema.parse({
+        ...draft,
+        actionPreset: undefined,
+        skillId: "fix-review-findings",
+      }).actionPreset,
+    ).toBe("resolve_pr_feedback");
+  });
+
+  test("defaults legacy drafts without actionPreset to fix_issue", () => {
+    expect(agentDraftSchema.parse({ ...draft, actionPreset: undefined }).actionPreset).toBe(
+      "fix_issue",
+    );
+  });
+
+  test("infers preset from unambiguous github triggers", () => {
+    expect(
+      inferActionPresetFromLegacyDraft(
+        { skillId: "fix-review-findings" },
+        [
+          {
+            kind: "github",
+            config: { event: "pull_request", actions: ["opened"] },
+          },
+        ],
+      ),
+    ).toBe("resolve_pr_feedback");
+    expect(
+      inferActionPresetFromLegacyDraft(
+        { skillId: "fix-review-findings" },
+        [{ kind: "github", config: { event: "issues", actions: ["opened"] } }],
+      ),
+    ).toBe("fix_issue");
+  });
+
+  test("maps preset defaults to skillId", () => {
+    expect(defaultSkillIdForActionPreset("fix_issue")).toBe("");
+    expect(defaultSkillIdForActionPreset("resolve_pr_feedback")).toBe(
+      "fix-review-findings",
+    );
+  });
+
+  test("rejects resolve_pr_feedback drafts without a review skillId", () => {
+    expect(
+      agentDraftSchema.safeParse({
+        ...draft,
+        actionPreset: "resolve_pr_feedback",
+        skillId: "",
+      }).success,
+    ).toBe(false);
+  });
+
+  test("validates github trigger families against presets", () => {
+    expect(githubEventAllowedForActionPreset("fix_issue", "issues")).toBe(true);
+    expect(githubEventAllowedForActionPreset("fix_issue", "pull_request")).toBe(
+      false,
+    );
+    expect(
+      validateActionPresetGithubTriggerConsistency("fix_issue", {
+        event: "pull_request",
+        actions: ["opened"],
+        conditions: [],
+      }),
+    ).toMatch(/cannot use/);
   });
 });
