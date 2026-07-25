@@ -6,6 +6,7 @@ import { resolveShipwrightStateDirectory } from "../../src/config/state.js";
 import {
   agentDraftSchema,
   agentTriggerSchema,
+  scheduleTargetAllowedForActionPreset,
   type AgentControlPlaneSnapshot,
   type AgentDefinition,
   type AgentDraftInput,
@@ -234,6 +235,16 @@ export class AgentManagementService {
     if (!revision) {
       throw new Error(
         `Missing revision ${agent.currentRevision} for ${agent.agentId}.`,
+      );
+    }
+    if (
+      !scheduleTargetAllowedForActionPreset(
+        revision.draft.actionPreset,
+        input.target.kind,
+      )
+    ) {
+      throw new Error(
+        `Test target kind "${input.target.kind}" does not match action preset "${revision.draft.actionPreset}".`,
       );
     }
     const [owner, repo] = revision.draft.targetScope.repository.split("/");

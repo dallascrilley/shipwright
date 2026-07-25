@@ -9,11 +9,13 @@ import {
   agentTriggerSchema,
   curatedGithubTriggerConfigSchema,
   defaultSkillIdForActionPreset,
+  defaultTargetKindForActionPreset,
   executionRequestSchema,
   findGithubTriggerChoice,
   githubEventAllowedForActionPreset,
   githubTriggerConditionSchema,
   inferActionPresetFromLegacyDraft,
+  migrateLegacyActionPresetsInSnapshot,
   lifecycleEventSchema,
   queueEntrySchema,
   validateActionPresetAgainstAgentTriggers,
@@ -482,6 +484,44 @@ describe("action preset contracts", () => {
     ).toBe("fix_issue");
   });
 
+  test("infers preset from unambiguous schedule targets before skillId", () => {
+    expect(
+      inferActionPresetFromLegacyDraft(
+        { skillId: "fix-review-findings" },
+        [
+          {
+            kind: "schedule",
+            config: {
+              schedule: "0 9 * * *",
+              timezone: "UTC",
+              target: { kind: "issue", number: 12 },
+            },
+          },
+        ],
+      ),
+    ).toBe("fix_issue");
+    expect(
+      inferActionPresetFromLegacyDraft(
+        { skillId: "" },
+        [
+          {
+            kind: "schedule",
+            config: {
+              schedule: "0 9 * * *",
+              timezone: "UTC",
+              target: { kind: "pull", number: 3 },
+            },
+          },
+        ],
+      ),
+    ).toBe("resolve_pr_feedback");
+  });
+
+  test("maps presets to default target kinds", () => {
+    expect(defaultTargetKindForActionPreset("fix_issue")).toBe("issue");
+    expect(defaultTargetKindForActionPreset("resolve_pr_feedback")).toBe("pull");
+  });
+
   test("maps preset defaults to skillId", () => {
     expect(defaultSkillIdForActionPreset("fix_issue")).toBe("");
     expect(defaultSkillIdForActionPreset("resolve_pr_feedback")).toBe(
@@ -576,4 +616,53 @@ describe("action preset contracts", () => {
     });
     expect(migrated.revisions[0]?.draft.actionPreset).toBe("fix_issue");
   });
+
+  test("migrates schedule-only legacy drafts from target kind", () => {
+    const snapshot = migrateLegacyActionPresetsInSnapshot({
+      version: 1,
+      agents: [
+        {
+          agentId: "agent-schedule",
+          currentRevision: 1,
+          enabled: false,
+          createdAt: "2026-07-21T00:00:00.000Z",
+          updatedAt: "2026-07-21T00:00:00.000Z",
+          health: { state: "idle" },
+        },
+      ],
+      revisions: [
+        {
+          agentId: "agent-schedule",
+          revision: 1,
+          createdAt: "2026-07-21T00:00:00.000Z",
+          draft: { ...draft, skillId: "fix-review-findings", actionPreset: undefined },
+        },
+      ],
+      triggers: [
+        {
+          triggerId: "trigger-schedule",
+          agentId: "agent-schedule",
+          agentRevision: 1,
+          kind: "schedule",
+          enabled: true,
+          config: {
+            schedule: "0 9 * * *",
+            timezone: "UTC",
+            target: { kind: "issue", number: 9 },
+          },
+          nextFireAt: "2026-07-21T09:00:00.000Z",
+          consecutiveFailures: 0,
+          createdAt: "2026-07-21T00:00:00.000Z",
+          updatedAt: "2026-07-21T00:00:00.000Z",
+        },
+      ],
+      lifecycleEvents: [],
+      executions: [],
+      queueEntries: [],
+    }) as {
+      revisions: { draft: { actionPreset: string } }[];
+    };
+    expect(snapshot.revisions[0]?.draft.actionPreset).toBe("fix_issue");
+  });
+
 });

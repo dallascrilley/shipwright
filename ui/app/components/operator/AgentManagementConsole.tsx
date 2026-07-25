@@ -48,6 +48,7 @@ import {
   GITHUB_TRIGGER_CONDITION_LIMITS,
   GITHUB_TRIGGER_CHOICES,
   defaultSkillIdForActionPreset,
+  defaultTargetKindForActionPreset,
   type GithubTriggerChoiceId,
 } from "../../../shared/agent-definition";
 import type {
@@ -316,6 +317,11 @@ export function AgentManagementConsole() {
   useEffect(() => {
     if (detail) {
       setDraftForm(toDraftForm(detail.config));
+      const targetKind = defaultTargetKindForActionPreset(
+        detail.config.actionPreset,
+      );
+      setTestTargetKind(targetKind);
+      setTriggerTargetKind(targetKind);
       setReplacementTriggerId(null);
       setGithubConditions([]);
     }
@@ -324,6 +330,19 @@ export function AgentManagementConsole() {
   async function refresh() {
     await Promise.all([listQuery.refetch(), detailQuery.refetch()]);
   }
+
+
+  useEffect(() => {
+    const targetKind = defaultTargetKindForActionPreset(draftForm.actionPreset);
+    setTriggerTargetKind(targetKind);
+  }, [draftForm.actionPreset]);
+
+  useEffect(() => {
+    if (!detail) return;
+    setTestTargetKind(
+      defaultTargetKindForActionPreset(detail.config.actionPreset),
+    );
+  }, [detail?.agentId, detail?.currentRevision, detail?.config.actionPreset]);
 
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
@@ -508,11 +527,21 @@ export function AgentManagementConsole() {
   async function handleQueueTestRun() {
     if (!detail) return;
     setMessage(null);
+    const expectedKind = defaultTargetKindForActionPreset(
+      detail.config.actionPreset,
+    );
+    if (testTargetKind !== expectedKind) {
+      setMessage(
+        `Test target must be a ${expectedKind} for action preset "${detail.config.actionPreset}".`,
+      );
+      setTestTargetKind(expectedKind);
+      return;
+    }
     try {
       const queued = (await queueTestRun.mutateAsync({
         agentId: detail.agentId,
         expectedRevision: detail.currentRevision,
-        target: { kind: testTargetKind, number: Number(testTargetNumber) },
+        target: { kind: expectedKind, number: Number(testTargetNumber) },
       })) as { execution: { executionId: string; agentRevision: number } };
       setMessage(
         `Dry-run test ${queued.execution.executionId.slice(0, 10)} queued against revision ${queued.execution.agentRevision}. No worker or publish action starts here.`,
@@ -967,9 +996,13 @@ export function AgentManagementConsole() {
                               )
                             }
                             className="input-shell"
+                            disabled={busy}
                           >
-                            <option value="issue">Issue</option>
-                            <option value="pull">Pull request</option>
+                            {draftForm.actionPreset === "fix_issue" ? (
+                              <option value="issue">Issue</option>
+                            ) : (
+                              <option value="pull">Pull request</option>
+                            )}
                           </select>
                         </Field>
                         <Field label="Target number">
@@ -1026,9 +1059,13 @@ export function AgentManagementConsole() {
                         )
                       }
                       className="input-shell"
+                      disabled={busy}
                     >
-                      <option value="issue">Issue</option>
-                      <option value="pull">Pull request</option>
+                      {detail.config.actionPreset === "fix_issue" ? (
+                        <option value="issue">Issue</option>
+                      ) : (
+                        <option value="pull">Pull request</option>
+                      )}
                     </select>
                   </Field>
                   <Field label="Test target number">

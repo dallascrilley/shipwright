@@ -60,6 +60,12 @@ export function defaultSkillIdForActionPreset(preset: ActionPreset): string {
   return preset === "resolve_pr_feedback" ? "fix-review-findings" : "";
 }
 
+export function defaultTargetKindForActionPreset(
+  preset: ActionPreset,
+): "issue" | "pull" {
+  return preset === "fix_issue" ? "issue" : "pull";
+}
+
 export function inferActionPresetFromLegacyDraft(
   input: Record<string, unknown>,
   triggers?: readonly { kind: string; config?: unknown }[],
@@ -67,6 +73,8 @@ export function inferActionPresetFromLegacyDraft(
   const skillId = typeof input.skillId === "string" ? input.skillId.trim() : "";
   const githubTriggers =
     triggers?.filter((trigger) => trigger.kind === "github") ?? [];
+  const scheduleTriggers =
+    triggers?.filter((trigger) => trigger.kind === "schedule") ?? [];
 
   if (githubTriggers.length > 0) {
     let hasIssues = false;
@@ -80,6 +88,21 @@ export function inferActionPresetFromLegacyDraft(
     }
     if (hasIssues && !hasPullRequest) return "fix_issue";
     if (hasPullRequest && !hasIssues) return "resolve_pr_feedback";
+  }
+
+  if (scheduleTriggers.length > 0) {
+    let hasIssueTarget = false;
+    let hasPullTarget = false;
+    for (const trigger of scheduleTriggers) {
+      const config = trigger.config;
+      if (!config || typeof config !== "object") continue;
+      const target = (config as { target?: { kind?: unknown } }).target;
+      if (!target || typeof target !== "object") continue;
+      if (target.kind === "issue") hasIssueTarget = true;
+      if (target.kind === "pull") hasPullTarget = true;
+    }
+    if (hasIssueTarget && !hasPullTarget) return "fix_issue";
+    if (hasPullTarget && !hasIssueTarget) return "resolve_pr_feedback";
   }
 
   if (skillId === "fix-review-findings") return "resolve_pr_feedback";
@@ -131,7 +154,8 @@ export const agentDraftSchema = z.preprocess((input) => {
 }, agentDraftObjectSchema);
 
 export type AgentDraft = z.output<typeof agentDraftSchema>;
-export type AgentDraftInput = z.input<typeof agentDraftSchema>;
+/** Pre-parse draft shape. Uses the object schema because z.preprocess input is unknown. */
+export type AgentDraftInput = z.input<typeof agentDraftObjectSchema>;
 
 export const agentHealthSchema = z
   .object({
