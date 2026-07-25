@@ -30,7 +30,7 @@ After this work, an operator can:
 - [x] (2026-07-25) U1 runbook written (`docs/runbooks/always-on-activation.md`); remote pin dry-run proof still open
 - [x] (2026-07-25) U2 action presets landed on `feat/action-presets` (td-3bd33e); review/merge pending
 - [x] U3 Template agents (PR #76)
-- [ ] U4 Publish-stage security criteria + selective `publish_allowed`
+- [ ] U4 Publish-stage security criteria + selective `publish_allowed` (runbook drafted; live sign-off pending U1)
 - [ ] U5 Fleet-watch decommission for one covered repo
 - [ ] U6 End-to-end remote + browser proof
 
