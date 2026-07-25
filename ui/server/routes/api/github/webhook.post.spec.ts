@@ -118,6 +118,71 @@ describe("POST /api/github/webhook", () => {
     );
   });
 
+  test("signed review-comment deliveries enqueue a pull target and coalesce bursts", async () => {
+    const service = createService();
+    const agent = await service.createAgent({
+      name: "Review feedback",
+      instructions: "Resolve review comments as a dry run.",
+      skillId: "fix-review-findings",
+      allowedTools: ["github"],
+      targetScope: { repository: "dallascrilley/shipwright" },
+      verification: { presetId: "bun-test" },
+      publicationPolicy: "dry_run",
+    });
+    service.createTrigger({
+      agentId: agent.agentId,
+      expectedRevision: agent.currentRevision,
+      kind: "github",
+      config: {
+        event: "pull_request_review_comment",
+        actions: ["created"],
+      },
+    });
+    service.setAgentEnabled({
+      agentId: agent.agentId,
+      expectedRevision: agent.currentRevision,
+      enabled: true,
+    });
+    const app = createApp(service);
+    const payload = {
+      action: "created",
+      repository: { full_name: "dallascrilley/shipwright" },
+      pull_request: {
+        number: 19,
+        base: { ref: "main" },
+        draft: false,
+        labels: [],
+      },
+    };
+
+    expect(
+      (
+        await app.request(
+          "/api/github/webhook",
+          signedRequest(payload, "delivery-review-a", "pull_request_review_comment"),
+        )
+      ).status,
+    ).toBe(202);
+    expect(
+      (
+        await app.request(
+          "/api/github/webhook",
+          signedRequest(payload, "delivery-review-b", "pull_request_review_comment"),
+        )
+      ).status,
+    ).toBe(202);
+    expect(service.getSnapshot().queueEntries).toHaveLength(1);
+    expect(service.getSnapshot().executions[0]).toMatchObject({
+      target: {
+        kind: "pull",
+        owner: "dallascrilley",
+        repo: "shipwright",
+        number: 19,
+      },
+      idempotencyKey: `github:delivery-review-a:${agent.currentRevision}`,
+    });
+  });
+
   test("signed condition deliveries match or fail closed with safe evidence", async () => {
     const service = createService();
     const { trigger } = await createEnabledAgent(service, [

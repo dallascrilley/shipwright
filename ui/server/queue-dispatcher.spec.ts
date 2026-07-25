@@ -128,6 +128,37 @@ describe("QueueDispatcher", () => {
     expect(invocations).toBe(1);
   });
 
+  test("coalesces in-flight pull targets while preserving delivery idempotency keys", () => {
+    const fixture = createFixture();
+    const agent = createEnabledAgent(fixture);
+    const target = {
+      kind: "pull" as const,
+      owner: "dallascrilley",
+      repo: "shipwright",
+      number: 19,
+    };
+    const first = fixture.dispatcher.enqueue({
+      agentId: agent.agentId,
+      source: "github",
+      idempotencyKey: "github:delivery-comment-a:1",
+      target,
+      coalesceInFlight: true,
+    });
+    const coalesced = fixture.dispatcher.enqueue({
+      agentId: agent.agentId,
+      source: "github",
+      idempotencyKey: "github:delivery-comment-b:1",
+      target,
+      coalesceInFlight: true,
+    });
+
+    expect(coalesced.execution.executionId).toBe(first.execution.executionId);
+    expect(coalesced.execution.idempotencyKey).toBe(
+      "github:delivery-comment-a:1",
+    );
+    expect(fixture.dispatcher.list()).toHaveLength(1);
+  });
+
   test("rejects disabled agents and disabled triggers before enqueueing", () => {
     const fixture = createFixture();
     const agent = fixture.controlPlane.createAgent(draft);

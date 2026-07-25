@@ -26,9 +26,21 @@ export interface QueueEnqueueInput {
   target: ExecutionRequestInput["target"];
   scheduledAt?: string;
   priority?: number;
+  /**
+   * When true, return an existing queued/claimed/running execution for the same
+   * agent revision and target instead of enqueueing a second wake. Used by
+   * review-comment bursts so N deliveries collapse to one in-flight run.
+   */
+  coalesceInFlight?: boolean;
   /** UI-only dry-run proof may be queued before activation. Never honor for trigger traffic. */
   allowDisabledAgentForTest?: boolean;
 }
+
+const IN_FLIGHT_QUEUE_STATES: Partial<Record<QueueEntry["state"], true>> = {
+  queued: true,
+  claimed: true,
+  running: true,
+};
 
 export interface QueueEnqueueResult {
   execution: ExecutionRequest;
@@ -146,6 +158,27 @@ export class QueueDispatcher {
         execution: existing,
         entry: this.requireEntry(snapshot, existing.executionId),
       };
+    }
+    if (input.coalesceInFlight) {
+      const inFlight = snapshot.executions.find((execution) => {
+        if (
+          execution.agentId !== agent.agentId ||
+          execution.agentRevision !== agentRevision ||
+          !sameExecutionTarget(execution.target, input.target)
+        ) {
+          return false;
+        }
+        const entry = snapshot.queueEntries.find(
+          (item) => item.executionId === execution.executionId,
+        );
+        return Boolean(entry && IN_FLIGHT_QUEUE_STATES[entry.state]);
+      });
+      if (inFlight) {
+        return {
+          execution: inFlight,
+          entry: this.requireEntry(snapshot, inFlight.executionId),
+        };
+      }
     }
 
     const now = this.now();
@@ -539,4 +572,16 @@ function entrySource(
   return snapshot.executions.find(
     (execution) => execution.executionId === entry.executionId,
   )?.source;
+}
+
+function sameExecutionTarget(
+  left: ExecutionRequest["target"],
+  right: ExecutionRequestInput["target"],
+): boolean {
+  return (
+    left.kind === right.kind &&
+    left.owner.toLowerCase() === right.owner.toLowerCase() &&
+    left.repo.toLowerCase() === right.repo.toLowerCase() &&
+    left.number === right.number
+  );
 }

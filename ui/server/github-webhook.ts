@@ -21,7 +21,16 @@ const REPOSITORY_PATTERN = /^[^/\s]+\/[^/\s]+$/;
 export const MAX_WEBHOOK_BODY_BYTES = 1_048_576;
 export const MAX_WEBHOOK_DECISIONS = 20;
 
-type GitHubEvent = "issues" | "pull_request";
+type GitHubEvent =
+  | "issues"
+  | "pull_request"
+  | "pull_request_review_comment"
+  | "pull_request_review";
+
+const REVIEW_WAKE_EVENTS: ReadonlySet<GitHubEvent> = new Set([
+  "pull_request_review_comment",
+  "pull_request_review",
+]);
 
 type WebhookTarget = {
   action: string;
@@ -163,6 +172,7 @@ export class GitHubWebhookIngress {
         source: "github",
         idempotencyKey: `github:${input.deliveryId}:${selected.agentRevision}`,
         target: webhook.target,
+        coalesceInFlight: REVIEW_WAKE_EVENTS.has(event),
       });
       matched += 1;
     }
@@ -182,7 +192,15 @@ export class GitHubWebhookIngress {
   }
 
   private parseEvent(value: string): GitHubEvent | undefined {
-    return value === "issues" || value === "pull_request" ? value : undefined;
+    if (
+      value === "issues" ||
+      value === "pull_request" ||
+      value === "pull_request_review_comment" ||
+      value === "pull_request_review"
+    ) {
+      return value;
+    }
+    return undefined;
   }
 
   private parseTarget(
@@ -206,13 +224,8 @@ export class GitHubWebhookIngress {
       : "";
     if (!REPOSITORY_PATTERN.test(repository)) return undefined;
     const [owner, repo] = repository.split("/");
-    const subject = event === "issues" ? payload.issue : payload.pull_request;
-    const number =
-      event === "issues" && isRecord(subject)
-        ? subject.number
-        : event === "pull_request"
-          ? payload.number
-          : undefined;
+    const subject = subjectForEvent(event, payload);
+    const number = numberForEvent(event, payload, subject);
     if (
       typeof number !== "number" ||
       !Number.isSafeInteger(number) ||
@@ -220,20 +233,19 @@ export class GitHubWebhookIngress {
     ) {
       return undefined;
     }
+    const isPullTarget = event !== "issues";
     return {
       action: stringValue(payload.action),
       repository,
       conditionContext: {
         actor: readStringField(payload.sender, "login"),
         labels: readLabels(subject),
-        baseBranch:
-          event === "pull_request"
-            ? readNestedStringField(subject, "base", "ref")
-            : { state: "missing" },
-        draftState:
-          event === "pull_request"
-            ? readBooleanField(subject, "draft")
-            : { state: "missing" },
+        baseBranch: isPullTarget
+          ? readNestedStringField(subject, "base", "ref")
+          : { state: "missing" },
+        draftState: isPullTarget
+          ? readBooleanField(subject, "draft")
+          : { state: "missing" },
       },
       target: {
         kind: event === "issues" ? "issue" : "pull",
@@ -242,6 +254,44 @@ export class GitHubWebhookIngress {
         number,
       },
     };
+  }
+}
+
+function subjectForEvent(
+  event: GitHubEvent,
+  payload: Record<string, unknown>,
+): unknown {
+  switch (event) {
+    case "issues":
+      return payload.issue;
+    case "pull_request":
+    case "pull_request_review_comment":
+    case "pull_request_review":
+      return payload.pull_request;
+    default: {
+      const _exhaustive: never = event;
+      return _exhaustive;
+    }
+  }
+}
+
+function numberForEvent(
+  event: GitHubEvent,
+  payload: Record<string, unknown>,
+  subject: unknown,
+): unknown {
+  switch (event) {
+    case "issues":
+      return isRecord(subject) ? subject.number : undefined;
+    case "pull_request":
+      return payload.number;
+    case "pull_request_review_comment":
+    case "pull_request_review":
+      return isRecord(subject) ? subject.number : undefined;
+    default: {
+      const _exhaustive: never = event;
+      return _exhaustive;
+    }
   }
 }
 

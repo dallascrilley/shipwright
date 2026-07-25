@@ -58,7 +58,11 @@ function createEnabledIssueTrigger(conditions: GithubTriggerCondition[] = []) {
 }
 
 function signedInput(
-  event: "issues" | "pull_request",
+  event:
+    | "issues"
+    | "pull_request"
+    | "pull_request_review_comment"
+    | "pull_request_review",
   deliveryId: string,
   payload: object,
 ) {
@@ -422,6 +426,172 @@ describe("GitHubWebhookIngress", () => {
 
     await fixture.ingress.receive(input);
     expect(fixture.dispatcher.list()).toHaveLength(1);
+  });
+
+  test("queues review comment and review submitted pulls with nested PR numbers", async () => {
+    const fixture = createFixture();
+    const agent = fixture.controlPlane.createAgent({
+      name: "Review feedback",
+      instructions: "Resolve inbound review feedback as a dry run.",
+      skillId: "fix-review-findings",
+      allowedTools: ["github", "sandbox"],
+      targetScope: { repository: "dallascrilley/shipwright" },
+      verification: { presetId: "bun-test" },
+      publicationPolicy: "dry_run",
+    });
+    fixture.controlPlane.setEnabled(agent.agentId, agent.currentRevision, true);
+    const commentTrigger = fixture.controlPlane.createTrigger({
+      agentId: agent.agentId,
+      expectedRevision: agent.currentRevision,
+      kind: "github",
+      config: {
+        event: "pull_request_review_comment",
+        actions: ["created"],
+      },
+    });
+    const reviewTrigger = fixture.controlPlane.createTrigger({
+      agentId: agent.agentId,
+      expectedRevision: agent.currentRevision,
+      kind: "github",
+      config: {
+        event: "pull_request_review",
+        actions: ["submitted"],
+      },
+    });
+    const pullRequest = {
+      number: 19,
+      base: { ref: "main" },
+      draft: false,
+      labels: [{ name: "review" }],
+    };
+
+    await expect(
+      fixture.ingress.receive(
+        await signedInput(
+          "pull_request_review_comment",
+          "delivery-review-comment",
+          {
+            action: "created",
+            repository: { full_name: "dallascrilley/shipwright" },
+            sender: { login: "reviewer" },
+            pull_request: pullRequest,
+            comment: { id: 99, body: "raw-review-comment-marker" },
+          },
+        ),
+      ),
+    ).resolves.toMatchObject({
+      matched: 1,
+      decisions: [
+        {
+          triggerId: commentTrigger.triggerId,
+          decision: "matched",
+          reasonCodes: [],
+        },
+      ],
+    });
+    await expect(
+      fixture.ingress.receive(
+        await signedInput("pull_request_review", "delivery-review-submitted", {
+          action: "submitted",
+          repository: { full_name: "dallascrilley/shipwright" },
+          sender: { login: "reviewer" },
+          pull_request: pullRequest,
+          review: { id: 11, body: "raw-review-body-marker" },
+        }),
+      ),
+    ).resolves.toMatchObject({
+      matched: 1,
+      decisions: [
+        {
+          triggerId: reviewTrigger.triggerId,
+          decision: "matched",
+          reasonCodes: [],
+        },
+      ],
+    });
+
+    expect(fixture.dispatcher.list()).toHaveLength(1);
+    expect(fixture.store.load().executions).toMatchObject([
+      {
+        target: {
+          kind: "pull",
+          owner: "dallascrilley",
+          repo: "shipwright",
+          number: 19,
+        },
+        idempotencyKey: `github:delivery-review-comment:${agent.currentRevision}`,
+      },
+    ]);
+    expect(JSON.stringify(fixture.store.load())).not.toContain(
+      "raw-review-comment-marker",
+    );
+    expect(JSON.stringify(fixture.store.load())).not.toContain(
+      "raw-review-body-marker",
+    );
+  });
+
+  test("coalesces concurrent review-comment deliveries for the same PR", async () => {
+    const fixture = createFixture();
+    const agent = fixture.controlPlane.createAgent({
+      name: "Review coalesce",
+      instructions: "Collapse review comment bursts.",
+      skillId: "fix-review-findings",
+      allowedTools: ["github"],
+      targetScope: { repository: "dallascrilley/shipwright" },
+      verification: { presetId: "bun-test" },
+      publicationPolicy: "dry_run",
+    });
+    fixture.controlPlane.setEnabled(agent.agentId, agent.currentRevision, true);
+    fixture.controlPlane.createTrigger({
+      agentId: agent.agentId,
+      expectedRevision: agent.currentRevision,
+      kind: "github",
+      config: {
+        event: "pull_request_review_comment",
+        actions: ["created"],
+      },
+    });
+    const pullRequest = {
+      number: 21,
+      base: { ref: "main" },
+      draft: false,
+      labels: [],
+    };
+
+    await fixture.ingress.receive(
+      await signedInput("pull_request_review_comment", "delivery-comment-a", {
+        action: "created",
+        repository: { full_name: "dallascrilley/shipwright" },
+        pull_request: pullRequest,
+      }),
+    );
+    await fixture.ingress.receive(
+      await signedInput("pull_request_review_comment", "delivery-comment-b", {
+        action: "created",
+        repository: { full_name: "dallascrilley/shipwright" },
+        pull_request: pullRequest,
+      }),
+    );
+
+    expect(fixture.dispatcher.list()).toHaveLength(1);
+    expect(fixture.store.load().executions).toHaveLength(1);
+    expect(fixture.store.load().executions[0]?.idempotencyKey).toBe(
+      `github:delivery-comment-a:${agent.currentRevision}`,
+    );
+  });
+
+  test("rejects unsupported GitHub events before queueing", async () => {
+    const fixture = createEnabledIssueTrigger();
+
+    await expect(
+      fixture.ingress.receive({
+        event: "pull_request_review_thread",
+        deliveryId: "delivery-unsupported-event",
+        rawBody: JSON.stringify(issuePayload),
+        signature: signPayload(JSON.stringify(issuePayload)),
+      }),
+    ).resolves.toEqual({ status: "rejected", reason: "invalid_payload" });
+    expect(fixture.dispatcher.list()).toEqual([]);
   });
 
   test("caps decision evidence without limiting trigger evaluation", async () => {

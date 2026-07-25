@@ -31,12 +31,14 @@ const draft = {
 };
 
 describe("agentDefinition contracts", () => {
-  test("defines exactly the four curated GitHub trigger choices", () => {
+  test("defines the curated GitHub trigger choices including review wakes", () => {
     expect(GITHUB_TRIGGER_CHOICES.map((choice) => choice.id)).toEqual([
       "issue_created",
       "issue_edited",
       "pull_request_created",
       "pull_request_pushed",
+      "pull_request_review_comment_created",
+      "pull_request_review_submitted",
     ]);
     for (const choice of GITHUB_TRIGGER_CHOICES) {
       const config = { event: choice.event, actions: [choice.action] };
@@ -55,6 +57,18 @@ describe("agentDefinition contracts", () => {
       curatedGithubTriggerConfigSchema.safeParse({
         event: "pull_request",
         actions: ["closed"],
+      }).success,
+    ).toBe(false);
+    expect(
+      curatedGithubTriggerConfigSchema.safeParse({
+        event: "pull_request_review_comment",
+        actions: ["edited"],
+      }).success,
+    ).toBe(false);
+    expect(
+      curatedGithubTriggerConfigSchema.safeParse({
+        event: "pull_request_review",
+        actions: ["dismissed"],
       }).success,
     ).toBe(false);
   });
@@ -134,13 +148,31 @@ describe("agentDefinition contracts", () => {
   });
 
   test("publishes only event-applicable condition fields", () => {
-    const fieldsFor = (event: "issues" | "pull_request") =>
+    const fieldsFor = (
+      event:
+        | "issues"
+        | "pull_request"
+        | "pull_request_review_comment"
+        | "pull_request_review",
+    ) =>
       GITHUB_TRIGGER_CONDITION_CATALOG.filter((item) =>
         (item.events as readonly string[]).includes(event),
       ).map((item) => item.field);
 
     expect(fieldsFor("issues")).toEqual(["actor", "labels"]);
     expect(fieldsFor("pull_request")).toEqual([
+      "actor",
+      "labels",
+      "base_branch",
+      "draft_state",
+    ]);
+    expect(fieldsFor("pull_request_review_comment")).toEqual([
+      "actor",
+      "labels",
+      "base_branch",
+      "draft_state",
+    ]);
+    expect(fieldsFor("pull_request_review")).toEqual([
       "actor",
       "labels",
       "base_branch",
