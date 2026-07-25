@@ -59,6 +59,12 @@ import type {
   AgentTriggerView,
 } from "../../../shared/agent-management";
 import {
+  buildDraftFromTemplate,
+  buildTriggerConfigFromTemplate,
+  listAgentTemplates,
+  type AgentTemplateId,
+} from "../../../shared/agent-templates";
+import {
   buildRepositoryPickerView,
   canSaveRepositorySelection,
   type AgentRepositoryCatalogResult,
@@ -225,6 +231,9 @@ export function AgentManagementConsole() {
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<
+    AgentTemplateId | ""
+  >("");
   const [createForm, setCreateForm] = useState<DraftForm>(() =>
     toDraftForm(DEFAULT_DRAFT),
   );
@@ -344,19 +353,46 @@ export function AgentManagementConsole() {
     );
   }, [detail?.agentId, detail?.currentRevision, detail?.config.actionPreset]);
 
+  function resetCreateSheet() {
+    setCreateForm(toDraftForm(DEFAULT_DRAFT));
+    setCreateRepositoryQuery("");
+    setSelectedTemplateId("");
+  }
+
+  function applyCreateTemplate(templateId: AgentTemplateId | "") {
+    setSelectedTemplateId(templateId);
+    if (!templateId) {
+      setCreateForm(toDraftForm(DEFAULT_DRAFT));
+      return;
+    }
+    setCreateForm(
+      toDraftForm(buildDraftFromTemplate(templateId, createForm.repository)),
+    );
+  }
+
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
     setMessage(null);
+    const templateId = selectedTemplateId || null;
     try {
       const created = (await createAgent.mutateAsync(
         toDraft(createForm),
       )) as AgentDefinition;
+      if (templateId) {
+        await createTrigger.mutateAsync({
+          agentId: created.agentId,
+          expectedRevision: created.currentRevision,
+          kind: "github",
+          config: buildTriggerConfigFromTemplate(templateId),
+        });
+      }
       setSelectedId(created.agentId);
       setCreateOpen(false);
-      setCreateForm(toDraftForm(DEFAULT_DRAFT));
-      setCreateRepositoryQuery("");
+      resetCreateSheet();
       setMessage(
-        "Disabled draft created. Add and validate a trigger before enabling it.",
+        templateId
+          ? "Disabled draft created with a template trigger added. Validate the trigger and explicitly enable the agent when ready."
+          : "Disabled draft created. Add and validate a trigger before enabling it.",
       );
       await refresh();
     } catch (error) {
@@ -1165,7 +1201,13 @@ export function AgentManagementConsole() {
         )}
       </div>
 
-      <Sheet open={createOpen} onOpenChange={setCreateOpen}>
+      <Sheet
+        open={createOpen}
+        onOpenChange={(open) => {
+          setCreateOpen(open);
+          if (!open) resetCreateSheet();
+        }}
+      >
         <SheetContent className="overflow-y-auto sm:max-w-xl">
           <SheetHeader>
             <SheetTitle>New agent</SheetTitle>
@@ -1175,9 +1217,53 @@ export function AgentManagementConsole() {
             </SheetDescription>
           </SheetHeader>
           <form onSubmit={handleCreate} className="mt-6 space-y-4">
+            <Field label="Template">
+              <select
+                value={selectedTemplateId}
+                disabled={busy}
+                onChange={(event) =>
+                  applyCreateTemplate(
+                    event.target.value as AgentTemplateId | "",
+                  )
+                }
+                className="input-shell"
+              >
+                <option value="">Custom blank draft</option>
+                {listAgentTemplates().map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.label}
+                  </option>
+                ))}
+              </select>
+              {selectedTemplateId ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {
+                    listAgentTemplates().find(
+                      (template) => template.id === selectedTemplateId,
+                    )?.description
+                  }
+                </p>
+              ) : null}
+            </Field>
             <DraftFields
               form={createForm}
-              onChange={setCreateForm}
+              onChange={(next) => {
+                if (
+                  selectedTemplateId &&
+                  next.repository !== createForm.repository
+                ) {
+                  setCreateForm(
+                    toDraftForm(
+                      buildDraftFromTemplate(
+                        selectedTemplateId,
+                        next.repository,
+                      ),
+                    ),
+                  );
+                  return;
+                }
+                setCreateForm(next);
+              }}
               disabled={busy}
               repositoryCatalog={repositoryCatalog}
               repositoryQuery={createRepositoryQuery}
