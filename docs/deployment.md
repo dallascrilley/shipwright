@@ -234,6 +234,44 @@ basename "$(readlink -f /opt/shipwright/current)"
 
 After infrastructure health passes, run a dry-run issue first. A publish proof must use an allowlisted repository, explicit verification command, and operator confirmation; record the resulting pull-request URL and exact head SHA.
 
+## Review-trigger canary
+
+Use this after deploying a release that includes curated
+`pull_request_review_comment` / `pull_request_review` triggers. Run the checks
+from the VM over Tailscale SSH; public `/readyz` stays 404 at the Caddy edge by
+design.
+
+1. **App webhook** — In the GitHub App settings, set the callback to
+   `https://<SHIPWRIGHT_PUBLIC_HOST>/api/github/webhook`, content type JSON, the
+   host `GITHUB_WEBHOOK_SECRET`, and subscribe to Issues, Pull requests, Pull
+   request review comments, and Pull request reviews. Existing Apps that still
+   have webhooks disabled cannot wake the review pipeline.
+2. **Stage** — Advance `SHIPWRIGHT_ROLLOUT_STAGE` to `dry_run`, restart
+   `shipwright`, then confirm loopback readiness and the stage metric:
+
+```sh
+bash scripts/prove-review-trigger-rollout.sh --stage dry_run
+```
+
+3. **Agent** — On an allowlisted disposable repository, create a disabled agent
+   with an issue trigger plus a “Review comment created” trigger, test, then
+   enable. Leave `publicationPolicy` at `dry_run` until the dry-run receipt
+   looks correct.
+4. **Dry-run wake** — Open a disposable issue (or leave one inline review
+   comment on an open PR). Confirm a single queued GitHub execution, a redacted
+   dry-run receipt, and that replaying the same `X-GitHub-Delivery` does not
+   enqueue a second row. Concurrent review-comment deliveries for the same PR
+   must coalesce while the first execution is queued or leased.
+5. **Publish window** — Only for the canary agent revision, set
+   `publicationPolicy` to `publish_allowed`, set host stage to
+   `publish_allowed`, restart, and leave one inline review comment. Expect one
+   new commit on the pinned head, a reply on the original thread, and a
+   resolved thread when the outcome warrants it. Immediately return the host
+   stage to `dry_run` (or `disabled`) and disable the canary agent when done.
+
+Record the PR URL, before/after head SHAs, delivery IDs, and receipt paths.
+Never print the webhook secret, App private key, or model credentials.
+
 ## Roll back
 
 List previous releases, choose a known-good commit, repoint the symlink, and restart the service:

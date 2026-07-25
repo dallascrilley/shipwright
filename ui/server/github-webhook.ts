@@ -95,7 +95,8 @@ export class GitHubWebhookIngress {
       return { status: "rejected", reason: "invalid_payload" };
     }
     const event = this.parseEvent(input.event);
-    const webhook = event ? this.parseTarget(event, input.rawBody) : undefined;
+    if (!event) return { status: "rejected", reason: "invalid_payload" };
+    const webhook = this.parseTarget(event, input.rawBody);
     if (!webhook) return { status: "rejected", reason: "invalid_payload" };
     if (!isRepositoryAllowed(this.options, webhook.repository)) {
       return acceptedResult(0, []);

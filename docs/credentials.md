@@ -4,7 +4,7 @@
 
 - GitHub App: `rivet-test-agent-dallascrilley` (App ID `4337906`; retained as the existing external app slug)
 - Installation: `147573445`, restricted to `dallascrilley/shipwright`
-- Repository permissions: metadata read, issues read, contents read/write, and pull requests read/write. Webhooks are disabled.
+- Repository permissions: metadata read, issues read, contents read/write, and pull requests read/write. Webhooks start disabled; enable them for always-on triggers and subscribe to Issues, Pull requests, Pull request review comments, and Pull request reviews (see `docs/deployment.md`).
 - Private key: stored in 1Password's `Private` vault as item `lfvycashnv2qmghnhygiwfo574` (`GitHub App — rivet-test programming agent`). The legacy item title is retained to avoid duplicating the authoritative secret; never commit or print its credential value.
 - Production authentication secret: stored in 1Password's `Private` vault as item `3cdoazfvs6v6vvdlfhlg5a37oa` (`Shipwright Production`).
 - Local development key path: `/Users/dallascrilley/.config/shipwright/github-app.pem` (owner-readable only). Set `GITHUB_APP_PRIVATE_KEY_PATH` to this path alongside `GITHUB_APP_ID=4337906`, `GITHUB_APP_INSTALLATION_ID=147573445`, and `GITHUB_REPOSITORY_ALLOWLIST=dallascrilley/shipwright`.
@@ -27,7 +27,7 @@
 
 - Product name: Shipwright; GitHub registration: `shipwright-dcm` (App ID `4342351`). GitHub reserves the exact `Shipwright` registration name for `@shipwright`.
 - Installation: `147693967`, restricted to `DallasCrilleyMarTech/.hub`.
-- Repository permissions: metadata read, issues read, contents read/write, and pull requests read/write. OAuth, device flow, and webhooks are disabled.
+- Repository permissions: metadata read, issues read, contents read/write, and pull requests read/write. OAuth and device flow stay disabled. Webhooks start disabled; enable the same event set as the primary App when this installation should wake Shipwright.
 - Private key: stored in 1Password's `Private` vault as item `qco4aporpanrmwxvnxcdtbpvhu` (`Shipwright DCM GitHub App`). The item is the authoritative secret store; never commit or print its credential value.
 - Local invocation: read the App ID from `op://Private/Shipwright DCM GitHub App/username` and the private key from `op://Private/Shipwright DCM GitHub App/credential`; set `GITHUB_APP_INSTALLATION_ID=147693967` and `GITHUB_REPOSITORY_ALLOWLIST=DallasCrilleyMarTech/.hub`.
 
