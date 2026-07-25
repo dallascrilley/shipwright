@@ -49,6 +49,7 @@ describe("QueueDispatcher rollout gating", () => {
   const draft = {
     name: "Issue triage",
     instructions: "Triage allowlisted issues and prepare a dry run.",
+    actionPreset: "resolve_pr_feedback" as const,
     skillId: "fix-review-findings",
     allowedTools: ["github", "sandbox"],
     targetScope: { repository: "dallascrilley/shipwright" },

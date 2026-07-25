@@ -46,12 +46,20 @@ function createService() {
 async function createEnabledAgent(
   service: AgentManagementService,
   conditions: GithubTriggerCondition[] = [],
+  event: "issues" | "pull_request" = "issues",
+  action: string = "opened",
 ) {
+  const actionPreset =
+    event === "issues" ? ("fix_issue" as const) : ("resolve_pr_feedback" as const);
   const agent = await service.createAgent({
-    name: "Issue triage",
-    instructions: "Triage the issue as a dry run.",
-    skillId: "fix-review-findings",
-    allowedTools: ["github"],
+    name: event === "issues" ? "Issue triage" : "PR feedback",
+    instructions:
+      event === "issues"
+        ? "Triage the issue as a dry run."
+        : "Resolve pull request feedback as a dry run.",
+    actionPreset,
+    skillId: event === "issues" ? "" : "fix-review-findings",
+    allowedTools: ["github", "sandbox"],
     targetScope: { repository: "dallascrilley/shipwright" },
     verification: { presetId: "bun-test" },
     publicationPolicy: "dry_run",
@@ -60,7 +68,7 @@ async function createEnabledAgent(
     agentId: agent.agentId,
     expectedRevision: agent.currentRevision,
     kind: "github",
-    config: { event: "issues", actions: ["opened"], conditions },
+    config: { event, actions: [action], conditions },
   });
   service.setAgentEnabled({
     agentId: agent.agentId,
@@ -206,7 +214,12 @@ describe("POST /api/github/webhook", () => {
 
   test("matching alternatives queue once, replay once, and expose no observed values", async () => {
     const service = createService();
-    const { agent, trigger } = await createEnabledAgent(service);
+    const { agent, trigger: firstPullTrigger } = await createEnabledAgent(
+      service,
+      [{ field: "draft_state", operator: "is_not_draft" }],
+      "pull_request",
+      "opened",
+    );
     const alternative = service.createTrigger({
       agentId: agent.agentId,
       expectedRevision: agent.currentRevision,
@@ -217,21 +230,7 @@ describe("POST /api/github/webhook", () => {
         conditions: [{ field: "draft_state", operator: "is_not_draft" }],
       },
     });
-    service.removeTrigger({
-      agentId: agent.agentId,
-      expectedRevision: agent.currentRevision,
-      triggerId: trigger.triggerId,
-    });
-    const firstPullTrigger = service.createTrigger({
-      agentId: agent.agentId,
-      expectedRevision: agent.currentRevision,
-      kind: "github",
-      config: {
-        event: "pull_request",
-        actions: ["opened"],
-        conditions: [{ field: "draft_state", operator: "is_not_draft" }],
-      },
-    });
+
     const app = createApp(service);
     const payload = {
       action: "opened",
@@ -274,7 +273,6 @@ describe("POST /api/github/webhook", () => {
     expect(service.getSnapshot().queueEntries).toHaveLength(1);
     expect(JSON.stringify(service.getSnapshot())).not.toContain("observed-");
   });
-
   test("caps signed route decision evidence while evaluating every alternative", async () => {
     const service = createService();
     const { agent } = await createEnabledAgent(service, [

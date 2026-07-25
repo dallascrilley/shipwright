@@ -37,7 +37,7 @@ Which sources the deployed service executes is controlled by
 | `approval_required` | Same as `dry_run`; publication requires the operator confirmation already built into the pipeline. Publication remains forced off at the queue boundary. |
 | `publish_allowed` | Publication permitted only for agents whose pinned revision is `publish_allowed`. |
 
-Advance one stage at a time and verify each before moving on. The deploy script
+Advance one stage at a time and verify each before moving on. For the dry-run-first always-on checklist, see [docs/runbooks/always-on-activation.md](runbooks/always-on-activation.md). The deploy script
 refuses unknown stage values, and `bun run doctor` is run as the service user
 on every deploy.
 

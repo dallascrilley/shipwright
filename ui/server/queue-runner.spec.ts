@@ -32,7 +32,8 @@ function createQueuedDemoRun() {
   const agent = controlPlane.createAgent({
     name: "Demo issue triage",
     instructions: "Prepare a dry run.",
-    skillId: "fix-review-findings",
+    actionPreset: "fix_issue",
+    skillId: "",
     allowedTools: ["github", "sandbox"],
     targetScope: { repository: "dallascrilley/shipwright", branch: "main" },
     verification: { presetId: "bun-test" },

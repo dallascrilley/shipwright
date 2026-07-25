@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/sheet";
 
 import type {
+  ActionPreset,
   AgentDraft,
   AgentDefinition,
   AgentTrigger,
@@ -42,9 +43,12 @@ import type {
   GithubTriggerConditionInput,
 } from "../../../shared/agent-definition";
 import {
+  ACTION_PRESET_CHOICES,
   GITHUB_TRIGGER_CONDITION_CATALOG,
   GITHUB_TRIGGER_CONDITION_LIMITS,
   GITHUB_TRIGGER_CHOICES,
+  defaultSkillIdForActionPreset,
+  defaultTargetKindForActionPreset,
   type GithubTriggerChoiceId,
 } from "../../../shared/agent-definition";
 import type {
@@ -64,7 +68,8 @@ import {
 const DEFAULT_DRAFT: AgentDraft = {
   name: "",
   instructions: "",
-  skillId: "fix-review-findings",
+  actionPreset: "fix_issue",
+  skillId: "",
   allowedTools: ["github", "terminal"],
   targetScope: { repository: "", branch: "main" },
   verification: { presetId: "bun-test" },
@@ -75,6 +80,7 @@ const DEFAULT_DRAFT: AgentDraft = {
 type DraftForm = {
   name: string;
   instructions: string;
+  actionPreset: ActionPreset;
   skillId: string;
   allowedTools: string;
   repository: string;
@@ -126,6 +132,7 @@ function toDraftForm(draft: AgentDraft): DraftForm {
   return {
     name: draft.name,
     instructions: draft.instructions,
+    actionPreset: draft.actionPreset,
     skillId: draft.skillId,
     allowedTools: draft.allowedTools.join(", "),
     repository: draft.targetScope.repository,
@@ -137,6 +144,21 @@ function toDraftForm(draft: AgentDraft): DraftForm {
   };
 }
 
+function applyActionPresetChange(
+  form: DraftForm,
+  nextPreset: ActionPreset,
+): DraftForm {
+  const previousDefault = defaultSkillIdForActionPreset(form.actionPreset);
+  const nextDefault = defaultSkillIdForActionPreset(nextPreset);
+  const shouldUpdateSkill =
+    !form.skillId.trim() || form.skillId === previousDefault;
+  return {
+    ...form,
+    actionPreset: nextPreset,
+    skillId: shouldUpdateSkill ? nextDefault : form.skillId,
+  };
+}
+
 function toDraft(form: DraftForm): AgentDraft {
   const allowedTools = form.allowedTools
     .split(",")
@@ -145,6 +167,7 @@ function toDraft(form: DraftForm): AgentDraft {
   return {
     name: form.name,
     instructions: form.instructions,
+    actionPreset: form.actionPreset,
     skillId: form.skillId,
     allowedTools,
     targetScope: {
@@ -294,6 +317,11 @@ export function AgentManagementConsole() {
   useEffect(() => {
     if (detail) {
       setDraftForm(toDraftForm(detail.config));
+      const targetKind = defaultTargetKindForActionPreset(
+        detail.config.actionPreset,
+      );
+      setTestTargetKind(targetKind);
+      setTriggerTargetKind(targetKind);
       setReplacementTriggerId(null);
       setGithubConditions([]);
     }
@@ -302,6 +330,19 @@ export function AgentManagementConsole() {
   async function refresh() {
     await Promise.all([listQuery.refetch(), detailQuery.refetch()]);
   }
+
+
+  useEffect(() => {
+    const targetKind = defaultTargetKindForActionPreset(draftForm.actionPreset);
+    setTriggerTargetKind(targetKind);
+  }, [draftForm.actionPreset]);
+
+  useEffect(() => {
+    if (!detail) return;
+    setTestTargetKind(
+      defaultTargetKindForActionPreset(detail.config.actionPreset),
+    );
+  }, [detail?.agentId, detail?.currentRevision, detail?.config.actionPreset]);
 
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
@@ -486,11 +527,21 @@ export function AgentManagementConsole() {
   async function handleQueueTestRun() {
     if (!detail) return;
     setMessage(null);
+    const expectedKind = defaultTargetKindForActionPreset(
+      detail.config.actionPreset,
+    );
+    if (testTargetKind !== expectedKind) {
+      setMessage(
+        `Test target must be a ${expectedKind} for action preset "${detail.config.actionPreset}".`,
+      );
+      setTestTargetKind(expectedKind);
+      return;
+    }
     try {
       const queued = (await queueTestRun.mutateAsync({
         agentId: detail.agentId,
         expectedRevision: detail.currentRevision,
-        target: { kind: testTargetKind, number: Number(testTargetNumber) },
+        target: { kind: expectedKind, number: Number(testTargetNumber) },
       })) as { execution: { executionId: string; agentRevision: number } };
       setMessage(
         `Dry-run test ${queued.execution.executionId.slice(0, 10)} queued against revision ${queued.execution.agentRevision}. No worker or publish action starts here.`,
@@ -945,9 +996,13 @@ export function AgentManagementConsole() {
                               )
                             }
                             className="input-shell"
+                            disabled={busy}
                           >
-                            <option value="issue">Issue</option>
-                            <option value="pull">Pull request</option>
+                            {draftForm.actionPreset === "fix_issue" ? (
+                              <option value="issue">Issue</option>
+                            ) : (
+                              <option value="pull">Pull request</option>
+                            )}
                           </select>
                         </Field>
                         <Field label="Target number">
@@ -1004,9 +1059,13 @@ export function AgentManagementConsole() {
                         )
                       }
                       className="input-shell"
+                      disabled={busy}
                     >
-                      <option value="issue">Issue</option>
-                      <option value="pull">Pull request</option>
+                      {detail.config.actionPreset === "fix_issue" ? (
+                        <option value="issue">Issue</option>
+                      ) : (
+                        <option value="pull">Pull request</option>
+                      )}
                     </select>
                   </Field>
                   <Field label="Test target number">
@@ -1501,15 +1560,41 @@ function DraftFields({
             required
           />
         </Field>
-        <Field label="Skill ID">
-          <Input
-            value={form.skillId}
+        <Field label="Action preset">
+          <select
+            value={form.actionPreset}
             disabled={disabled}
-            onChange={(event) => update("skillId", event.target.value)}
-            required
-          />
+            onChange={(event) =>
+              onChange(
+                applyActionPresetChange(
+                  form,
+                  event.target.value as ActionPreset,
+                ),
+              )
+            }
+            className="input-shell"
+          >
+            {ACTION_PRESET_CHOICES.map((choice) => (
+              <option key={choice.id} value={choice.id}>
+                {choice.label}
+              </option>
+            ))}
+          </select>
         </Field>
       </div>
+      <Field label="Skill ID">
+        <Input
+          value={form.skillId}
+          disabled={disabled}
+          onChange={(event) => update("skillId", event.target.value)}
+          placeholder={
+            form.actionPreset === "fix_issue"
+              ? "Leave empty for issue mode"
+              : "fix-review-findings"
+          }
+          required={form.actionPreset === "resolve_pr_feedback"}
+        />
+      </Field>
       <Field label="Instructions">
         <textarea
           value={form.instructions}
