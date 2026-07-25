@@ -34,14 +34,21 @@ describe("rollout stages", () => {
   });
 
   test("publication requires the publish stage and a publish-allowed revision", () => {
-    expect(canPublishAtStage("disabled", "publish_allowed")).toBe(false);
-    expect(canPublishAtStage("approval_required", "publish_allowed")).toBe(
-      false,
-    );
-    expect(canPublishAtStage("publish_allowed", "approval_required")).toBe(
-      false,
-    );
-    expect(canPublishAtStage("publish_allowed", "publish_allowed")).toBe(true);
+    const stages = [
+      "disabled",
+      "test_only",
+      "dry_run",
+      "approval_required",
+      "publish_allowed",
+    ] as const;
+    const policies = ["dry_run", "approval_required", "publish_allowed"] as const;
+    for (const stage of stages) {
+      for (const policy of policies) {
+        const allowed =
+          stage === "publish_allowed" && policy === "publish_allowed";
+        expect(canPublishAtStage(stage, policy)).toBe(allowed);
+      }
+    }
   });
 });
 
