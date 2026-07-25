@@ -28,10 +28,10 @@ After this work, an operator can:
 - [x] (2026-07-25) This plan drafted with U1–U6 sequencing
 - [x] (2026-07-25) Import epic td-a4dc59 with U1-U6
 - [x] (2026-07-25) U1 runbook written (`docs/runbooks/always-on-activation.md`); remote pin dry-run proof still open
-- [x] (2026-07-25) U2 action presets landed on `feat/action-presets` (td-3bd33e); review/merge pending
-- [x] U3 Template agents (PR #76)
-- [ ] U4 Publish-stage security criteria + selective `publish_allowed` (runbook drafted; live sign-off pending U1)
-- [ ] U5 Fleet-watch decommission for one covered repo
+- [x] (2026-07-25) U2 action presets merged (td-3bd33e)
+- [x] (2026-07-25) U3 template agents merged (td-a193a1, PR #76)
+- [x] (2026-07-25) U4 publish-stage criteria merged (td-912857, PR #77); live `publish_allowed` sign-off still gated on U1
+- [ ] U5 Fleet-watch decommission for one covered repo (runbook + poller skip; blocked on U1 webhook proof)
 - [ ] U6 End-to-end remote + browser proof
 
 
