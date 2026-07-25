@@ -116,7 +116,7 @@ Advance **one stage at a time**. Do not skip to `publish_allowed` in this runboo
 ## Step 5 — Advance to `dry_run` and prove one signed delivery
 
 1. Set `SHIPWRIGHT_ROLLOUT_STAGE=dry_run` and restart.
-2. Trigger a real allowlisted event **or** replay a signed fixture against the public webhook path.
+2. Trigger a real allowlisted event **or** replay a signed fixture against the public webhook path (`scripts/replay-github-webhook.sh --replay`; payloads in `test/fixtures/github-webhook/`).
 3. Confirm:
 
    - exactly **one** queue/execution for the agent revision
@@ -131,7 +131,7 @@ Advance **one stage at a time**. Do not skip to `publish_allowed` in this runboo
 
 ## Step 6 — Record evidence
 
-In td (`td-fae961`) or this plan’s Outcomes, record:
+Use [always-on-u1-evidence-checklist.md](./always-on-u1-evidence-checklist.md) as the copy-paste template. In td (`td-fae961`) or this plan’s Outcomes, record:
 
 - pin commit / deploy revision
 - stage transitions with timestamps

@@ -1,0 +1,10 @@
+{
+  "action": "opened",
+  "repository": { "full_name": "dallascrilley/shipwright" },
+  "sender": { "login": "github-actions[bot]" },
+  "pull_request": {
+    "number": 99,
+    "draft": false,
+    "base": { "ref": "main" }
+  }
+}
