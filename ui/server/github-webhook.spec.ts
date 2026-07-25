@@ -41,7 +41,8 @@ function createEnabledIssueTrigger(conditions: GithubTriggerCondition[] = []) {
   const agent = fixture.controlPlane.createAgent({
     name: "Issue triage",
     instructions: "Triage inbound issues as a dry run.",
-    skillId: "fix-review-findings",
+    actionPreset: "fix_issue",
+    skillId: "",
     allowedTools: ["github", "sandbox"],
     targetScope: { repository: "dallascrilley/shipwright", branch: "main" },
     verification: { presetId: "bun-test" },
@@ -170,7 +171,8 @@ describe("GitHubWebhookIngress", () => {
     const agent = disabled.controlPlane.createAgent({
       name: "Disabled issue triage",
       instructions: "Do not run while disabled.",
-      skillId: "fix-review-findings",
+      actionPreset: "fix_issue",
+      skillId: "",
       allowedTools: ["github"],
       targetScope: { repository: "dallascrilley/shipwright" },
       verification: { presetId: "bun-test" },
@@ -204,6 +206,7 @@ describe("GitHubWebhookIngress", () => {
     const agent = fixture.controlPlane.createAgent({
       name: "Pull request triage",
       instructions: "Triage pull requests as a dry run.",
+      actionPreset: "resolve_pr_feedback",
       skillId: "fix-review-findings",
       allowedTools: ["github", "sandbox"],
       targetScope: { repository: "dallascrilley/shipwright" },
@@ -241,6 +244,7 @@ describe("GitHubWebhookIngress", () => {
     const agent = fixture.controlPlane.createAgent({
       name: "Ready pull requests",
       instructions: "Triage ready pull requests targeting main.",
+      actionPreset: "resolve_pr_feedback",
       skillId: "fix-review-findings",
       allowedTools: ["github"],
       targetScope: { repository: "dallascrilley/shipwright" },

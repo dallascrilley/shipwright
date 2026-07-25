@@ -10,7 +10,8 @@ import { QueueDispatcher, type QueueRunner } from "./queue-dispatcher";
 const draft: AgentDraftInput = {
   name: "Issue triage",
   instructions: "Triage allowlisted issues and prepare a dry run.",
-  skillId: "fix-review-findings",
+  actionPreset: "fix_issue",
+  skillId: "",
   allowedTools: ["github", "sandbox"],
   targetScope: { repository: "dallascrilley/shipwright", branch: "main" },
   verification: { presetId: "bun-test" },
@@ -71,9 +72,12 @@ function createFixture(options?: QueueFixtureOptions): QueueFixture {
 
 function createEnabledAgent(
   fixture: QueueFixture,
-  overrides: Partial<typeof draft> = {},
+  overrides: Partial<AgentDraftInput> = {},
 ) {
-  const agent = fixture.controlPlane.createAgent({ ...draft, ...overrides });
+  const agent = fixture.controlPlane.createAgent({
+    ...draft,
+    ...overrides,
+  });
   fixture.controlPlane.setEnabled(agent.agentId, agent.currentRevision, true);
   return agent;
 }

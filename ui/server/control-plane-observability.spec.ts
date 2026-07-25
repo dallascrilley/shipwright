@@ -55,6 +55,7 @@ describe("buildControlPlaneReadiness", () => {
       draft: {
         name: "Triage",
         instructions: "Prepare a dry run.",
+        actionPreset: "resolve_pr_feedback" as const,
         skillId: "fix-review-findings",
         allowedTools: ["github"],
         targetScope: { repository: "dallascrilley/shipwright" },
