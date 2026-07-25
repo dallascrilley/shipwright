@@ -16,7 +16,9 @@ import {
   inferActionPresetFromLegacyDraft,
   lifecycleEventSchema,
   queueEntrySchema,
+  validateActionPresetAgainstAgentTriggers,
   validateActionPresetGithubTriggerConsistency,
+  validateActionPresetScheduleTriggerConsistency,
 } from "./agent-definition";
 
 const draft = {
@@ -509,5 +511,69 @@ describe("action preset contracts", () => {
         conditions: [],
       }),
     ).toMatch(/cannot use/);
+  });
+
+  test("validates schedule target kinds against presets", () => {
+    expect(
+      validateActionPresetScheduleTriggerConsistency("resolve_pr_feedback", {
+        target: { kind: "issue" },
+      }),
+    ).toMatch(/cannot use schedule target kind "issue"/);
+    expect(
+      validateActionPresetAgainstAgentTriggers("fix_issue", [
+        {
+          kind: "schedule",
+          config: {
+            schedule: "0 9 * * *",
+            timezone: "UTC",
+            target: { kind: "pull", number: 7 },
+          },
+        },
+      ]),
+    ).toMatch(/cannot use schedule target kind "pull"/);
+  });
+
+  test("migrates legacy snapshot drafts using agent triggers", () => {
+    const migrated = agentControlPlaneSnapshotSchema.parse({
+      version: 1,
+      agents: [
+        {
+          agentId: "agent-1",
+          currentRevision: 1,
+          enabled: false,
+          createdAt: "2026-07-21T00:00:00.000Z",
+          updatedAt: "2026-07-21T00:00:00.000Z",
+          health: { state: "idle" },
+        },
+      ],
+      revisions: [
+        {
+          agentId: "agent-1",
+          revision: 1,
+          createdAt: "2026-07-21T00:00:00.000Z",
+          draft: {
+            ...draft,
+            actionPreset: undefined,
+            skillId: "fix-review-findings",
+          },
+        },
+      ],
+      triggers: [
+        {
+          triggerId: "trigger-1",
+          agentId: "agent-1",
+          agentRevision: 1,
+          kind: "github",
+          enabled: true,
+          config: { event: "issues", actions: ["opened"], conditions: [] },
+          createdAt: "2026-07-21T00:00:00.000Z",
+          updatedAt: "2026-07-21T00:00:00.000Z",
+        },
+      ],
+      lifecycleEvents: [],
+      executions: [],
+      queueEntries: [],
+    });
+    expect(migrated.revisions[0]?.draft.actionPreset).toBe("fix_issue");
   });
 });

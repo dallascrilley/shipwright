@@ -364,17 +364,47 @@ export function validateActionPresetGithubTriggerConsistency(
   return `Action preset "${preset}" cannot use ${triggerLabel}. Use ${expected}.`;
 }
 
+export function scheduleTargetAllowedForActionPreset(
+  preset: ActionPreset,
+  targetKind: "issue" | "pull",
+): boolean {
+  return preset === "fix_issue"
+    ? targetKind === "issue"
+    : targetKind === "pull";
+}
+
+export function validateActionPresetScheduleTriggerConsistency(
+  preset: ActionPreset,
+  config: { target: { kind: "issue" | "pull" } },
+): string | undefined {
+  if (scheduleTargetAllowedForActionPreset(preset, config.target.kind)) {
+    return undefined;
+  }
+  const expected =
+    preset === "fix_issue" ? "issue targets" : "pull request targets";
+  return `Action preset "${preset}" cannot use schedule target kind "${config.target.kind}". Use ${expected}.`;
+}
+
 export function validateActionPresetAgainstAgentTriggers(
   preset: ActionPreset,
   triggers: readonly Pick<AgentTrigger, "kind" | "config">[],
 ): string | undefined {
   for (const trigger of triggers) {
-    if (trigger.kind !== "github") continue;
-    const message = validateActionPresetGithubTriggerConsistency(
-      preset,
-      trigger.config as GithubTriggerConfig,
-    );
-    if (message) return message;
+    if (trigger.kind === "github") {
+      const message = validateActionPresetGithubTriggerConsistency(
+        preset,
+        trigger.config as GithubTriggerConfig,
+      );
+      if (message) return message;
+      continue;
+    }
+    if (trigger.kind === "schedule" && "target" in trigger.config) {
+      const message = validateActionPresetScheduleTriggerConsistency(
+        preset,
+        trigger.config as { target: { kind: "issue" | "pull" } },
+      );
+      if (message) return message;
+    }
   }
   return undefined;
 }
@@ -601,7 +631,47 @@ export const queueEntrySchema = z
 
 export type QueueEntry = z.output<typeof queueEntrySchema>;
 
-export const agentControlPlaneSnapshotSchema = z
+export function migrateLegacyActionPresetsInSnapshot(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const snapshot = raw as Record<string, unknown>;
+  const triggers = Array.isArray(snapshot.triggers) ? snapshot.triggers : [];
+  const revisions = Array.isArray(snapshot.revisions) ? snapshot.revisions : [];
+  return {
+    ...snapshot,
+    revisions: revisions.map((revision) => {
+      if (!revision || typeof revision !== "object" || Array.isArray(revision)) {
+        return revision;
+      }
+      const record = revision as Record<string, unknown>;
+      const draft = record.draft;
+      if (!draft || typeof draft !== "object" || Array.isArray(draft)) {
+        return revision;
+      }
+      const draftRecord = draft as Record<string, unknown>;
+      if (draftRecord.actionPreset !== undefined) return revision;
+      const agentId = record.agentId;
+      const agentTriggers = triggers.filter(
+        (trigger) =>
+          !!trigger &&
+          typeof trigger === "object" &&
+          !Array.isArray(trigger) &&
+          (trigger as { agentId?: unknown }).agentId === agentId,
+      ) as { kind: string; config?: unknown }[];
+      return {
+        ...record,
+        draft: {
+          ...draftRecord,
+          actionPreset: inferActionPresetFromLegacyDraft(
+            draftRecord,
+            agentTriggers,
+          ),
+        },
+      };
+    }),
+  };
+}
+
+export const agentControlPlaneSnapshotObjectSchema = z
   .object({
     version: z.literal(1),
     agents: z.array(agentDefinitionSchema),
@@ -612,6 +682,11 @@ export const agentControlPlaneSnapshotSchema = z
     queueEntries: z.array(queueEntrySchema),
   })
   .strict();
+
+export const agentControlPlaneSnapshotSchema = z.preprocess(
+  migrateLegacyActionPresetsInSnapshot,
+  agentControlPlaneSnapshotObjectSchema,
+);
 
 export type AgentControlPlaneSnapshot = z.output<
   typeof agentControlPlaneSnapshotSchema

@@ -416,4 +416,83 @@ describe("AgentControlPlane", () => {
       }),
     ).toThrow(/cannot use Issue created/);
   });
+
+  test("rejects schedule targets that conflict with the agent action preset", () => {
+    const controlPlane = createControlPlane();
+    const agent = controlPlane.createAgent({
+      ...draft,
+      actionPreset: "resolve_pr_feedback",
+      skillId: "fix-review-findings",
+    });
+
+    expect(() =>
+      controlPlane.createTrigger({
+        agentId: agent.agentId,
+        expectedRevision: agent.currentRevision,
+        kind: "schedule",
+        config: {
+          schedule: "0 9 * * *",
+          timezone: "America/New_York",
+          target: { kind: "issue", number: 42 },
+        },
+      }),
+    ).toThrow(/cannot use schedule target kind "issue"/);
+  });
+
+  test("loads legacy drafts with issue triggers as fix_issue despite review skillId", () => {
+    const directory = mkdtempSync(join(tmpdir(), "shipwright-control-plane-"));
+    const path = join(directory, "agent-control-plane.json");
+    temporaryDirectories.push(directory);
+    writeFileSync(
+      path,
+      JSON.stringify(
+        {
+          version: 1,
+          agents: [
+            {
+              agentId: "agent-legacy",
+              currentRevision: 1,
+              enabled: false,
+              createdAt: "2026-07-21T00:00:00.000Z",
+              updatedAt: "2026-07-21T00:00:00.000Z",
+              health: { state: "idle" },
+            },
+          ],
+          revisions: [
+            {
+              agentId: "agent-legacy",
+              revision: 1,
+              createdAt: "2026-07-21T00:00:00.000Z",
+              draft: (({ actionPreset: _omit, ...rest }) => ({
+                ...rest,
+                skillId: "fix-review-findings",
+              }))(draft),
+            },
+          ],
+          triggers: [
+            {
+              triggerId: "trigger-legacy",
+              agentId: "agent-legacy",
+              agentRevision: 1,
+              kind: "github",
+              enabled: true,
+              config: { event: "issues", actions: ["opened"], conditions: [] },
+              createdAt: "2026-07-21T00:00:00.000Z",
+              updatedAt: "2026-07-21T00:00:00.000Z",
+            },
+          ],
+          lifecycleEvents: [],
+          executions: [],
+          queueEntries: [],
+        },
+        null,
+        2,
+      ) + "\n",
+      "utf8",
+    );
+
+    const store = new JsonFileAgentControlPlaneStore(path);
+    const loaded = store.load();
+    expect(loaded.revisions[0]?.draft.actionPreset).toBe("fix_issue");
+  });
 });

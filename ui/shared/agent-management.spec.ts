@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 
-import { agentControlPlaneSnapshotSchema } from "./agent-definition";
+import {
+  agentControlPlaneSnapshotSchema,
+  agentTriggerSchema,
+} from "./agent-definition";
 import {
   agentDefinitionExportSchema,
   agentDefinitionExportV1Schema,
@@ -124,7 +127,7 @@ describe("agent management trigger projections", () => {
     (event, action, label) => {
       const snapshot = createSnapshot();
       const trigger =
-        agentControlPlaneSnapshotSchema.shape.triggers.element.parse({
+        agentTriggerSchema.parse({
           triggerId: `trigger-${event}-${action}`,
           agentId: "agent-1",
           agentRevision: 2,

@@ -20,6 +20,7 @@ import {
   type AgentControlPlaneSnapshot,
   validateActionPresetAgainstAgentTriggers,
   validateActionPresetGithubTriggerConsistency,
+  validateActionPresetScheduleTriggerConsistency,
   type AgentDefinition,
   type AgentDraft,
   type AgentDraftInput,
@@ -440,6 +441,23 @@ export class AgentControlPlane {
     if (message) throw new Error(message);
   }
 
+  private assertScheduleTriggerAllowedForAgent(
+    snapshot: AgentControlPlaneSnapshot,
+    agent: AgentDefinition,
+    config: { target: { kind: "issue" | "pull" } },
+  ): void {
+    const revision = this.requireRevision(
+      snapshot,
+      agent.agentId,
+      agent.currentRevision,
+    );
+    const message = validateActionPresetScheduleTriggerConsistency(
+      revision.draft.actionPreset,
+      config,
+    );
+    if (message) throw new Error(message);
+  }
+
   private buildTrigger(
     agent: AgentDefinition,
     input: Pick<CreateTriggerInput, "kind" | "config">,
@@ -451,6 +469,13 @@ export class AgentControlPlane {
         this.store.load(),
         agent,
         input.config as GithubTriggerConfig,
+      );
+    }
+    if (input.kind === "schedule" && "target" in input.config) {
+      this.assertScheduleTriggerAllowedForAgent(
+        this.store.load(),
+        agent,
+        input.config,
       );
     }
     const scheduleConfig =
