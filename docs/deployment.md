@@ -261,7 +261,17 @@ bash scripts/prove-review-trigger-rollout.sh --stage dry_run
    comment on an open PR). Confirm a single queued GitHub execution, a redacted
    dry-run receipt, and that replaying the same `X-GitHub-Delivery` does not
    enqueue a second row. Concurrent review-comment deliveries for the same PR
-   must coalesce while the first execution is queued or leased.
+   must coalesce while the first execution is queued or leased. Once that
+   execution is *running* the next delivery enqueues its own row on purpose:
+   the running worker has already read its review context, so folding a later
+   comment into it would drop the comment with nothing scheduled to pick it up.
+
+   Review events from a bot sender never wake an agent. The pipeline replies to
+   threads as the App, and its own reply arrives back as a review-comment
+   delivery; waking on it would re-run the agent, which replies again — endless
+   on any thread the pipeline leaves unresolved (`needs-human`). Expect a 202
+   with `matched: 0` for those deliveries. Issue and pull-request events are
+   unaffected.
 5. **Publish window** — Only for the canary agent revision, set
    `publicationPolicy` to `publish_allowed`, set host stage to
    `publish_allowed`, restart, and leave one inline review comment. Expect one

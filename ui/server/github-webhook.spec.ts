@@ -586,6 +586,79 @@ describe("GitHubWebhookIngress", () => {
     );
   });
 
+  test("never wakes review events for a bot sender", async () => {
+    const fixture = createFixture();
+    const agent = fixture.controlPlane.createAgent({
+      name: "Review self loop",
+      instructions: "Must not wake on its own replies.",
+      skillId: "fix-review-findings",
+      actionPreset: "resolve_pr_feedback",
+      allowedTools: ["github"],
+      targetScope: { repository: "dallascrilley/shipwright" },
+      verification: { presetId: "bun-test" },
+      publicationPolicy: "dry_run",
+    });
+    fixture.controlPlane.setEnabled(agent.agentId, agent.currentRevision, true);
+    for (const event of [
+      "pull_request_review_comment",
+      "pull_request_review",
+    ] as const) {
+      fixture.controlPlane.createTrigger({
+        agentId: agent.agentId,
+        expectedRevision: agent.currentRevision,
+        kind: "github",
+        config: {
+          event,
+          actions: [event === "pull_request_review" ? "submitted" : "created"],
+        },
+      });
+    }
+    const pullRequest = {
+      number: 31,
+      base: { ref: "main" },
+      draft: false,
+      labels: [],
+    };
+
+    // The pipeline's own reply re-enters as a review-comment delivery. Waking
+    // on it would re-run the agent, which replies again, forever.
+    for (const event of [
+      "pull_request_review_comment",
+      "pull_request_review",
+    ] as const) {
+      const result = await fixture.ingress.receive(
+        await signedInput(event, `delivery-bot-${event}`, {
+          action: event === "pull_request_review" ? "submitted" : "created",
+          repository: { full_name: "dallascrilley/shipwright" },
+          pull_request: pullRequest,
+          sender: { login: "shipwright[bot]", type: "Bot" },
+        }),
+      );
+      expect({ event, result }).toEqual({
+        event,
+        result: {
+          status: "accepted",
+          matched: 0,
+          decisions: [],
+          conditionFiltered: 0,
+          decisionsTruncated: 0,
+        },
+      });
+    }
+    expect(fixture.dispatcher.list()).toEqual([]);
+
+    // A human on the same thread still wakes it.
+    await fixture.ingress.receive(
+      await signedInput("pull_request_review_comment", "delivery-human", {
+        action: "created",
+        repository: { full_name: "dallascrilley/shipwright" },
+        pull_request: pullRequest,
+        sender: { login: "dallascrilley", type: "User" },
+      }),
+    );
+    expect(fixture.dispatcher.list()).toHaveLength(1);
+  });
+
   test("rejects unsupported GitHub events before queueing", async () => {
     const fixture = createEnabledIssueTrigger();
 
