@@ -590,10 +590,15 @@ describe("action preset contracts", () => {
       "pull_request_review_comment",
       "pull_request_review",
     ] as const) {
-      expect(
-        githubEventAllowedForActionPreset("resolve_pr_feedback", event),
-      ).toBe(true);
-      expect(githubEventAllowedForActionPreset("fix_issue", event)).toBe(false);
+      // Assert as an object so a failure names the offending event.
+      expect({
+        event,
+        resolvePrFeedback: githubEventAllowedForActionPreset(
+          "resolve_pr_feedback",
+          event,
+        ),
+        fixIssue: githubEventAllowedForActionPreset("fix_issue", event),
+      }).toEqual({ event, resolvePrFeedback: true, fixIssue: false });
     }
     expect(
       validateActionPresetGithubTriggerConsistency("resolve_pr_feedback", {

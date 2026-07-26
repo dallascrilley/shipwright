@@ -392,11 +392,21 @@ export function findGithubTriggerChoice(
   );
 }
 
+// Exhaustive on purpose: adding an event to githubTriggerConfigSchema without
+// deciding which preset owns it fails the build here rather than silently
+// admitting the event to resolve_pr_feedback.
 export function githubEventAllowedForActionPreset(
   preset: ActionPreset,
   event: GithubTriggerConfig["event"],
 ): boolean {
-  return preset === "fix_issue" ? event === "issues" : event !== "issues";
+  switch (event) {
+    case "issues":
+      return preset === "fix_issue";
+    case "pull_request":
+    case "pull_request_review_comment":
+    case "pull_request_review":
+      return preset === "resolve_pr_feedback";
+  }
 }
 
 export function githubTriggerConfigAllowedForActionPreset(
