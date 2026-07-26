@@ -585,6 +585,32 @@ describe("action preset contracts", () => {
     ).toMatch(/cannot use/);
   });
 
+  test("treats review events as pull request family for resolve_pr_feedback", () => {
+    for (const event of [
+      "pull_request_review_comment",
+      "pull_request_review",
+    ] as const) {
+      expect(
+        githubEventAllowedForActionPreset("resolve_pr_feedback", event),
+      ).toBe(true);
+      expect(githubEventAllowedForActionPreset("fix_issue", event)).toBe(false);
+    }
+    expect(
+      validateActionPresetGithubTriggerConsistency("resolve_pr_feedback", {
+        event: "pull_request_review_comment",
+        actions: ["created"],
+        conditions: [],
+      }),
+    ).toBeUndefined();
+    expect(
+      validateActionPresetGithubTriggerConsistency("fix_issue", {
+        event: "pull_request_review",
+        actions: ["submitted"],
+        conditions: [],
+      }),
+    ).toMatch(/cannot use/);
+  });
+
   test("validates schedule target kinds against presets", () => {
     expect(
       validateActionPresetScheduleTriggerConsistency("resolve_pr_feedback", {

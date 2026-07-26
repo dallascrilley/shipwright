@@ -394,9 +394,9 @@ export function findGithubTriggerChoice(
 
 export function githubEventAllowedForActionPreset(
   preset: ActionPreset,
-  event: "issues" | "pull_request",
+  event: GithubTriggerConfig["event"],
 ): boolean {
-  return preset === "fix_issue" ? event === "issues" : event === "pull_request";
+  return preset === "fix_issue" ? event === "issues" : event !== "issues";
 }
 
 export function githubTriggerConfigAllowedForActionPreset(
@@ -419,7 +419,7 @@ export function validateActionPresetGithubTriggerConsistency(
   const expected =
     preset === "fix_issue"
       ? "issue triggers (created or edited)"
-      : "pull request triggers (opened or synchronize)";
+      : "pull request or review triggers";
   return `Action preset "${preset}" cannot use ${triggerLabel}. Use ${expected}.`;
 }
 
