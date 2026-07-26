@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -81,6 +81,10 @@ test("runPiAgent rejects Codex auth files readable by other users", async () => 
   const directory = mkdtempSync(join(tmpdir(), "shipwright-codex-auth-"));
   const authFile = join(directory, "auth.json");
   writeFileSync(authFile, JSON.stringify({ tokens: {} }), { mode: 0o644 });
+  // writeFileSync applies the process umask, so a restrictive umask (077) would
+  // land the fixture at 0600 and silently skip the owner-only branch entirely.
+  chmodSync(authFile, 0o644);
+  expect(statSync(authFile).mode & 0o077).not.toBe(0);
   const vm: AgentVm = {
     async mkdir() {},
     async writeFile() {},
