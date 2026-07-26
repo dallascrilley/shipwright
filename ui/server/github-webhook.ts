@@ -381,18 +381,18 @@ function readLabels(
 }
 
 /**
- * Only a readable, non-bot sender counts as human. GitHub sets `sender.type`
- * to "Bot" for App activity and suffixes App logins "[bot]"; either signal
- * alone is enough, since a payload may carry only one. An absent or unreadable
- * sender is not human either: this gates a runaway-cost guard, so ambiguity
- * must not wake an agent, and a real review delivery always names its sender.
+ * A human sender names itself and shows no bot signal. GitHub sets
+ * `sender.type` to "Bot" for App activity and suffixes App logins "[bot]";
+ * either signal alone disqualifies, since a payload may carry only one. A
+ * sender that is absent, unreadable, or nameless is not human either: this
+ * gates a runaway-cost guard, so ambiguity must not wake an agent, and a real
+ * review delivery always names its sender.
  */
 function isHumanSender(sender: unknown): boolean {
   if (!isRecord(sender)) return false;
-  return (
-    stringValue(sender.type).toLowerCase() !== "bot" &&
-    !stringValue(sender.login).toLowerCase().endsWith("[bot]")
-  );
+  const login = stringValue(sender.login).trim().toLowerCase();
+  if (!login || login.endsWith("[bot]")) return false;
+  return stringValue(sender.type).toLowerCase() !== "bot";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
