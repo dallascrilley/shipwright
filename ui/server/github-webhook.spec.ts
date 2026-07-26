@@ -621,21 +621,42 @@ describe("GitHubWebhookIngress", () => {
     };
 
     // The pipeline's own reply re-enters as a review-comment delivery. Waking
-    // on it would re-run the agent, which replies again, forever.
-    for (const event of [
-      "pull_request_review_comment",
-      "pull_request_review",
-    ] as const) {
+    // on it would re-run the agent, which replies again, forever. Either bot
+    // signal alone has to be enough, since only one may be present.
+    const botCases = [
+      {
+        label: "both signals",
+        event: "pull_request_review_comment" as const,
+        sender: { login: "shipwright[bot]", type: "Bot" },
+      },
+      {
+        label: "type only",
+        event: "pull_request_review_comment" as const,
+        sender: { login: "shipwright", type: "Bot" },
+      },
+      {
+        label: "login suffix only",
+        event: "pull_request_review_comment" as const,
+        sender: { login: "shipwright[bot]" },
+      },
+      {
+        label: "review submitted by a bot",
+        event: "pull_request_review" as const,
+        sender: { login: "shipwright[bot]", type: "Bot" },
+      },
+    ];
+    for (const [index, botCase] of botCases.entries()) {
       const result = await fixture.ingress.receive(
-        await signedInput(event, `delivery-bot-${event}`, {
-          action: event === "pull_request_review" ? "submitted" : "created",
+        await signedInput(botCase.event, `delivery-bot-${index}`, {
+          action:
+            botCase.event === "pull_request_review" ? "submitted" : "created",
           repository: { full_name: "dallascrilley/shipwright" },
           pull_request: pullRequest,
-          sender: { login: "shipwright[bot]", type: "Bot" },
+          sender: botCase.sender,
         }),
       );
-      expect({ event, result }).toEqual({
-        event,
+      expect({ label: botCase.label, result }).toEqual({
+        label: botCase.label,
         result: {
           status: "accepted",
           matched: 0,
