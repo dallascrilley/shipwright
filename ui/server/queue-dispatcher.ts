@@ -200,7 +200,7 @@ export class QueueDispatcher {
             snapshot.agents.some(
               (agent) =>
                 agent.agentId === entry.agentId &&
-                agent.enabled &&
+                (agent.enabled || entrySource(snapshot, entry) === "test") &&
                 agent.health.state !== "paused",
             ),
         )
