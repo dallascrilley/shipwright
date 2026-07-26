@@ -2,6 +2,7 @@
   "action": "opened",
   "repository": { "full_name": "dallascrilley/shipwright" },
   "sender": { "login": "github-actions[bot]" },
+  "number": 99,
   "pull_request": {
     "number": 99,
     "draft": false,
