@@ -132,6 +132,7 @@ describe("POST /api/github/webhook", () => {
       name: "Review feedback",
       instructions: "Resolve review comments as a dry run.",
       skillId: "fix-review-findings",
+      actionPreset: "resolve_pr_feedback",
       allowedTools: ["github"],
       targetScope: { repository: "dallascrilley/shipwright" },
       verification: { presetId: "bun-test" },
