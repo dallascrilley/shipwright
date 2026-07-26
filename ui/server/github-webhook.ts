@@ -35,6 +35,7 @@ const REVIEW_WAKE_EVENTS: ReadonlySet<GitHubEvent> = new Set([
 type WebhookTarget = {
   action: string;
   repository: string;
+  senderIsBot: boolean;
   target: ExecutionRequest["target"];
   conditionContext: GitHubTriggerConditionContext;
 };
@@ -99,6 +100,14 @@ export class GitHubWebhookIngress {
     const webhook = this.parseTarget(event, input.rawBody);
     if (!webhook) return { status: "rejected", reason: "invalid_payload" };
     if (!isRepositoryAllowed(this.options, webhook.repository)) {
+      return acceptedResult(0, []);
+    }
+    // The review pipeline replies to threads as this App, and its own reply is
+    // itself a review-comment delivery. Waking on it would re-run the agent,
+    // which replies again -- unbounded on any thread the pipeline leaves
+    // unresolved (`needs-human`). Bot senders never wake the review events.
+    // Issue and pull_request events keep their existing behavior.
+    if (REVIEW_WAKE_EVENTS.has(event) && webhook.senderIsBot) {
       return acceptedResult(0, []);
     }
 
@@ -238,6 +247,9 @@ export class GitHubWebhookIngress {
     return {
       action: stringValue(payload.action),
       repository,
+      senderIsBot: isRecord(payload.sender)
+        ? stringValue(payload.sender.type).toLowerCase() === "bot"
+        : false,
       conditionContext: {
         actor: readStringField(payload.sender, "login"),
         labels: readLabels(subject),

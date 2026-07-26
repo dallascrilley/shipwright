@@ -36,10 +36,15 @@ export interface QueueEnqueueInput {
   allowDisabledAgentForTest?: boolean;
 }
 
-const IN_FLIGHT_QUEUE_STATES: Partial<Record<QueueEntry["state"], true>> = {
+/**
+ * States a coalescing wake may safely fold into. `running` is excluded on
+ * purpose: that runner has usually already read its review context, so folding
+ * a later comment into it drops the comment with nothing scheduled to pick it
+ * up. Costing one extra execution beats losing the feedback silently.
+ */
+const COALESCIBLE_QUEUE_STATES: Partial<Record<QueueEntry["state"], true>> = {
   queued: true,
   claimed: true,
-  running: true,
 };
 
 export interface QueueEnqueueResult {
@@ -171,7 +176,7 @@ export class QueueDispatcher {
         const entry = snapshot.queueEntries.find(
           (item) => item.executionId === execution.executionId,
         );
-        return Boolean(entry && IN_FLIGHT_QUEUE_STATES[entry.state]);
+        return Boolean(entry && COALESCIBLE_QUEUE_STATES[entry.state]);
       });
       if (inFlight) {
         return {

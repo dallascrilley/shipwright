@@ -163,6 +163,86 @@ describe("QueueDispatcher", () => {
     expect(fixture.dispatcher.list()).toHaveLength(1);
   });
 
+  test("coalesces against a claimed entry but not a running one", () => {
+    const target = {
+      kind: "pull" as const,
+      owner: "dallascrilley",
+      repo: "shipwright",
+      number: 23,
+    };
+    const enqueueWake = (
+      dispatcher: QueueDispatcher,
+      agentId: string,
+      key: string,
+    ) =>
+      dispatcher.enqueue({
+        agentId,
+        source: "github",
+        idempotencyKey: key,
+        target,
+        coalesceInFlight: true,
+      });
+
+    // Claimed is safe: the runner has not read its review context yet.
+    const claimedFixture = createFixture();
+    const claimedAgent = createEnabledAgent(claimedFixture);
+    const claimedFirst = enqueueWake(
+      claimedFixture.dispatcher,
+      claimedAgent.agentId,
+      "github:claimed-a:1",
+    );
+    expect(claimedFixture.dispatcher.claimNext("worker-a")).toBeDefined();
+    expect(
+      enqueueWake(
+        claimedFixture.dispatcher,
+        claimedAgent.agentId,
+        "github:claimed-b:1",
+      ).execution.executionId,
+    ).toBe(claimedFirst.execution.executionId);
+    expect(claimedFixture.dispatcher.list()).toHaveLength(1);
+
+    // Running is not: that runner may already have read the thread list, so
+    // folding a later comment into it would drop the comment entirely.
+    const runningFixture = createFixture();
+    const runningAgent = createEnabledAgent(runningFixture);
+    const runningFirst = enqueueWake(
+      runningFixture.dispatcher,
+      runningAgent.agentId,
+      "github:running-a:1",
+    );
+    let releaseRun = () => {};
+    const held = runningFixture.dispatcher.dispatchNext(
+      "worker-a",
+      ({ execution }) =>
+        new Promise((resolve) => {
+          releaseRun = () =>
+            resolve({
+              receipt: {
+                runId: execution.executionId,
+                phase: "complete",
+                verificationPassed: true,
+              },
+            });
+        }),
+    );
+
+    return Promise.resolve().then(async () => {
+      expect(runningFixture.dispatcher.get(runningFirst.execution.executionId)
+        ?.state).toBe("running");
+      const second = enqueueWake(
+        runningFixture.dispatcher,
+        runningAgent.agentId,
+        "github:running-b:1",
+      );
+      expect(second.execution.executionId).not.toBe(
+        runningFirst.execution.executionId,
+      );
+      expect(runningFixture.dispatcher.list()).toHaveLength(2);
+      releaseRun();
+      await held;
+    });
+  });
+
   test("rejects disabled agents and disabled triggers before enqueueing", () => {
     const fixture = createFixture();
     const agent = fixture.controlPlane.createAgent(draft);
