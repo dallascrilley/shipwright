@@ -162,6 +162,7 @@ describe("POST /api/github/webhook", () => {
         draft: false,
         labels: [],
       },
+      sender: { login: "reviewer", type: "User" },
     };
 
     expect(

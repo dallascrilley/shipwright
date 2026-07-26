@@ -266,12 +266,14 @@ bash scripts/prove-review-trigger-rollout.sh --stage dry_run
    the running worker has already read its review context, so folding a later
    comment into it would drop the comment with nothing scheduled to pick it up.
 
-   Review events from a bot sender never wake an agent. The pipeline replies to
-   threads as the App, and its own reply arrives back as a review-comment
-   delivery; waking on it would re-run the agent, which replies again — endless
-   on any thread the pipeline leaves unresolved (`needs-human`). Expect a 202
-   with `matched: 0` for those deliveries. Issue and pull-request events are
-   unaffected.
+   Review events wake an agent only when the delivery names a sender that reads
+   as human. The pipeline replies to threads as the App, and its own reply
+   arrives back as a review-comment delivery; waking on it would re-run the
+   agent, which replies again — endless on any thread the pipeline leaves
+   unresolved (`needs-human`). A sender is not human when `sender.type` is
+   `Bot`, when the login ends in `[bot]`, or when the payload carries no
+   readable sender at all. Expect a 202 with `matched: 0` for those deliveries.
+   Issue and pull-request events are unaffected.
 5. **Publish window** — Only for the canary agent revision, set
    `publicationPolicy` to `publish_allowed`, set host stage to
    `publish_allowed`, restart, and leave one inline review comment. Expect one
