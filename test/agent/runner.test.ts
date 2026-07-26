@@ -80,9 +80,10 @@ test("runPiAgent projects local Codex OAuth without unrelated auth fields", asyn
 test("runPiAgent rejects Codex auth files readable by other users", async () => {
   const directory = mkdtempSync(join(tmpdir(), "shipwright-codex-auth-"));
   const authFile = join(directory, "auth.json");
-  writeFileSync(authFile, JSON.stringify({ tokens: {} }), { mode: 0o644 });
-  // writeFileSync applies the process umask, so a restrictive umask (077) would
-  // land the fixture at 0600 and silently skip the owner-only branch entirely.
+  writeFileSync(authFile, JSON.stringify({ tokens: {} }));
+  // chmod, not writeFileSync's mode option: writeFileSync applies the process
+  // umask, so under a restrictive umask (077) the fixture lands at 0600 and
+  // silently skips the owner-only branch this test exists to cover.
   chmodSync(authFile, 0o644);
   expect(statSync(authFile).mode & 0o077).not.toBe(0);
   const vm: AgentVm = {
