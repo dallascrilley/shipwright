@@ -35,7 +35,7 @@ const REVIEW_WAKE_EVENTS: ReadonlySet<GitHubEvent> = new Set([
 type WebhookTarget = {
   action: string;
   repository: string;
-  senderIsBot: boolean;
+  senderIsHuman: boolean;
   target: ExecutionRequest["target"];
   conditionContext: GitHubTriggerConditionContext;
 };
@@ -105,9 +105,10 @@ export class GitHubWebhookIngress {
     // The review pipeline replies to threads as this App, and its own reply is
     // itself a review-comment delivery. Waking on it would re-run the agent,
     // which replies again -- unbounded on any thread the pipeline leaves
-    // unresolved (`needs-human`). Bot senders never wake the review events.
-    // Issue and pull_request events keep their existing behavior.
-    if (REVIEW_WAKE_EVENTS.has(event) && webhook.senderIsBot) {
+    // unresolved (`needs-human`). Only a sender readable as human wakes the
+    // review events; a bot or an unnameable sender does not. Issue and
+    // pull_request events keep their existing behavior.
+    if (REVIEW_WAKE_EVENTS.has(event) && !webhook.senderIsHuman) {
       return acceptedResult(0, []);
     }
 
@@ -247,7 +248,7 @@ export class GitHubWebhookIngress {
     return {
       action: stringValue(payload.action),
       repository,
-      senderIsBot: isBotSender(payload.sender),
+      senderIsHuman: isHumanSender(payload.sender),
       conditionContext: {
         actor: readStringField(payload.sender, "login"),
         labels: readLabels(subject),
@@ -380,16 +381,17 @@ function readLabels(
 }
 
 /**
- * Two independent signals so a payload that carries only one still reads as a
- * bot: GitHub sets `sender.type` to "Bot" for App activity, and App logins are
- * suffixed "[bot]". This gates a runaway-cost guard, so it errs toward calling
- * an ambiguous sender a bot.
+ * Only a readable, non-bot sender counts as human. GitHub sets `sender.type`
+ * to "Bot" for App activity and suffixes App logins "[bot]"; either signal
+ * alone is enough, since a payload may carry only one. An absent or unreadable
+ * sender is not human either: this gates a runaway-cost guard, so ambiguity
+ * must not wake an agent, and a real review delivery always names its sender.
  */
-function isBotSender(sender: unknown): boolean {
+function isHumanSender(sender: unknown): boolean {
   if (!isRecord(sender)) return false;
   return (
-    stringValue(sender.type).toLowerCase() === "bot" ||
-    stringValue(sender.login).toLowerCase().endsWith("[bot]")
+    stringValue(sender.type).toLowerCase() !== "bot" &&
+    !stringValue(sender.login).toLowerCase().endsWith("[bot]")
   );
 }
 

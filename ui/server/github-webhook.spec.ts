@@ -569,6 +569,7 @@ describe("GitHubWebhookIngress", () => {
         action: "created",
         repository: { full_name: "dallascrilley/shipwright" },
         pull_request: pullRequest,
+        sender: { login: "reviewer", type: "User" },
       }),
     );
     await fixture.ingress.receive(
@@ -576,6 +577,7 @@ describe("GitHubWebhookIngress", () => {
         action: "created",
         repository: { full_name: "dallascrilley/shipwright" },
         pull_request: pullRequest,
+        sender: { login: "reviewer", type: "User" },
       }),
     );
 
@@ -586,7 +588,7 @@ describe("GitHubWebhookIngress", () => {
     );
   });
 
-  test("never wakes review events for a bot sender", async () => {
+  test("wakes review events only for a sender that reads as human", async () => {
     const fixture = createFixture();
     const agent = fixture.controlPlane.createAgent({
       name: "Review self loop",
@@ -638,6 +640,18 @@ describe("GitHubWebhookIngress", () => {
         label: "login suffix only",
         event: "pull_request_review_comment" as const,
         sender: { login: "shipwright[bot]" },
+      },
+      // A real review delivery always names its sender, so an unnameable one
+      // is ambiguous -- and ambiguity must not wake a runaway-cost path.
+      {
+        label: "sender absent",
+        event: "pull_request_review_comment" as const,
+        sender: undefined,
+      },
+      {
+        label: "sender not an object",
+        event: "pull_request_review_comment" as const,
+        sender: "shipwright[bot]",
       },
       {
         label: "review submitted by a bot",
