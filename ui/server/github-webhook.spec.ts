@@ -623,9 +623,10 @@ describe("GitHubWebhookIngress", () => {
     };
 
     // The pipeline's own reply re-enters as a review-comment delivery. Waking
-    // on it would re-run the agent, which replies again, forever. Either bot
-    // signal alone has to be enough, since only one may be present.
-    const botCases = [
+    // on it would re-run the agent, which replies again, forever. Each bot
+    // signal has to disqualify on its own, since a payload may carry only one,
+    // and a sender that never names itself is just as ambiguous.
+    const blockedSenders = [
       {
         label: "both signals",
         event: "pull_request_review_comment" as const,
@@ -654,23 +655,33 @@ describe("GitHubWebhookIngress", () => {
         sender: "shipwright[bot]",
       },
       {
+        label: "sender names nobody",
+        event: "pull_request_review_comment" as const,
+        sender: { type: "User" },
+      },
+      {
+        label: "sender login is blank",
+        event: "pull_request_review_comment" as const,
+        sender: { login: "   ", type: "User" },
+      },
+      {
         label: "review submitted by a bot",
         event: "pull_request_review" as const,
         sender: { login: "shipwright[bot]", type: "Bot" },
       },
     ];
-    for (const [index, botCase] of botCases.entries()) {
+    for (const [index, blocked] of blockedSenders.entries()) {
       const result = await fixture.ingress.receive(
-        await signedInput(botCase.event, `delivery-bot-${index}`, {
+        await signedInput(blocked.event, `delivery-blocked-${index}`, {
           action:
-            botCase.event === "pull_request_review" ? "submitted" : "created",
+            blocked.event === "pull_request_review" ? "submitted" : "created",
           repository: { full_name: "dallascrilley/shipwright" },
           pull_request: pullRequest,
-          sender: botCase.sender,
+          sender: blocked.sender,
         }),
       );
-      expect({ label: botCase.label, result }).toEqual({
-        label: botCase.label,
+      expect({ label: blocked.label, result }).toEqual({
+        label: blocked.label,
         result: {
           status: "accepted",
           matched: 0,
