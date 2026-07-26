@@ -189,6 +189,63 @@ Matches requirements acceptance:
 5. One fleet repo primary-watched by Shipwright agent.
 6. Browser proof desktop + 390px; cost/security notes before publish_allowed.
 
+## Outcomes
+
+Phase 3 implemented and proved the dry-run lifecycle. Production is
+intentionally fail-closed at `disabled` after a credential-handling incident
+described below.
+
+1. The remote pin accepted an idempotent signed GitHub delivery, created one
+   revision-pinned execution, and passed a rollback rehearsal to `disabled`.
+2. The editor ships action presets with consistency checks, and templates create
+   disabled agents that are ready for explicit testing and enablement.
+3. Publication policy remains `dry_run`; no `publish_allowed` revision, GitHub
+   mutation, or automatic publication was enabled.
+4. `DallasCrilleyMarTech/launchashow-astro` is the first
+   Shipwright-primary fleet repository. Agent revision 5 has
+   `pull_request/opened` and `pull_request/synchronize` triggers pinned to the
+   same revision. The local poller skips only this repository and retains
+   coverage for the other five.
+5. Signed delivery `u5-launchashow-primary-20260726t1045` returned HTTP 202
+   twice and persisted one GitHub execution, `5a18fb5107f89999`. It stopped
+   safely at intake because pull request 90 had no unresolved current review
+   threads. The receipt recorded zero model attempts, zero changed files, and no
+   publication.
+6. A sanitized production snapshot contained one agent, 11 executions, and no
+   sensitive-key fields. The auth-disabled console rendered the revision-5
+   configuration, both triggers, revision-pinned history, and the redacted
+   receipt boundary at exact browser viewports of 1,440 by 1,000 pixels and
+   390 by 844 pixels.
+
+The following captures preserve the complete desktop and mobile proof:
+
+![Desktop agent configuration for the Launchashow dry-run agent](../evidence/phase-3/u6-desktop-agent-config.png)
+
+![Desktop revision-pinned triggers and run history](../evidence/phase-3/u6-desktop-triggers-run-history.png)
+
+![Mobile agent overview with enabled state and test action](../evidence/phase-3/u6-mobile-agent-overview.png)
+
+![Mobile agent configuration at 390 pixels wide](../evidence/phase-3/u6-mobile-configuration.png)
+
+![Mobile revision-5 triggers at 390 pixels wide](../evidence/phase-3/u6-mobile-triggers.png)
+
+![Mobile run history and redacted receipt boundary](../evidence/phase-3/u6-mobile-run-history.png)
+
+The [allowlisted revision-5 receipt](../evidence/phase-3/u6-launchashow-revision-5-receipt.json)
+contains the queue state, zero model attempts, empty changed-file and
+thread-result arrays, verification state, and redaction scan counts used for U6.
+
+During independent U5 review, an overly broad remote environment inspection
+returned live `GITHUB_WEBHOOK_SECRET` and `OPENAI_API_KEY` values to the
+internal review transcript. The values were not copied into Git or tracker
+artifacts. Production was immediately set to `disabled`, and health/readiness
+remained 200. P0 task `td-1b5382` tracks rotation; the operator chose not to
+rotate during this session. No further signed delivery or model call used the
+exposed credentials.
+
+The implementation and browser-proof gaps are closed. The remaining operational
+distance is credential rotation and reactivation from `disabled` to `dry_run`.
+
 ## Out of scope
 
 Slack/MCP marketplace, multi-tenant tenancy, auto-merge, PR approvals, arbitrary event DSL, JSON import, persistent always-on agent VMs, multi-repo agents, full fleet poller deletion in one shot.
@@ -196,3 +253,5 @@ Slack/MCP marketplace, multi-tenant tenancy, auto-merge, PR approvals, arbitrary
 ## Revision History
 
 - 2026-07-25: Initial Phase 3 plan from gap assessment + requirements (ses_bf9ac5).
+- 2026-07-26: Recorded U1-U6 outcomes, fleet cutover, browser evidence,
+  and the fail-closed credential incident (ses_6ab744).
