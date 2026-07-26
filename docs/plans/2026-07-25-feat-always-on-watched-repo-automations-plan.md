@@ -204,8 +204,9 @@ described below.
 4. `DallasCrilleyMarTech/launchashow-astro` is the first
    Shipwright-primary fleet repository. Agent revision 5 has
    `pull_request/opened` and `pull_request/synchronize` triggers pinned to the
-   same revision. The local poller skips only this repository and retains
-   coverage for the other five.
+   same revision. At proof time, the local poller skipped only this repository
+   and retained coverage for the other five. After production was set to
+   `disabled`, the gitignored manifest restored launchashow fallback coverage.
 5. Signed delivery `u5-launchashow-primary-20260726t1045` returned HTTP 202
    twice and persisted one GitHub execution, `5a18fb5107f89999`. It stopped
    safely at intake because pull request 90 had no unresolved current review
