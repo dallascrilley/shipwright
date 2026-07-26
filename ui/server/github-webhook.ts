@@ -247,9 +247,7 @@ export class GitHubWebhookIngress {
     return {
       action: stringValue(payload.action),
       repository,
-      senderIsBot: isRecord(payload.sender)
-        ? stringValue(payload.sender.type).toLowerCase() === "bot"
-        : false,
+      senderIsBot: isBotSender(payload.sender),
       conditionContext: {
         actor: readStringField(payload.sender, "login"),
         labels: readLabels(subject),
@@ -379,6 +377,20 @@ function readLabels(
     labels.push(label.name);
   }
   return { state: "available", value: labels };
+}
+
+/**
+ * Two independent signals so a payload that carries only one still reads as a
+ * bot: GitHub sets `sender.type` to "Bot" for App activity, and App logins are
+ * suffixed "[bot]". This gates a runaway-cost guard, so it errs toward calling
+ * an ambiguous sender a bot.
+ */
+function isBotSender(sender: unknown): boolean {
+  if (!isRecord(sender)) return false;
+  return (
+    stringValue(sender.type).toLowerCase() === "bot" ||
+    stringValue(sender.login).toLowerCase().endsWith("[bot]")
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

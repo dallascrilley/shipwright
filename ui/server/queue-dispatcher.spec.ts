@@ -163,7 +163,7 @@ describe("QueueDispatcher", () => {
     expect(fixture.dispatcher.list()).toHaveLength(1);
   });
 
-  test("coalesces against a claimed entry but not a running one", () => {
+  test("coalesces against a claimed entry but not a running one", async () => {
     const target = {
       kind: "pull" as const,
       owner: "dallascrilley",
@@ -226,21 +226,24 @@ describe("QueueDispatcher", () => {
         }),
     );
 
-    return Promise.resolve().then(async () => {
-      expect(runningFixture.dispatcher.get(runningFirst.execution.executionId)
-        ?.state).toBe("running");
-      const second = enqueueWake(
-        runningFixture.dispatcher,
-        runningAgent.agentId,
-        "github:running-b:1",
-      );
-      expect(second.execution.executionId).not.toBe(
-        runningFirst.execution.executionId,
-      );
-      expect(runningFixture.dispatcher.list()).toHaveLength(2);
-      releaseRun();
-      await held;
-    });
+    // Let dispatchNext hand the execution to the runner before enqueueing again.
+    await Promise.resolve();
+    expect(
+      runningFixture.dispatcher.get(runningFirst.execution.executionId)?.state,
+    ).toBe("running");
+
+    const second = enqueueWake(
+      runningFixture.dispatcher,
+      runningAgent.agentId,
+      "github:running-b:1",
+    );
+    expect(second.execution.executionId).not.toBe(
+      runningFirst.execution.executionId,
+    );
+    expect(runningFixture.dispatcher.list()).toHaveLength(2);
+
+    releaseRun();
+    await held;
   });
 
   test("rejects disabled agents and disabled triggers before enqueueing", () => {
