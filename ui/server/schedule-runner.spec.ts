@@ -38,7 +38,8 @@ function createFixture({ concurrency = 1 }: { concurrency?: number } = {}) {
   const agent = controlPlane.createAgent({
     name: "Scheduled triage",
     instructions: "Triage one scheduled issue in a dry run.",
-    skillId: "fix-review-findings",
+    actionPreset: "fix_issue",
+    skillId: "",
     allowedTools: ["github"],
     targetScope: { repository: "dallascrilley/shipwright", branch: "main" },
     verification: { presetId: "bun-test" },

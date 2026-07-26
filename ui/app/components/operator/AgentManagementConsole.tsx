@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/sheet";
 
 import type {
+  ActionPreset,
   AgentDraft,
   AgentDefinition,
   AgentTrigger,
@@ -42,9 +43,12 @@ import type {
   GithubTriggerConditionInput,
 } from "../../../shared/agent-definition";
 import {
+  ACTION_PRESET_CHOICES,
   GITHUB_TRIGGER_CONDITION_CATALOG,
   GITHUB_TRIGGER_CONDITION_LIMITS,
   GITHUB_TRIGGER_CHOICES,
+  defaultSkillIdForActionPreset,
+  defaultTargetKindForActionPreset,
   type GithubTriggerChoice,
   type GithubTriggerChoiceId,
 } from "../../../shared/agent-definition";
@@ -56,6 +60,12 @@ import type {
   AgentTriggerView,
 } from "../../../shared/agent-management";
 import {
+  buildDraftFromTemplate,
+  buildTriggerConfigFromTemplate,
+  listAgentTemplates,
+  type AgentTemplateId,
+} from "../../../shared/agent-templates";
+import {
   buildRepositoryPickerView,
   canSaveRepositorySelection,
   type AgentRepositoryCatalogResult,
@@ -65,7 +75,8 @@ import {
 const DEFAULT_DRAFT: AgentDraft = {
   name: "",
   instructions: "",
-  skillId: "fix-review-findings",
+  actionPreset: "fix_issue",
+  skillId: "",
   allowedTools: ["github", "terminal"],
   targetScope: { repository: "", branch: "main" },
   verification: { presetId: "bun-test" },
@@ -76,6 +87,7 @@ const DEFAULT_DRAFT: AgentDraft = {
 type DraftForm = {
   name: string;
   instructions: string;
+  actionPreset: ActionPreset;
   skillId: string;
   allowedTools: string;
   repository: string;
@@ -127,6 +139,7 @@ function toDraftForm(draft: AgentDraft): DraftForm {
   return {
     name: draft.name,
     instructions: draft.instructions,
+    actionPreset: draft.actionPreset,
     skillId: draft.skillId,
     allowedTools: draft.allowedTools.join(", "),
     repository: draft.targetScope.repository,
@@ -138,6 +151,21 @@ function toDraftForm(draft: AgentDraft): DraftForm {
   };
 }
 
+function applyActionPresetChange(
+  form: DraftForm,
+  nextPreset: ActionPreset,
+): DraftForm {
+  const previousDefault = defaultSkillIdForActionPreset(form.actionPreset);
+  const nextDefault = defaultSkillIdForActionPreset(nextPreset);
+  const shouldUpdateSkill =
+    !form.skillId.trim() || form.skillId === previousDefault;
+  return {
+    ...form,
+    actionPreset: nextPreset,
+    skillId: shouldUpdateSkill ? nextDefault : form.skillId,
+  };
+}
+
 function toDraft(form: DraftForm): AgentDraft {
   const allowedTools = form.allowedTools
     .split(",")
@@ -146,6 +174,7 @@ function toDraft(form: DraftForm): AgentDraft {
   return {
     name: form.name,
     instructions: form.instructions,
+    actionPreset: form.actionPreset,
     skillId: form.skillId,
     allowedTools,
     targetScope: {
@@ -203,6 +232,9 @@ export function AgentManagementConsole() {
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<
+    AgentTemplateId | ""
+  >("");
   const [createForm, setCreateForm] = useState<DraftForm>(() =>
     toDraftForm(DEFAULT_DRAFT),
   );
@@ -295,6 +327,11 @@ export function AgentManagementConsole() {
   useEffect(() => {
     if (detail) {
       setDraftForm(toDraftForm(detail.config));
+      const targetKind = defaultTargetKindForActionPreset(
+        detail.config.actionPreset,
+      );
+      setTestTargetKind(targetKind);
+      setTriggerTargetKind(targetKind);
       setReplacementTriggerId(null);
       setGithubConditions([]);
     }
@@ -304,19 +341,59 @@ export function AgentManagementConsole() {
     await Promise.all([listQuery.refetch(), detailQuery.refetch()]);
   }
 
+
+  useEffect(() => {
+    const targetKind = defaultTargetKindForActionPreset(draftForm.actionPreset);
+    setTriggerTargetKind(targetKind);
+  }, [draftForm.actionPreset]);
+
+  useEffect(() => {
+    if (!detail) return;
+    setTestTargetKind(
+      defaultTargetKindForActionPreset(detail.config.actionPreset),
+    );
+  }, [detail?.agentId, detail?.currentRevision, detail?.config.actionPreset]);
+
+  function resetCreateSheet() {
+    setCreateForm(toDraftForm(DEFAULT_DRAFT));
+    setCreateRepositoryQuery("");
+    setSelectedTemplateId("");
+  }
+
+  function applyCreateTemplate(templateId: AgentTemplateId | "") {
+    setSelectedTemplateId(templateId);
+    if (!templateId) {
+      setCreateForm(toDraftForm(DEFAULT_DRAFT));
+      return;
+    }
+    setCreateForm(
+      toDraftForm(buildDraftFromTemplate(templateId, createForm.repository)),
+    );
+  }
+
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
     setMessage(null);
+    const templateId = selectedTemplateId || null;
     try {
       const created = (await createAgent.mutateAsync(
         toDraft(createForm),
       )) as AgentDefinition;
+      if (templateId) {
+        await createTrigger.mutateAsync({
+          agentId: created.agentId,
+          expectedRevision: created.currentRevision,
+          kind: "github",
+          config: buildTriggerConfigFromTemplate(templateId),
+        });
+      }
       setSelectedId(created.agentId);
       setCreateOpen(false);
-      setCreateForm(toDraftForm(DEFAULT_DRAFT));
-      setCreateRepositoryQuery("");
+      resetCreateSheet();
       setMessage(
-        "Disabled draft created. Add and validate a trigger before enabling it.",
+        templateId
+          ? "Disabled draft created with a template trigger added. Validate the trigger and explicitly enable the agent when ready."
+          : "Disabled draft created. Add and validate a trigger before enabling it.",
       );
       await refresh();
     } catch (error) {
@@ -487,11 +564,21 @@ export function AgentManagementConsole() {
   async function handleQueueTestRun() {
     if (!detail) return;
     setMessage(null);
+    const expectedKind = defaultTargetKindForActionPreset(
+      detail.config.actionPreset,
+    );
+    if (testTargetKind !== expectedKind) {
+      setMessage(
+        `Test target must be a ${expectedKind} for action preset "${detail.config.actionPreset}".`,
+      );
+      setTestTargetKind(expectedKind);
+      return;
+    }
     try {
       const queued = (await queueTestRun.mutateAsync({
         agentId: detail.agentId,
         expectedRevision: detail.currentRevision,
-        target: { kind: testTargetKind, number: Number(testTargetNumber) },
+        target: { kind: expectedKind, number: Number(testTargetNumber) },
       })) as { execution: { executionId: string; agentRevision: number } };
       setMessage(
         `Dry-run test ${queued.execution.executionId.slice(0, 10)} queued against revision ${queued.execution.agentRevision}. No worker or publish action starts here.`,
@@ -946,9 +1033,13 @@ export function AgentManagementConsole() {
                               )
                             }
                             className="input-shell"
+                            disabled={busy}
                           >
-                            <option value="issue">Issue</option>
-                            <option value="pull">Pull request</option>
+                            {draftForm.actionPreset === "fix_issue" ? (
+                              <option value="issue">Issue</option>
+                            ) : (
+                              <option value="pull">Pull request</option>
+                            )}
                           </select>
                         </Field>
                         <Field label="Target number">
@@ -1005,9 +1096,13 @@ export function AgentManagementConsole() {
                         )
                       }
                       className="input-shell"
+                      disabled={busy}
                     >
-                      <option value="issue">Issue</option>
-                      <option value="pull">Pull request</option>
+                      {detail.config.actionPreset === "fix_issue" ? (
+                        <option value="issue">Issue</option>
+                      ) : (
+                        <option value="pull">Pull request</option>
+                      )}
                     </select>
                   </Field>
                   <Field label="Test target number">
@@ -1107,7 +1202,13 @@ export function AgentManagementConsole() {
         )}
       </div>
 
-      <Sheet open={createOpen} onOpenChange={setCreateOpen}>
+      <Sheet
+        open={createOpen}
+        onOpenChange={(open) => {
+          setCreateOpen(open);
+          if (!open) resetCreateSheet();
+        }}
+      >
         <SheetContent className="overflow-y-auto sm:max-w-xl">
           <SheetHeader>
             <SheetTitle>New agent</SheetTitle>
@@ -1117,9 +1218,53 @@ export function AgentManagementConsole() {
             </SheetDescription>
           </SheetHeader>
           <form onSubmit={handleCreate} className="mt-6 space-y-4">
+            <Field label="Template">
+              <select
+                value={selectedTemplateId}
+                disabled={busy}
+                onChange={(event) =>
+                  applyCreateTemplate(
+                    event.target.value as AgentTemplateId | "",
+                  )
+                }
+                className="input-shell"
+              >
+                <option value="">Custom blank draft</option>
+                {listAgentTemplates().map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.label}
+                  </option>
+                ))}
+              </select>
+              {selectedTemplateId ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {
+                    listAgentTemplates().find(
+                      (template) => template.id === selectedTemplateId,
+                    )?.description
+                  }
+                </p>
+              ) : null}
+            </Field>
             <DraftFields
               form={createForm}
-              onChange={setCreateForm}
+              onChange={(next) => {
+                if (
+                  selectedTemplateId &&
+                  next.repository !== createForm.repository
+                ) {
+                  setCreateForm(
+                    toDraftForm(
+                      buildDraftFromTemplate(
+                        selectedTemplateId,
+                        next.repository,
+                      ),
+                    ),
+                  );
+                  return;
+                }
+                setCreateForm(next);
+              }}
               disabled={busy}
               repositoryCatalog={repositoryCatalog}
               repositoryQuery={createRepositoryQuery}
@@ -1502,15 +1647,41 @@ function DraftFields({
             required
           />
         </Field>
-        <Field label="Skill ID">
-          <Input
-            value={form.skillId}
+        <Field label="Action preset">
+          <select
+            value={form.actionPreset}
             disabled={disabled}
-            onChange={(event) => update("skillId", event.target.value)}
-            required
-          />
+            onChange={(event) =>
+              onChange(
+                applyActionPresetChange(
+                  form,
+                  event.target.value as ActionPreset,
+                ),
+              )
+            }
+            className="input-shell"
+          >
+            {ACTION_PRESET_CHOICES.map((choice) => (
+              <option key={choice.id} value={choice.id}>
+                {choice.label}
+              </option>
+            ))}
+          </select>
         </Field>
       </div>
+      <Field label="Skill ID">
+        <Input
+          value={form.skillId}
+          disabled={disabled}
+          onChange={(event) => update("skillId", event.target.value)}
+          placeholder={
+            form.actionPreset === "fix_issue"
+              ? "Leave empty for issue mode"
+              : "fix-review-findings"
+          }
+          required={form.actionPreset === "resolve_pr_feedback"}
+        />
+      </Field>
       <Field label="Instructions">
         <textarea
           value={form.instructions}

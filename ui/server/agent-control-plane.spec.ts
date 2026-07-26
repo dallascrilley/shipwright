@@ -18,7 +18,8 @@ import {
 const draft = {
   name: "Issue triage",
   instructions: "Triage allowlisted issues and prepare a dry run.",
-  skillId: "fix-review-findings",
+  actionPreset: "fix_issue" as const,
+  skillId: "",
   allowedTools: ["github", "sandbox"],
   targetScope: {
     repository: "dallascrilley/shipwright",
@@ -274,6 +275,15 @@ describe("AgentControlPlane", () => {
         config: { event: "pull_request", actions: ["closed"] },
       }),
     ).toThrow(/supported GitHub trigger/i);
+    expect(() =>
+      controlPlane.replaceTrigger({
+        agentId: agent.agentId,
+        expectedRevision: agent.currentRevision,
+        triggerId: original.triggerId,
+        kind: "github",
+        config: { event: "pull_request", actions: ["synchronize"] },
+      }),
+    ).toThrow(/cannot use Commits pushed to pull request/i);
     expect(store.load().triggers).toEqual([original]);
 
     const replacement = controlPlane.replaceTrigger({
@@ -281,14 +291,14 @@ describe("AgentControlPlane", () => {
       expectedRevision: agent.currentRevision,
       triggerId: original.triggerId,
       kind: "github",
-      config: { event: "pull_request", actions: ["synchronize"] },
+      config: { event: "issues", actions: ["edited"] },
     });
 
     expect(replacement).toMatchObject({
       agentId: agent.agentId,
       agentRevision: agent.currentRevision,
       kind: "github",
-      config: { event: "pull_request", actions: ["synchronize"] },
+      config: { event: "issues", actions: ["edited"] },
     });
     expect(replacement.triggerId).not.toBe(original.triggerId);
     expect(store.load().triggers).toEqual([replacement]);
@@ -369,5 +379,120 @@ describe("AgentControlPlane", () => {
     expect(() => new JsonFileAgentControlPlaneStore(path).load()).toThrow(
       `could not load agent control-plane state at ${path}`,
     );
+  });
+  test("rejects github triggers that conflict with the agent action preset", () => {
+    const controlPlane = createControlPlane();
+    const agent = controlPlane.createAgent({
+      ...draft,
+      actionPreset: "resolve_pr_feedback",
+      skillId: "fix-review-findings",
+    });
+
+    expect(() =>
+      controlPlane.createTrigger({
+        agentId: agent.agentId,
+        expectedRevision: agent.currentRevision,
+        kind: "github",
+        config: { event: "issues", actions: ["opened"], conditions: [] },
+      }),
+    ).toThrow(/cannot use Issue created/);
+  });
+
+  test("rejects saving a preset that conflicts with existing github triggers", () => {
+    const controlPlane = createControlPlane();
+    const agent = controlPlane.createAgent(draft);
+    controlPlane.createTrigger({
+      agentId: agent.agentId,
+      expectedRevision: agent.currentRevision,
+      kind: "github",
+      config: { event: "issues", actions: ["opened"], conditions: [] },
+    });
+
+    expect(() =>
+      controlPlane.updateAgent(agent.agentId, agent.currentRevision, {
+        ...draft,
+        actionPreset: "resolve_pr_feedback",
+        skillId: "fix-review-findings",
+      }),
+    ).toThrow(/cannot use Issue created/);
+  });
+
+  test("rejects schedule targets that conflict with the agent action preset", () => {
+    const controlPlane = createControlPlane();
+    const agent = controlPlane.createAgent({
+      ...draft,
+      actionPreset: "resolve_pr_feedback",
+      skillId: "fix-review-findings",
+    });
+
+    expect(() =>
+      controlPlane.createTrigger({
+        agentId: agent.agentId,
+        expectedRevision: agent.currentRevision,
+        kind: "schedule",
+        config: {
+          schedule: "0 9 * * *",
+          timezone: "America/New_York",
+          target: { kind: "issue", number: 42 },
+        },
+      }),
+    ).toThrow(/cannot use schedule target kind "issue"/);
+  });
+
+  test("loads legacy drafts with issue triggers as fix_issue despite review skillId", () => {
+    const directory = mkdtempSync(join(tmpdir(), "shipwright-control-plane-"));
+    const path = join(directory, "agent-control-plane.json");
+    temporaryDirectories.push(directory);
+    writeFileSync(
+      path,
+      JSON.stringify(
+        {
+          version: 1,
+          agents: [
+            {
+              agentId: "agent-legacy",
+              currentRevision: 1,
+              enabled: false,
+              createdAt: "2026-07-21T00:00:00.000Z",
+              updatedAt: "2026-07-21T00:00:00.000Z",
+              health: { state: "idle" },
+            },
+          ],
+          revisions: [
+            {
+              agentId: "agent-legacy",
+              revision: 1,
+              createdAt: "2026-07-21T00:00:00.000Z",
+              draft: (({ actionPreset: _omit, ...rest }) => ({
+                ...rest,
+                skillId: "fix-review-findings",
+              }))(draft),
+            },
+          ],
+          triggers: [
+            {
+              triggerId: "trigger-legacy",
+              agentId: "agent-legacy",
+              agentRevision: 1,
+              kind: "github",
+              enabled: true,
+              config: { event: "issues", actions: ["opened"], conditions: [] },
+              createdAt: "2026-07-21T00:00:00.000Z",
+              updatedAt: "2026-07-21T00:00:00.000Z",
+            },
+          ],
+          lifecycleEvents: [],
+          executions: [],
+          queueEntries: [],
+        },
+        null,
+        2,
+      ) + "\n",
+      "utf8",
+    );
+
+    const store = new JsonFileAgentControlPlaneStore(path);
+    const loaded = store.load();
+    expect(loaded.revisions[0]?.draft.actionPreset).toBe("fix_issue");
   });
 });

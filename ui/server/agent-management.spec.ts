@@ -7,7 +7,8 @@ const draft = {
   name: "Dependency fixer",
   instructions:
     "Repair the requested issue and run the configured verification.",
-  skillId: "fix-review-findings",
+  actionPreset: "fix_issue" as const,
+  skillId: "",
   allowedTools: ["github", "terminal"],
   targetScope: {
     repository: "dallascrilley/shipwright",
@@ -102,6 +103,23 @@ describe("AgentManagementService", () => {
     expect(service.getAgent(created.agentId)?.config.publicationPolicy).toBe(
       "approval_required",
     );
+  });
+
+  test("rejects test targets that conflict with the action preset", async () => {
+    const service = createService();
+    const agent = await service.createAgent({
+      ...draft,
+      actionPreset: "resolve_pr_feedback",
+      skillId: "fix-review-findings",
+    });
+
+    expect(() =>
+      service.queueTestRun({
+        agentId: agent.agentId,
+        expectedRevision: agent.currentRevision,
+        target: { kind: "issue", number: 12 },
+      }),
+    ).toThrow(/does not match action preset/);
   });
 
   test("queues an explicit dry-run test while the agent remains disabled", async () => {
@@ -261,7 +279,12 @@ describe("AgentManagementService", () => {
 
   test("exports the current safe definition and removes its active trigger", async () => {
     const service = createService();
-    const created = await service.createAgent(draft);
+    const reviewDraft = {
+      ...draft,
+      actionPreset: "resolve_pr_feedback" as const,
+      skillId: "fix-review-findings",
+    };
+    const created = await service.createAgent(reviewDraft);
     const trigger = service.createTrigger({
       agentId: created.agentId,
       expectedRevision: created.currentRevision,
@@ -273,7 +296,7 @@ describe("AgentManagementService", () => {
       format: "shipwright.agent",
       version: 2,
       revision: 1,
-      configuration: draft,
+      configuration: reviewDraft,
       triggers: [
         {
           kind: "github",
@@ -329,10 +352,44 @@ describe("AgentManagementService", () => {
       ],
     });
 
-    const replacement = service.replaceTrigger({
+    expect(() =>
+      service.createTrigger({
+        agentId: created.agentId,
+        expectedRevision: created.currentRevision,
+        kind: "github",
+        config: {
+          event: "issues",
+          actions: ["edited"],
+          conditions: [
+            {
+              field: "base_branch",
+              operator: "is_one_of",
+              values: ["main"],
+            },
+          ],
+        },
+      }),
+    ).toThrow(/only available for pull request/i);
+
+    service.removeTrigger({
       agentId: created.agentId,
       expectedRevision: created.currentRevision,
       triggerId: trigger.triggerId,
+    });
+
+    const reviewed = await service.saveAgent({
+      agentId: created.agentId,
+      expectedRevision: created.currentRevision,
+      draft: {
+        ...draft,
+        actionPreset: "resolve_pr_feedback",
+        skillId: "fix-review-findings",
+      },
+    });
+
+    const replacement = service.createTrigger({
+      agentId: reviewed.agentId,
+      expectedRevision: reviewed.currentRevision,
       kind: "github",
       config: {
         event: "pull_request",
@@ -348,7 +405,7 @@ describe("AgentManagementService", () => {
       },
     });
 
-    expect(service.getAgent(created.agentId)?.triggers).toHaveLength(1);
+    expect(service.getAgent(reviewed.agentId)?.triggers).toHaveLength(1);
     expect(replacement.config).toMatchObject({
       conditions: [
         {
@@ -359,27 +416,8 @@ describe("AgentManagementService", () => {
         { field: "draft_state", operator: "is_not_draft" },
       ],
     });
-    expect(service.getAgent(created.agentId)?.triggers[0]?.label).toContain(
+    expect(service.getAgent(reviewed.agentId)?.triggers[0]?.label).toContain(
       "when base branch is one of main and draft state is not draft",
     );
-
-    expect(() =>
-      service.createTrigger({
-        agentId: created.agentId,
-        expectedRevision: created.currentRevision,
-        kind: "github",
-        config: {
-          event: "issues",
-          actions: ["opened"],
-          conditions: [
-            {
-              field: "base_branch",
-              operator: "is_one_of",
-              values: ["main"],
-            },
-          ],
-        },
-      }),
-    ).toThrow(/only available for pull request/i);
   });
 });
