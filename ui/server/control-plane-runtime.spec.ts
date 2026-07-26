@@ -41,7 +41,11 @@ describe("rollout stages", () => {
       "approval_required",
       "publish_allowed",
     ] as const;
-    const policies = ["dry_run", "approval_required", "publish_allowed"] as const;
+    const policies = [
+      "dry_run",
+      "approval_required",
+      "publish_allowed",
+    ] as const;
     for (const stage of stages) {
       for (const policy of policies) {
         const allowed =
@@ -83,6 +87,59 @@ describe("QueueDispatcher rollout gating", () => {
     );
     return { store, dispatcher };
   }
+
+  test("claims test entries for disabled agents without claiming trigger work", () => {
+    const { store, dispatcher } = setup();
+    store.transaction((snapshot) => {
+      const agentId = "agent-1" as AgentDefinition["agentId"];
+      snapshot.agents.push({
+        agentId,
+        enabled: true,
+        currentRevision: 1,
+        createdAt: "2026-07-21T00:00:00.000Z",
+        updatedAt: "2026-07-21T00:00:00.000Z",
+        health: { state: "idle" },
+      });
+      snapshot.revisions.push({
+        agentId,
+        revision: 1,
+        draft,
+        createdAt: "2026-07-21T00:00:00.000Z",
+      });
+    });
+    const target = {
+      kind: "issue" as const,
+      owner: "dallascrilley",
+      repo: "shipwright",
+      number: 42,
+    };
+    const github = dispatcher.enqueue({
+      agentId: "agent-1" as AgentDefinition["agentId"],
+      source: "github",
+      idempotencyKey: "github:1",
+      target,
+    });
+    store.transaction((snapshot) => {
+      const agent = snapshot.agents[0];
+      if (!agent) throw new Error("missing test agent");
+      agent.enabled = false;
+    });
+    dispatcher.enqueue({
+      agentId: "agent-1" as AgentDefinition["agentId"],
+      source: "test",
+      idempotencyKey: "test:1",
+      target,
+      allowDisabledAgentForTest: true,
+    });
+
+    const claim = dispatcher.claimNext("worker-1", ["test", "github"]);
+
+    expect(claim?.execution.idempotencyKey).toBe("test:1");
+    expect(
+      dispatcher.claimNext("worker-2", ["test", "github"]),
+    ).toBeUndefined();
+    expect(dispatcher.get(github.execution.executionId)?.state).toBe("queued");
+  });
 
   test("claims only entries whose source the rollout stage dispatches", () => {
     const { store, dispatcher } = setup();
