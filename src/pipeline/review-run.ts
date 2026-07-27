@@ -12,7 +12,7 @@ import {
 } from "../config/provider.js";
 import type { AuthorizedPullRequest } from "../github/app-client.js";
 import { parsePullRequestUrl } from "../github/pull-request-ref.js";
-import { findMarkedReply, reviewRunMarker, unresolvedCurrentThreads } from "../github/review-client.js";
+import { findMarkedReply, replyAnchorId, reviewReplyMarker, unresolvedCurrentThreads } from "../github/review-client.js";
 import type { PullRequestRef, ReviewThread } from "../github/types.js";
 import type { ChangeInspection } from "../sandbox/runtime.js";
 import { assertPublishableChange } from "./policy.js";
@@ -226,10 +226,15 @@ export async function runReviewAgent(
       const originalThread = threads.find((thread) => thread.id === outcome.threadId)!;
       const latestThread = (await authorized.repositoryClient.listReviewThreads(ref.number))
         .find((thread) => thread.id === outcome.threadId) ?? originalThread;
-      const existingReply = findMarkedReply(latestThread, runId);
+      // Anchored to the newest comment we did not write, so a repeat wake on an
+      // unchanged thread finds our own reply and posts nothing. Re-read the thread
+      // first: the anchor has to reflect what is on the thread now, not what was
+      // there when the run was authorized.
+      const anchorId = replyAnchorId(latestThread);
+      const existingReply = findMarkedReply(latestThread, anchorId);
       const reply = existingReply ?? await authorized.repositoryClient.replyToReviewThread(
         outcome.threadId,
-        buildThreadReply(originalThread, outcome, runId, request.verifyCommand),
+        buildThreadReply(originalThread, outcome, anchorId, request.verifyCommand),
       );
       let resolved = latestThread.isResolved;
       if (outcome.outcome !== "needs-human" && !resolved) {
@@ -299,7 +304,7 @@ function assertUnchangedInspection(before: ChangeInspection, after: ChangeInspec
 function buildThreadReply(
   thread: ReviewThread,
   outcome: ReviewOutcome,
-  runId: string,
+  anchorCommentId: string,
   verifyCommand: string,
 ): string {
   const source = thread.comments[0]?.body ?? "Original review comment";
@@ -320,7 +325,7 @@ function buildThreadReply(
     `${prefix}: ${outcome.summary}`,
     `Evidence: ${outcome.evidence}${followUp}`,
     `Independent verification passed: \`${verifyCommand}\``,
-    reviewRunMarker(runId, thread.id),
+    reviewReplyMarker(thread.id, anchorCommentId),
   ].join("\n\n");
 }
 
