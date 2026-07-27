@@ -12,7 +12,7 @@ import {
 } from "../config/provider.js";
 import type { AuthorizedPullRequest } from "../github/app-client.js";
 import { parsePullRequestUrl } from "../github/pull-request-ref.js";
-import { findMarkedReply, replyAnchorId, reviewReplyMarker, unresolvedCurrentThreads } from "../github/review-client.js";
+import { anchorComment, findMarkedReply, replyAnchorId, reviewReplyMarker, unresolvedCurrentThreads } from "../github/review-client.js";
 import type { PullRequestRef, ReviewThread } from "../github/types.js";
 import type { ChangeInspection } from "../sandbox/runtime.js";
 import { assertPublishableChange } from "./policy.js";
@@ -234,7 +234,7 @@ export async function runReviewAgent(
       const existingReply = findMarkedReply(latestThread, anchorId);
       const reply = existingReply ?? await authorized.repositoryClient.replyToReviewThread(
         outcome.threadId,
-        buildThreadReply(originalThread, outcome, anchorId, request.verifyCommand),
+        buildThreadReply(latestThread, outcome, anchorId, request.verifyCommand),
       );
       let resolved = latestThread.isResolved;
       if (outcome.outcome !== "needs-human" && !resolved) {
@@ -307,7 +307,12 @@ function buildThreadReply(
   anchorCommentId: string,
   verifyCommand: string,
 ): string {
-  const source = thread.comments[0]?.body ?? "Original review comment";
+  // Quote what this reply is answering, which is the anchor -- not always the
+  // comment that opened the thread. When a human follows up, the anchor moves to
+  // their newest comment, and quoting the original would read as the pipeline
+  // restating itself instead of responding.
+  const source = (anchorComment(thread, anchorCommentId) ?? thread.comments[0])?.body
+    ?? "Original review comment";
   const quote = source
     .replace(/<!--[\s\S]*?-->/g, " ")
     .replace(/\s+/g, " ")

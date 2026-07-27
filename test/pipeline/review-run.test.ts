@@ -163,6 +163,10 @@ test("a new human comment on the same thread earns a fresh reply", async () => {
   await runReviewAgent(request, { ...deps, runId: "run-2" });
   expect(replies()).toHaveLength(2);
   expect(replies().at(-1)?.body).toContain("anchor:comment-2");
+  // The reply quotes what it answers. Quoting the comment that opened the thread
+  // would read as the pipeline restating itself rather than responding.
+  expect(replies().at(-1)?.body).toContain("> Still broken");
+  expect(replies().at(-1)?.body).not.toContain("> Please add a guard");
 });
 
 test("verification failure blocks all remote writes", async () => {
