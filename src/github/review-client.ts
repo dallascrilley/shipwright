@@ -16,8 +16,18 @@ const REPLY_MARKER_PREFIX = "<!-- agentos-review-reply";
 export const reviewReplyMarker = (threadId: string, anchorCommentId: string): string =>
   `${REPLY_MARKER_PREFIX} thread:${threadId} anchor:${anchorCommentId} -->`;
 
+/**
+ * Matched at the start of a line, never anywhere in the body. GitHub's quote-reply
+ * copies the whole comment, marker included, prefixed with "> ". A substring match
+ * would read that human follow-up as one of ours and refuse to answer it -- the
+ * one moment a reply is most clearly wanted.
+ */
+function hasMarkerLine(body: string, marker: string): boolean {
+  return body.split("\n").some((line) => line.startsWith(marker));
+}
+
 export function isPipelineReply(comment: ReviewComment): boolean {
-  return comment.body.includes(REPLY_MARKER_PREFIX);
+  return hasMarkerLine(comment.body, REPLY_MARKER_PREFIX);
 }
 
 /**
@@ -39,8 +49,13 @@ export function findMarkedReply(
   anchorCommentId: string,
 ): { url: string } | undefined {
   const marker = reviewReplyMarker(thread.id, anchorCommentId);
-  const comment = thread.comments.find((candidate) => candidate.body.includes(marker));
+  const comment = thread.comments.find((candidate) => hasMarkerLine(candidate.body, marker));
   return comment ? { url: comment.url } : undefined;
+}
+
+/** The comment a reply is answering, so the reply can quote what it responds to. */
+export function anchorComment(thread: ReviewThread, anchorCommentId: string): ReviewComment | undefined {
+  return thread.comments.find((comment) => comment.id === anchorCommentId);
 }
 
 export function unresolvedCurrentThreads(threads: ReviewThread[]): ReviewThread[] {
