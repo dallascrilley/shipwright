@@ -22,15 +22,24 @@ function fixture(options: {
   const outcome = options.outcome ?? "fixed";
   let remoteHead = "head1";
   let resolved = false;
-  let replyBody = "";
+  // Comments append, as they do on GitHub, and our replies interleave with any
+  // later human ones. Replacing the comment list would hide the case this fixture
+  // exists to exercise: a run reading a thread that already carries our reply.
+  const appended: Array<{ id: string; body: string; url: string; author: string }> = [];
+  const replies = () => appended.filter((comment) => comment.author === "shipwright[bot]");
   const thread = () => ({
     id: "thread-1",
     isResolved: resolved,
     isOutdated: false,
     path: "src/a.ts",
     line: 4,
-    comments: replyBody ? [{ id: "reply-1", body: replyBody, url: "https://example/reply", author: "bot" }] : [{ id: "comment-1", body: "Please add a guard", url: "https://example/comment", author: "reviewer" }],
+    comments: [
+      { id: "comment-1", body: "Please add a guard", url: "https://example/comment", author: "reviewer" },
+      ...appended,
+    ],
   });
+  const addHumanComment = (id: string) =>
+    appended.push({ id, body: "Still broken", url: `https://example/${id}`, author: "reviewer" });
   const repositoryClient: AuthorizedPullRequest["repositoryClient"] = {
     async getRepository() { throw new Error("unused"); },
     async getIssue() { throw new Error("unused"); },
@@ -46,7 +55,11 @@ function fixture(options: {
     },
     async listReviewThreads() { events.push("threads"); return [thread()]; },
     async listReviews() { return []; },
-    async replyToReviewThread(_id, body) { events.push("reply"); replyBody = body; return { url: "https://example/reply" }; },
+    async replyToReviewThread(_id, body) {
+      events.push("reply");
+      appended.push({ id: `reply-${appended.length + 1}`, body, url: "https://example/reply", author: "shipwright[bot]" });
+      return { url: "https://example/reply" };
+    },
     async resolveReviewThread() { events.push("resolve"); resolved = true; return { isResolved: true }; },
     async addPullRequestComment() { throw new Error("unused"); },
   };
@@ -92,7 +105,7 @@ function fixture(options: {
       receipts.push(structuredClone(receipt) as unknown as Record<string, unknown>);
     },
   };
-  return { deps, events, receipts, getReplyBody: () => replyBody };
+  return { deps, events, receipts, replies, addHumanComment, getReplyBody: () => replies().at(-1)?.body ?? "" };
 }
 
 const request = { pullRequestUrl: "https://github.com/acme/widget/pull/4", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 };
@@ -106,7 +119,7 @@ test("verified changes push before replying and resolving", async () => {
   expect(events.indexOf("quiesce")).toBeLessThan(events.indexOf("commit"));
   expect(events.indexOf("reply")).toBeLessThan(events.indexOf("resolve"));
   expect(getReplyBody()).toContain("Please add a guard");
-  expect(getReplyBody()).toContain("agentos-review-run:run-1");
+  expect(getReplyBody()).toContain("agentos-review-reply thread:thread-1 anchor:comment-1");
   expect(receipt.threadResults).toEqual([expect.objectContaining({ threadId: "thread-1", resolved: true })]);
   expect(events.at(-1)).toBe("destroy");
 });
@@ -127,6 +140,29 @@ test("needs-human replies and remains unresolved", async () => {
   const receipt = await runReviewAgent(request, deps);
   expect(events).not.toContain("resolve");
   expect(receipt.remainingOpenThreadIds).toEqual(["thread-1"]);
+});
+
+test("a second wake on an unchanged needs-human thread replies no further", async () => {
+  const { deps, replies } = fixture({ changes: [], outcome: "needs-human" });
+  await runReviewAgent(request, deps);
+  expect(replies()).toHaveLength(1);
+
+  // needs-human leaves the thread unresolved, so every later wake sees it again.
+  // Anchoring on the last non-pipeline comment is what stops the pipeline from
+  // restating itself once per run for as long as the operator takes to answer.
+  await runReviewAgent(request, { ...deps, runId: "run-2" });
+  expect(replies()).toHaveLength(1);
+});
+
+test("a new human comment on the same thread earns a fresh reply", async () => {
+  const { deps, replies, addHumanComment } = fixture({ changes: [], outcome: "needs-human" });
+  await runReviewAgent(request, deps);
+  expect(replies()).toHaveLength(1);
+
+  addHumanComment("comment-2");
+  await runReviewAgent(request, { ...deps, runId: "run-2" });
+  expect(replies()).toHaveLength(2);
+  expect(replies().at(-1)?.body).toContain("anchor:comment-2");
 });
 
 test("verification failure blocks all remote writes", async () => {
