@@ -1,13 +1,11 @@
 ---
 date: 2026-07-25
 topic: always-on-activation
-origin: docs/plans/2026-07-25-feat-always-on-watched-repo-automations-plan.md
-td: td-fae961
 ---
 
 # Always-on activation runbook (dry-run first)
 
-Activate Shipwright's remote control plane so signed GitHub events can enqueue **dry-run** agent executions. Publication stays off until a later stage with explicit security/cost notes (`td-912857`).
+Activate Shipwright's remote control plane so signed GitHub events can enqueue **dry-run** agent executions. Publication stays off until a later stage with explicit security and cost notes (see [publish-stage-criteria.md](publish-stage-criteria.md)).
 
 ## Preconditions
 
@@ -41,8 +39,8 @@ Optional: temporarily disable the GitHub App webhook delivery in GitHub settings
 | `disabled` | No scheduler/queue worker | Default / rollback |
 | `test_only` | Claims **operator test runs** only; publish forced off | Prove console → queue → pipeline without GitHub |
 | `dry_run` | Scheduler + GitHub triggers enqueue; publish forced off | First always-on proof |
-| `approval_required` | Same forced-off publish at queue boundary; confirmation semantics remain | Later (U4) |
-| `publish_allowed` | Publish only if revision policy is also `publish_allowed` | Later, per-agent, after U4 gates |
+| `approval_required` | Same forced-off publish at queue boundary; confirmation semantics remain | Later |
+| `publish_allowed` | Publish only if revision policy is also `publish_allowed` | Later, per-agent, after the publish-stage gates |
 
 Advance **one stage at a time**. Do not skip to `publish_allowed` in this runbook.
 
@@ -127,11 +125,11 @@ Advance **one stage at a time**. Do not skip to `publish_allowed` in this runboo
 4. Disable the agent and deliver again → receipt/match evidence only, no new work.
 5. Re-enable when finished.
 
-**Exit criteria (R2):** idempotent signed dry-run execution proven; disable path safe; rollback procedure rehearsed once.
+**Exit criteria:** idempotent signed dry-run execution proven; disable path safe; rollback procedure rehearsed once.
 
 ## Step 6 — Record evidence
 
-Use [always-on-u1-evidence-checklist.md](./always-on-u1-evidence-checklist.md) as the copy-paste template. In td (`td-fae961`) or this plan’s Outcomes, record:
+Record the following alongside the deploy, with no secrets:
 
 - pin commit / deploy revision
 - stage transitions with timestamps
@@ -145,13 +143,10 @@ Use [always-on-u1-evidence-checklist.md](./always-on-u1-evidence-checklist.md) a
 
 - Setting `approval_required` or `publish_allowed`
 - Resolving PR review threads or pushing commits from triggers
-- Removing `.agents-state/fleet-pr-watch.py`
 - Multi-repo blast radius changes
 
-Those belong to later Phase 3 units (U4–U6).
+Those belong to the later publish-stage gates in [publish-stage-criteria.md](publish-stage-criteria.md).
 
 ## Related
 
 - Staged rollout table: [docs/deployment.md](../deployment.md)
-- Requirements R1–R2: [docs/brainstorms/2026-07-25-always-on-watched-repo-automations-requirements.md](../brainstorms/2026-07-25-always-on-watched-repo-automations-requirements.md)
-- Phase 3 plan: [docs/plans/2026-07-25-feat-always-on-watched-repo-automations-plan.md](../plans/2026-07-25-feat-always-on-watched-repo-automations-plan.md)

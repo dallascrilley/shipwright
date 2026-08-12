@@ -25,7 +25,7 @@ The systemd service runs as the unprivileged `shipwright` account with Docker gr
 
 ## Agent queue status
 
-The U6 rollout adds a durable control-plane store and a rollout-gated worker.
+The control plane adds a durable store and a rollout-gated worker.
 Which sources the deployed service executes is controlled by
 `SHIPWRIGHT_ROLLOUT_STAGE` in `/etc/shipwright/shipwright.env`:
 

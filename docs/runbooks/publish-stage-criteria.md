@@ -1,8 +1,6 @@
 ---
 date: 2026-07-25
 topic: publish-stage-criteria
-origin: docs/plans/2026-07-25-feat-always-on-watched-repo-automations-plan.md
-td: td-912857
 ---
 
 # Publish-stage security criteria (selective `publish_allowed`)
@@ -34,9 +32,9 @@ At the queue-runner boundary, `publish` is forced false whenever the matrix says
 
 ## Gate checklist before any `publish_allowed` agent
 
-Record evidence in td (`td-912857` or the enabling task) before changing stage or revision policy.
+Record the evidence for each box below before changing stage or revision policy.
 
-### A. Dry-run always-on proof (U1)
+### A. Dry-run always-on proof
 
 - [ ] Remote pin completed [always-on-activation.md](always-on-activation.md) through `dry_run`
 - [ ] Signed webhook delivery enqueued exactly one dry-run; replay did not duplicate
@@ -44,7 +42,7 @@ Record evidence in td (`td-912857` or the enabling task) before changing stage o
 
 ### B. Agent configuration
 
-- [ ] Agent created disabled from a curated template or equivalent (U3)
+- [ ] Agent created disabled from a curated template or equivalent
 - [ ] `actionPreset` matches trigger family (`fix_issue` ↔ issues, `resolve_pr_feedback` ↔ pull_request)
 - [ ] Repository is App-accessible and allowlisted; start-time reauthorization still applies
 - [ ] Verification preset/command is known-good for that repository
@@ -130,9 +128,9 @@ Publish-stage sign-off for agent <id> revision <n>
 - Then: SHIPWRIGHT_ROLLOUT_STAGE=publish_allowed AND publicationPolicy=publish_allowed
 ```
 
-## Acceptance (U4)
+## Acceptance
 
 - [x] Checklist documents dry-run proof, verify, allowlist, secret policy, exact-head, cost, teardown, security sign-off
 - [x] Double opt-in matrix documented and covered by unit tests
 - [x] Review dry-run non-mutation called out with pipeline reference
-- [ ] Live pin has not been raised to `publish_allowed` without a filled td sign-off note
+- [ ] Live pin has not been raised to `publish_allowed` without a recorded operator sign-off
