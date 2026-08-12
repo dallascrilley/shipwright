@@ -1,0 +1,64 @@
+name: CI
+
+# These steps are the same commands `bun run verify` composes, run as separate
+# steps so a failure names itself. If you change one here, change `verify` in
+# package.json too.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: typecheck and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Runtime versions are pinned in mise.toml and ui/package.json.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.16.0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.2
+
+      - name: Install host dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install console dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: ui
+
+      - name: Typecheck host
+        run: bun run typecheck
+
+      - name: Test host
+        run: bun test
+
+      - name: Typecheck console
+        run: pnpm typecheck
+        working-directory: ui
+
+      - name: Test console
+        run: pnpm test
+        working-directory: ui
+
+      - name: Build console
+        run: pnpm build
+        working-directory: ui

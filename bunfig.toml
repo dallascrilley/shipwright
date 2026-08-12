@@ -1,0 +1,5 @@
+[test]
+# The root suite is Bun's. `ui/` has its own Vitest suite with a browser-ish
+# environment, so keep Bun's discovery inside `test/` instead of letting it
+# collect `ui/**/*.spec.ts(x)` under the wrong runner.
+root = "test"

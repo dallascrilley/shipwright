@@ -38,7 +38,7 @@ describe("AgentRepositoryCatalog", () => {
   test("returns sorted selectable repositories from exact and approved owner scopes", async () => {
     const { catalog } = createCatalog([
       {
-        fullName: "DallasCrilleyMarTech/example-service",
+        fullName: "DallasCrilleyMarTech/Example-Service",
         defaultBranch: "develop",
         visibility: "private",
         archived: false,

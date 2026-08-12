@@ -73,7 +73,7 @@ describe("repository catalog contracts", () => {
     expect(
       buildRepositoryPickerView(
         { ok: true, repositories },
-        "JCS",
+        "Example",
         "dallascrilley/shipwright",
       ),
     ).toMatchObject({

@@ -4,4 +4,25 @@ node_modules/
 .env.*
 !.env.example
 .pnpm-store/
+
+# Local agent, planning, and tracker state. Useful locally, noise in the tree.
+.agents/
+.agents-state/
+.beads/
+.claude/
+.codex/
+.cursor/
+.grok/
+.planning/
+.specify/
 .todos/
+CLAUDE.md
+STATUS.md
+handoff.md
+PROJECT_CONTEXT.md
+
+# Editor and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
