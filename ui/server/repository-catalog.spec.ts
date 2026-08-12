@@ -38,7 +38,7 @@ describe("AgentRepositoryCatalog", () => {
   test("returns sorted selectable repositories from exact and approved owner scopes", async () => {
     const { catalog } = createCatalog([
       {
-        fullName: "DallasCrilleyMarTech/JCS-Production-OS",
+        fullName: "DallasCrilleyMarTech/Example-Service",
         defaultBranch: "develop",
         visibility: "private",
         archived: false,
@@ -70,9 +70,9 @@ describe("AgentRepositoryCatalog", () => {
           selectable: true,
         },
         {
-          repository: "dallascrilleymartech/jcs-production-os",
+          repository: "dallascrilleymartech/example-service",
           owner: "dallascrilleymartech",
-          name: "jcs-production-os",
+          name: "example-service",
           defaultBranch: "develop",
           visibility: "private",
           archived: false,

@@ -18,9 +18,9 @@ const repositories = [
     selectable: true,
   },
   {
-    repository: "dallascrilleymartech/jcs-production-os",
+    repository: "dallascrilleymartech/example-service",
     owner: "dallascrilleymartech",
-    name: "jcs-production-os",
+    name: "example-service",
     defaultBranch: "main",
     visibility: "private" as const,
     archived: false,
@@ -73,12 +73,12 @@ describe("repository catalog contracts", () => {
     expect(
       buildRepositoryPickerView(
         { ok: true, repositories },
-        "JCS",
+        "Example",
         "dallascrilley/shipwright",
       ),
     ).toMatchObject({
       state: "ready",
-      options: [{ repository: "dallascrilleymartech/jcs-production-os" }],
+      options: [{ repository: "dallascrilleymartech/example-service" }],
     });
     expect(
       buildRepositoryPickerView({ ok: true, repositories }, "not-present", ""),
@@ -116,7 +116,7 @@ describe("repository catalog contracts", () => {
     expect(view.options.map((option) => option.repository)).toEqual([
       "dallascrilley/retired-app",
       "dallascrilley/shipwright",
-      "dallascrilleymartech/jcs-production-os",
+      "dallascrilleymartech/example-service",
       "dallascrilleymartech/legacy-agent",
     ]);
     expect(view.options[0]).toMatchObject({
@@ -148,14 +148,14 @@ describe("repository catalog contracts", () => {
       canSaveRepositorySelection(
         failure,
         "dallascrilley/shipwright",
-        "dallascrilleymartech/jcs-production-os",
+        "dallascrilleymartech/example-service",
       ),
     ).toBe(false);
     expect(
       canSaveRepositorySelection(
         { ok: true, repositories },
         "",
-        "dallascrilleymartech/jcs-production-os",
+        "dallascrilleymartech/example-service",
       ),
     ).toBe(true);
     expect(

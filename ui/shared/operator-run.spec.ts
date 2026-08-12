@@ -830,8 +830,8 @@ describe("buildOperatorChangeEvidence", () => {
         receipt: {
           ...receiptBase,
           changedFiles: [
-            "/Users/dallascrilley/Code/shipwright/src/ops/run.ts",
-            "C:\\Users\\dallascrilley\\repo\\pkg\\main.ts",
+            "/Users/operator/Code/shipwright/src/ops/run.ts",
+            "C:\\Users\\operator\\repo\\pkg\\main.ts",
             "src/relative/keep.ts",
           ],
         },

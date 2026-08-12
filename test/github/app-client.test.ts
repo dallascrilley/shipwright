@@ -78,7 +78,7 @@ test("collects safe repository metadata from every GitHub App installation", asy
     };
     yield {
       repository: {
-        full_name: "DallasCrilleyMarTech/JCS-Production-OS",
+        full_name: "DallasCrilleyMarTech/Example-Service",
         default_branch: "develop",
         visibility: undefined,
         private: false,
@@ -95,7 +95,7 @@ test("collects safe repository metadata from every GitHub App installation", asy
       archived: false,
     },
     {
-      fullName: "DallasCrilleyMarTech/JCS-Production-OS",
+      fullName: "DallasCrilleyMarTech/Example-Service",
       defaultBranch: "develop",
       visibility: "public",
       archived: true,

@@ -1,38 +1,104 @@
 # Credentials
 
-## GitHub App: Shipwright
+Shipwright needs two credentials to do real work: a GitHub App that can read one
+issue and open one pull request, and a coding-model key. Nothing here belongs in
+the repository. Keep every value in a secret manager and inject it at runtime.
 
-- GitHub App: `rivet-test-agent-dallascrilley` (App ID `4337906`; retained as the existing external app slug)
-- Installation: `147573445`, restricted to `dallascrilley/shipwright`
-- Repository permissions: metadata read, issues read, contents read/write, and pull requests read/write. Webhooks are disabled.
-- Private key: stored in 1Password's `Private` vault as item `lfvycashnv2qmghnhygiwfo574` (`GitHub App — rivet-test programming agent`). The legacy item title is retained to avoid duplicating the authoritative secret; never commit or print its credential value.
-- Production authentication secret: stored in 1Password's `Private` vault as item `3cdoazfvs6v6vvdlfhlg5a37oa` (`Shipwright Production`).
-- Local development key path: `/Users/dallascrilley/.config/shipwright/github-app.pem` (owner-readable only). Set `GITHUB_APP_PRIVATE_KEY_PATH` to this path alongside `GITHUB_APP_ID=4337906`, `GITHUB_APP_INSTALLATION_ID=147573445`, and `GITHUB_REPOSITORY_ALLOWLIST=dallascrilley/shipwright`.
+The deterministic test suite, the typechecks, and the demo console need none of
+this. See [the README's honest boundaries](../README.md#what-this-does-and-does-not-do).
 
-## Kimi K3 coding model
+## GitHub App
 
-- Provider: Kimi's coding endpoint (`https://api.kimi.com/coding/v1`) with model `k3`.
-- 1Password: use `op://Private/Kimi for Coding API Credentials/credential` from item `63t77dfdpvb6xeckdsxjyosrwa`; it is the authoritative key store and must not be committed or printed.
-- Local invocation: use `op run` to inject `KIMI_API_KEY`, set `AGENTOS_PROVIDER=kimi`, and set `AGENTOS_MODEL=k3`. The agent writes the compatible Pi model catalog inside its sandbox at runtime.
+Register a GitHub App under the account that owns the target repositories, then
+install it only on the repositories you want Shipwright to touch.
 
-## OpenAI Codex OAuth fallback
+Repository permissions, and nothing beyond them:
 
-- Provider/model: `openai-codex/gpt-5.4`, used only after the primary coding provider returns a recognized quota, rate-limit, or capacity failure. This is the ChatGPT OAuth transport, not the OpenAI API-key transport.
-- Local source: `~/.codex/auth.json`, created and refreshed by a successful local Codex sign-in. Never commit, print, or copy this file into a release directory.
-- Production copy: `/var/lib/shipwright/codex-auth.json`, owned by `shipwright:shipwright` with mode `0600`. Set `AGENTOS_CODEX_AUTH_FILE` to that absolute path, `AGENTOS_FALLBACK_PROVIDER=openai-codex`, and `AGENTOS_FALLBACK_MODEL=gpt-5.4`.
-- Runtime projection: Shipwright validates the source file owner and mode, then writes only `access_token`, `refresh_token`, `account_id`, and the access-token expiry into Pi's disposable sandbox auth file. It does not project `id_token`, API keys, or unrelated Codex state, and it does not store credential values in run receipts.
-- Rotation: if the fallback reports an OAuth failure after the local Codex session changes, replace the production copy from the current local file and restore owner `shipwright:shipwright` and mode `0600` before restarting Shipwright.
+| Permission | Access | Why |
+| --- | --- | --- |
+| Metadata | Read | Resolve the repository and default branch |
+| Issues | Read | Read the issue body that becomes the task |
+| Contents | Read and write | Create the branch and push the commit |
+| Pull requests | Read and write | Open the pull request and reply to review threads |
 
-## GitHub App: Shipwright DCM review agent
+Do not grant Actions, Workflows, Administration, Secrets, Members, or any
+organization-level permission. Shipwright never needs them, and
+`src/pipeline/policy.ts` refuses to touch `.github/workflows/**` even if a
+misconfigured App would allow it.
 
-- Product name: Shipwright; GitHub registration: `shipwright-dcm` (App ID `4342351`). GitHub reserves the exact `Shipwright` registration name for `@shipwright`.
-- Installation: `147693967`, restricted to `DallasCrilleyMarTech/.hub`.
-- Repository permissions: metadata read, issues read, contents read/write, and pull requests read/write. OAuth, device flow, and webhooks are disabled.
-- Private key: stored in 1Password's `Private` vault as item `qco4aporpanrmwxvnxcdtbpvhu` (`Shipwright DCM GitHub App`). The item is the authoritative secret store; never commit or print its credential value.
-- Local invocation: read the App ID from `op://Private/Shipwright DCM GitHub App/username` and the private key from `op://Private/Shipwright DCM GitHub App/credential`; set `GITHUB_APP_INSTALLATION_ID=147693967` and `GITHUB_REPOSITORY_ALLOWLIST=DallasCrilleyMarTech/.hub`.
+Webhooks stay disabled unless you are running the always-on console
+([docs/runbooks/always-on-activation.md](runbooks/always-on-activation.md)), in
+which case you also generate a high-entropy `GITHUB_WEBHOOK_SECRET`.
 
-## Repository allowlist format
+Environment variables:
 
-`GITHUB_REPOSITORY_ALLOWLIST` accepts a comma-separated mix of exact `owner/repo` entries and owner scopes written `owner/*`, which permit every repository under that owner (for example `dallascrilley/*, DallasCrilleyMarTech/*`). A bare `*` or `*/*` is rejected — scopes are always owner-bound. The GitHub App installation must also grant access to the repositories a scope is meant to cover; Shipwright's own guardrail never widens what the installation can reach.
+```sh
+GITHUB_APP_ID=<numeric app id>
+GITHUB_APP_INSTALLATION_ID=<numeric installation id>   # omit to enumerate installations
+GITHUB_REPOSITORY_ALLOWLIST=<owner>/<repo>,<owner>/*
 
-The production target policy is `GITHUB_REPOSITORY_ALLOWLIST=dallascrilley/*,DallasCrilleyMarTech/*`. To populate both owners in the Agents repository selector, one configured GitHub App must be installed on both owners with the intended repository access. Leave `GITHUB_APP_INSTALLATION_ID` unset so repository discovery can enumerate every installation for that App; per-run authorization still resolves and verifies the target installation.
+# Exactly one private key source. Setting both, or neither, is a startup error.
+GITHUB_APP_PRIVATE_KEY_PATH=<absolute path to the downloaded .pem>
+# GITHUB_APP_PRIVATE_KEY=<PEM contents>
+```
+
+`parseGitHubConfig` in `src/config/github.ts` rejects a run that configures both
+sources or neither, so a half-migrated environment fails at startup instead of
+silently reading the wrong key.
+
+Store the `.pem` outside the repository with owner-only permissions
+(`chmod 600`). The private key never leaves the host: `src/agent/runner.ts`
+projects a model key into the sandbox and nothing else, and every GitHub write
+is executed by the host process.
+
+### Repository allowlist format
+
+`GITHUB_REPOSITORY_ALLOWLIST` accepts a comma-separated mix of exact
+`owner/repo` entries and owner scopes written `owner/*`. A bare `*` or `*/*` is
+rejected, so a scope is always owner-bound. The App installation must also grant
+access to whatever a scope is meant to cover. The allowlist narrows the
+installation; it never widens it. See `test/deploy/github-owner-scope.test.ts`
+for the cases this is held to.
+
+## Coding model
+
+Shipwright talks to one primary provider and, optionally, one fallback used only
+after the primary reports a recognized quota, rate-limit, or capacity failure.
+
+| `AGENTOS_PROVIDER` | Credential it reads | Default model |
+| --- | --- | --- |
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-opus-4-6` |
+| `openrouter` | `OPENROUTER_API_KEY` | `openai/gpt-5.1-codex` |
+| `openai` | `OPENAI_API_KEY` | `gpt-4.1-mini` |
+| `google` | `GEMINI_API_KEY` | `gemini-2.5-flash` |
+| `kimi` | `KIMI_API_KEY` | `kimi-for-coding` |
+| `openai-codex` | `AGENTOS_CODEX_AUTH_FILE` | `gpt-5.4` |
+
+Leave `AGENTOS_PROVIDER` unset to take the first configured provider in that
+order. `AGENTOS_MODEL` overrides the default model. The table is generated by
+hand from `configuredProviders` in `src/config/provider.ts`, which is where a
+provider is actually added.
+
+### OAuth fallback
+
+The fallback provider can use a local OAuth session file instead of an API key.
+Shipwright validates that file's owner and mode before use, then projects only
+the access token, refresh token, account id, and expiry into the sandbox. It
+does not project the id token, unrelated state, or any API key, and it never
+writes credential values into a receipt.
+
+```sh
+AGENTOS_FALLBACK_PROVIDER=<provider id>
+AGENTOS_FALLBACK_MODEL=<model id>
+AGENTOS_CODEX_AUTH_FILE=<absolute path to the auth json>
+```
+
+On a server, keep that file owned by the service user with mode `0600`. When the
+local session changes, replace the server copy, restore owner and mode, and
+restart the service.
+
+## Rotation
+
+Rotating any of these is a restart, not a migration. Replace the value in your
+secret manager, update the injected environment, restart the service, and run
+`bun run doctor` to confirm the new credential resolves before the next run.
