@@ -1,0 +1,54 @@
+name: Bug report
+description: Something behaves differently than documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report a security vulnerability here. See SECURITY.md.
+        Do not paste tokens, private keys, or receipt contents.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran and what you got.
+      placeholder: |
+        $ bun run shipwright -- <issue url> --verify "bun test"
+        ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface
+      options:
+        - Issue-to-PR CLI
+        - PR review CLI
+        - Operator console
+        - Always-on webhook automations
+        - Deployment or bootstrap
+        - Tests or CI
+    validations:
+      required: true
+
+  - type: input
+    id: phase
+    attributes:
+      label: Receipt phase, if a run failed
+      description: One of intake, workspace, agent, verify, policy, publish, complete.
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Output of `bun run doctor -- --runtime-only`, plus OS.
+      render: shell
