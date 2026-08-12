@@ -1,4 +1,6 @@
-# Shipwright
+<p align="center">
+  <img src="docs/brand/lockup.png" alt="Shipwright — Issues into tested PRs." width="720" />
+</p>
 
 **An agent that turns approved GitHub issues into tested, reviewable pull requests.**
 
