@@ -135,6 +135,16 @@ bun run doctor
 Credential setup, including the exact GitHub App permissions, is in
 [docs/credentials.md](docs/credentials.md).
 
+## Provenance
+
+| Layer | What it is |
+| --- | --- |
+| **Host pipeline** (`src/`, `shipwright.ts`, `review-agent.ts`, host tests) | Original Shipwright work: intake, Docker sandbox session, verification, patch policy, secret safety, receipts, GitHub App publish path, and the credential non-projection tests. |
+| **Agent runtime** | Sandbox sessions via [AgentOS](https://agentos-sdk.dev/docs/) (`@rivet-dev/agentos`, `@agentos-software/pi`) and the Pi coding agent (`@mariozechner/pi-coding-agent`). Those are dependencies, not this repository. |
+| **Operator console** (`ui/`) | Built on [`@agent-native/core`](https://www.npmjs.com/package/@agent-native/core) (BuilderIO agent-native app templates). Console UX, run records, and dry-run defaults are product work on that base; do not count monorepo UI LOC as if the framework were written here. |
+
+When reviewing, start with `src/pipeline/`, `src/agent/runner.ts`, and `test/agent/runner.test.ts` (credential projection), then `src/github/publisher.ts`. Treat `ui/` as the operator surface on agent-native, not as the trust boundary.
+
 ## What this does and does not do
 
 **What is real and verifiable from this repository.** The pipeline, the
@@ -155,7 +165,8 @@ themselves unless you set their environment flags and supply credentials.
 sequence are exactly what the code produces; the SHAs and URLs are made up.
 
 **What this is not.** It is a single-operator service. There is no hosted
-instance, no package on any registry, no multi-tenant story, and no autonomous
+instance, no package on any registry (`package.json` is `"private": true` and
+versioned for source installs only), no multi-tenant story, and no autonomous
 merge. Publication is a human decision every time: the CLI requires `--publish`
 and the console requires a second confirmation.
 
@@ -181,7 +192,8 @@ bun run review-agent -- https://github.com/OWNER/REPO/pull/123 \
   --skill /absolute/path/to/fix-review-findings/SKILL.md
 ```
 
-**Operator console.** An Agent Native app under [`ui/`](ui/). Credentials stay
+**Operator console.** An [agent-native](https://www.npmjs.com/package/@agent-native/core)
+app under [`ui/`](ui/) (see [Provenance](#provenance)). Credentials stay
 server-side, runs default to dry-run, phase and receipt evidence stream live,
 and publication needs a second confirmation. Run records persist atomically, so
 completed history survives a restart and an unfinished run is marked interrupted
