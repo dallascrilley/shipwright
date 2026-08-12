@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/dallascrilley/shipwright/actions/workflows/ci.yml/badge.svg)](https://github.com/dallascrilley/shipwright/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6.svg)](tsconfig.json)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178c6.svg)](tsconfig.json)
 [![Bun](https://img.shields.io/badge/Bun-1.3.14-f9f1e1.svg)](mise.toml)
 
 I built Shipwright because I wanted to know whether a coding agent had actually
@@ -97,7 +97,10 @@ Shipwright never force-pushes. Each run gets a fresh
 
 ## Quickstart
 
-Deterministic verification needs Bun, Node, and pnpm. It does not need Docker, a
+Deterministic verification needs Bun, pnpm, and Node **24.16.0** (pinned in
+[`mise.toml`](mise.toml) and CI — a transitive native dependency, `isolated-vm`,
+does not compile against Node 26 headers, so `bun install` exits non-zero on a
+newer Node; see [CONTRIBUTING](CONTRIBUTING.md)). It does not need Docker, a
 model key, or a GitHub App.
 
 ```sh
@@ -108,8 +111,8 @@ bun install --frozen-lockfile
 bun run verify
 ```
 
-`bun run verify` is the whole gate: host typecheck, host tests, console
-typecheck, console tests, console build. It is the same set of commands
+`bun run verify` is the whole gate: host tests, host typecheck, console tests,
+console typecheck, console build. It is the same set of commands
 [CI](.github/workflows/ci.yml) runs on every pull request.
 
 To see the operator console without any credentials at all:
