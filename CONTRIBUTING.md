@@ -9,6 +9,11 @@ You need Bun, Node, and pnpm. The versions are pinned in `mise.toml` and
 `ui/package.json`; [mise](https://mise.jdx.dev/) will install them, or install
 them yourself.
 
+Use the pinned Node version rather than whatever is newest. A transitive native
+dependency fails to compile on Node 26, so `bun install` will exit during the
+`isolated-vm` build step if you are ahead of the pin. CI uses the pinned
+versions for the same reason.
+
 ```sh
 bun install --frozen-lockfile
 (cd ui && pnpm install --frozen-lockfile)
