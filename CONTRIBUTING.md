@@ -34,7 +34,7 @@ sandbox image and provisions the sandbox Bun. It needs a running Docker daemon.
 
 | Command | Scope | Needs |
 | --- | --- | --- |
-| `bun test` | host suite, `test/` | nothing |
+| `bun test` | host suite, `test/` | `ui/node_modules` (the deploy tests import `ui/shared/`, so run `cd ui && pnpm install --frozen-lockfile` first) |
 | `cd ui && pnpm test` | console suite, vitest | nothing |
 | `bun run test:docker` | sandbox behavior | Docker, `RUN_DOCKER_E2E=1` |
 | `bun run test:local-pi` | local agent run | Docker, model key, `RUN_LOCAL_PI_E2E=1` |
