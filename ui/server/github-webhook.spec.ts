@@ -2,7 +2,10 @@ import { createHmac } from "node:crypto";
 
 import { describe, expect, test } from "vitest";
 
-import type { GithubTriggerCondition } from "../shared/agent-definition";
+import type {
+  GithubTriggerCondition,
+  GithubTriggerEvent,
+} from "../shared/agent-definition";
 import {
   AgentControlPlane,
   MemoryAgentControlPlaneStore,
@@ -58,8 +61,34 @@ function createEnabledIssueTrigger(conditions: GithubTriggerCondition[] = []) {
   return { ...fixture, agent, trigger };
 }
 
+function createEnabledReviewTrigger(conditions: GithubTriggerCondition[] = []) {
+  const fixture = createFixture();
+  const agent = fixture.controlPlane.createAgent({
+    name: "Review intake",
+    instructions: "Process App-submitted reviews as a dry run.",
+    actionPreset: "resolve_pr_feedback",
+    skillId: "fix-review-findings",
+    allowedTools: ["github", "sandbox"],
+    targetScope: { repository: "dallascrilley/shipwright", branch: "main" },
+    verification: { presetId: "bun-test" },
+    publicationPolicy: "dry_run",
+  });
+  fixture.controlPlane.setEnabled(agent.agentId, agent.currentRevision, true);
+  const trigger = fixture.controlPlane.createTrigger({
+    agentId: agent.agentId,
+    expectedRevision: agent.currentRevision,
+    kind: "github",
+    config: {
+      event: "pull_request_review",
+      actions: ["submitted"],
+      conditions,
+    },
+  });
+  return { ...fixture, agent, trigger };
+}
+
 function signedInput(
-  event: "issues" | "pull_request",
+  event: GithubTriggerEvent,
   deliveryId: string,
   payload: object,
 ) {
@@ -77,6 +106,25 @@ const issuePayload = {
   repository: { full_name: "dallascrilley/shipwright" },
   sender: { login: "Alice" },
   issue: { number: 42, labels: [{ name: "bug" }, { name: "urgent" }] },
+};
+
+const reviewPayload = {
+  action: "submitted",
+  repository: { full_name: "dallascrilley/shipwright" },
+  installation: { id: 42 },
+  review: {
+    id: 101,
+    user: { login: "review-app[bot]", type: "Bot" },
+    commit_id: "review-head-sha",
+    body: "review-body-marker",
+  },
+  pull_request: {
+    number: 7,
+    head: { sha: "review-head-sha" },
+    base: { ref: "main" },
+    draft: false,
+    labels: [],
+  },
 };
 
 function accepted(matched: number) {
@@ -237,6 +285,107 @@ describe("GitHubWebhookIngress", () => {
     expect(JSON.stringify(fixture.store.load())).not.toContain(
       "raw-payload-marker",
     );
+  });
+
+  test("queues one App-submitted review only after validating its provenance", async () => {
+    const fixture = createEnabledReviewTrigger([
+      { field: "actor", operator: "is_one_of", values: ["review-app[bot]"] },
+      { field: "base_branch", operator: "is_one_of", values: ["main"] },
+      { field: "draft_state", operator: "is_not_draft" },
+    ]);
+    const input = await signedInput(
+      "pull_request_review",
+      "delivery-review-1",
+      reviewPayload,
+    );
+
+    await expect(fixture.ingress.receive(input)).resolves.toMatchObject({
+      status: "accepted",
+      matched: 1,
+      conditionFiltered: 0,
+      decisions: [
+        {
+          triggerId: fixture.trigger.triggerId,
+          decision: "matched",
+          reasonCodes: [],
+        },
+      ],
+    });
+
+    const execution = fixture.store.load().executions[0];
+    expect(execution).toMatchObject({
+      agentRevision: fixture.trigger.agentRevision,
+      source: "github",
+      idempotencyKey: `github:delivery-review-1:${fixture.trigger.agentRevision}`,
+      target: {
+        kind: "pull",
+        owner: "dallascrilley",
+        repo: "shipwright",
+        number: 7,
+      },
+    });
+    expect(fixture.dispatcher.list()).toHaveLength(1);
+    expect(JSON.stringify(fixture.store.load())).not.toContain(
+      "review-body-marker",
+    );
+
+    await expect(fixture.ingress.receive(input)).resolves.toMatchObject({
+      status: "accepted",
+      matched: 1,
+    });
+    expect(fixture.dispatcher.list()).toHaveLength(1);
+  });
+
+  test("rejects submitted reviews with incomplete or inconsistent provenance before queueing", async () => {
+    const invalidPayloads = [
+      ["missing installation", { ...reviewPayload, installation: undefined }],
+      [
+        "malformed installation",
+        { ...reviewPayload, installation: { id: "42" } },
+      ],
+      [
+        "human reviewer",
+        {
+          ...reviewPayload,
+          review: {
+            ...reviewPayload.review,
+            user: { login: "human-reviewer", type: "User" },
+          },
+        },
+      ],
+      [
+        "missing review id",
+        { ...reviewPayload, review: { ...reviewPayload.review, id: 0 } },
+      ],
+      [
+        "reviewed commit mismatch",
+        {
+          ...reviewPayload,
+          review: { ...reviewPayload.review, commit_id: "different-head-sha" },
+        },
+      ],
+      [
+        "missing pull request head",
+        {
+          ...reviewPayload,
+          pull_request: { ...reviewPayload.pull_request, head: undefined },
+        },
+      ],
+    ] as const;
+
+    for (const [name, payload] of invalidPayloads) {
+      const fixture = createEnabledReviewTrigger();
+      await expect(
+        fixture.ingress.receive(
+          await signedInput(
+            "pull_request_review",
+            `delivery-review-invalid-${name.replace(/\s+/g, "-")}`,
+            payload,
+          ),
+        ),
+      ).resolves.toEqual({ status: "rejected", reason: "invalid_payload" });
+      expect(fixture.dispatcher.list()).toHaveLength(0);
+    }
   });
 
   test("extracts pull request base branch and draft state after signature verification", async () => {

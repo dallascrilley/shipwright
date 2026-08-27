@@ -49,7 +49,7 @@ Configure the GitHub App webhook with:
 - URL: `https://<SHIPWRIGHT_PUBLIC_HOST>/api/github/webhook`
 - Content type: `application/json`
 - Secret: the same value stored as `GITHUB_WEBHOOK_SECRET`
-- Events: Issues and Pull requests
+- Events: Issues, Pull requests, and Pull request reviews
 
 `POST /api/github/webhook` is intentionally outside session authentication
 because GitHub cannot hold a Shipwright session. The route authenticates every

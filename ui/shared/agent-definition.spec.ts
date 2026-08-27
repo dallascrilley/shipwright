@@ -22,6 +22,7 @@ import {
   validateActionPresetGithubTriggerConsistency,
   validateActionPresetScheduleTriggerConsistency,
 } from "./agent-definition";
+import type { GithubTriggerEvent } from "./agent-definition";
 
 const draft = {
   name: "Issue triage",
@@ -40,12 +41,13 @@ const draft = {
 };
 
 describe("agentDefinition contracts", () => {
-  test("defines exactly the four curated GitHub trigger choices", () => {
+  test("defines exactly the five curated GitHub trigger choices", () => {
     expect(GITHUB_TRIGGER_CHOICES.map((choice) => choice.id)).toEqual([
       "issue_created",
       "issue_edited",
       "pull_request_created",
       "pull_request_pushed",
+      "pull_request_review_submitted",
     ]);
     for (const choice of GITHUB_TRIGGER_CHOICES) {
       const config = { event: choice.event, actions: [choice.action] };
@@ -143,13 +145,19 @@ describe("agentDefinition contracts", () => {
   });
 
   test("publishes only event-applicable condition fields", () => {
-    const fieldsFor = (event: "issues" | "pull_request") =>
+    const fieldsFor = (event: GithubTriggerEvent) =>
       GITHUB_TRIGGER_CONDITION_CATALOG.filter((item) =>
         (item.events as readonly string[]).includes(event),
       ).map((item) => item.field);
 
     expect(fieldsFor("issues")).toEqual(["actor", "labels"]);
     expect(fieldsFor("pull_request")).toEqual([
+      "actor",
+      "labels",
+      "base_branch",
+      "draft_state",
+    ]);
+    expect(fieldsFor("pull_request_review")).toEqual([
       "actor",
       "labels",
       "base_branch",
@@ -544,6 +552,12 @@ describe("action preset contracts", () => {
     expect(githubEventAllowedForActionPreset("fix_issue", "pull_request")).toBe(
       false,
     );
+    expect(
+      githubEventAllowedForActionPreset(
+        "resolve_pr_feedback",
+        "pull_request_review",
+      ),
+    ).toBe(true);
     expect(
       validateActionPresetGithubTriggerConsistency("fix_issue", {
         event: "pull_request",

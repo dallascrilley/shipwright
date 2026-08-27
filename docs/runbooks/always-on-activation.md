@@ -80,7 +80,7 @@ Advance **one stage at a time**. Do not skip to `publish_allowed` in this runboo
    - URL: `https://<SHIPWRIGHT_PUBLIC_HOST>/api/github/webhook`
    - Content type: `application/json`
    - Secret: same as `GITHUB_WEBHOOK_SECRET`
-   - Events: **Issues** and **Pull requests**
+   - Events: **Issues**, **Pull requests**, and **Pull request reviews**
 
 4. Redeploy or restart so the service loads the secret:
 

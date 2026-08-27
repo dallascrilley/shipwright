@@ -5,6 +5,7 @@ import {
   targetMatchesScope,
   type ExecutionRequest,
   type GithubTriggerCondition,
+  type GithubTriggerEvent,
 } from "../shared/agent-definition";
 import type { AgentControlPlaneStore } from "./agent-control-plane";
 import {
@@ -21,7 +22,7 @@ const REPOSITORY_PATTERN = /^[^/\s]+\/[^/\s]+$/;
 export const MAX_WEBHOOK_BODY_BYTES = 1_048_576;
 export const MAX_WEBHOOK_DECISIONS = 20;
 
-type GitHubEvent = "issues" | "pull_request";
+type GitHubEvent = GithubTriggerEvent;
 
 type WebhookTarget = {
   action: string;
@@ -182,7 +183,11 @@ export class GitHubWebhookIngress {
   }
 
   private parseEvent(value: string): GitHubEvent | undefined {
-    return value === "issues" || value === "pull_request" ? value : undefined;
+    return value === "issues" ||
+      value === "pull_request" ||
+      value === "pull_request_review"
+      ? value
+      : undefined;
   }
 
   private parseTarget(
@@ -212,7 +217,9 @@ export class GitHubWebhookIngress {
         ? subject.number
         : event === "pull_request"
           ? payload.number
-          : undefined;
+          : event === "pull_request_review" && isRecord(subject)
+            ? subject.number
+            : undefined;
     if (
       typeof number !== "number" ||
       !Number.isSafeInteger(number) ||
@@ -220,18 +227,27 @@ export class GitHubWebhookIngress {
     ) {
       return undefined;
     }
+    if (
+      event === "pull_request_review" &&
+      !isValidSubmittedReview(payload, subject)
+    ) {
+      return undefined;
+    }
     return {
       action: stringValue(payload.action),
       repository,
       conditionContext: {
-        actor: readStringField(payload.sender, "login"),
+        actor:
+          event === "pull_request_review"
+            ? readNestedStringField(payload.review, "user", "login")
+            : readStringField(payload.sender, "login"),
         labels: readLabels(subject),
         baseBranch:
-          event === "pull_request"
+          event === "pull_request" || event === "pull_request_review"
             ? readNestedStringField(subject, "base", "ref")
             : { state: "missing" },
         draftState:
-          event === "pull_request"
+          event === "pull_request" || event === "pull_request_review"
             ? readBooleanField(subject, "draft")
             : { state: "missing" },
       },
@@ -316,6 +332,56 @@ function readLabels(
     labels.push(label.name);
   }
   return { state: "available", value: labels };
+}
+
+/**
+ * A review delivery is actionable only when it is a submitted review from a
+ * GitHub App, and the review was created against the pull request's current
+ * head. These values are authenticated by the webhook signature but remain
+ * untrusted until all of the cross-field checks pass.
+ */
+function isValidSubmittedReview(
+  payload: Record<string, unknown>,
+  pullRequest: unknown,
+): boolean {
+  const installation = payload.installation;
+  if (
+    !isRecord(installation) ||
+    !isPositiveSafeInteger(installation.id)
+  ) {
+    return false;
+  }
+
+  const review = payload.review;
+  if (!isRecord(review) || !isPositiveSafeInteger(review.id)) return false;
+
+  const reviewer = review.user;
+  if (
+    !isRecord(reviewer) ||
+    reviewer.type !== "Bot" ||
+    typeof reviewer.login !== "string" ||
+    reviewer.login.length === 0
+  ) {
+    return false;
+  }
+  if (
+    payload.sender !== undefined &&
+    (!isRecord(payload.sender) || payload.sender.login !== reviewer.login)
+  ) {
+    return false;
+  }
+
+  const reviewCommit = readStringField(review, "commit_id");
+  const headSha = readNestedStringField(pullRequest, "head", "sha");
+  return (
+    reviewCommit.state === "available" &&
+    headSha.state === "available" &&
+    reviewCommit.value === headSha.value
+  );
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

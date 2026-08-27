@@ -84,7 +84,9 @@ export function inferActionPresetFromLegacyDraft(
       if (!config || typeof config !== "object") continue;
       const event = (config as { event?: unknown }).event;
       if (event === "issues") hasIssues = true;
-      if (event === "pull_request") hasPullRequest = true;
+      if (event === "pull_request" || event === "pull_request_review") {
+        hasPullRequest = true;
+      }
     }
     if (hasIssues && !hasPullRequest) return "fix_issue";
     if (hasPullRequest && !hasIssues) return "resolve_pr_feedback";
@@ -190,6 +192,11 @@ export const agentRevisionSchema = z
 
 export type AgentRevision = z.output<typeof agentRevisionSchema>;
 
+export type GithubTriggerEvent =
+  | "issues"
+  | "pull_request"
+  | "pull_request_review";
+
 export const GITHUB_TRIGGER_CHOICES = [
   {
     id: "issue_created",
@@ -214,6 +221,12 @@ export const GITHUB_TRIGGER_CHOICES = [
     label: "Commits pushed to pull request",
     event: "pull_request",
     action: "synchronize",
+  },
+  {
+    id: "pull_request_review_submitted",
+    label: "Pull request review submitted",
+    event: "pull_request_review",
+    action: "submitted",
   },
 ] as const;
 
@@ -295,7 +308,7 @@ export const GITHUB_TRIGGER_CONDITION_CATALOG = [
   {
     field: "actor",
     label: "Event actor",
-    events: ["issues", "pull_request"],
+    events: ["issues", "pull_request", "pull_request_review"],
     operators: [
       { id: "is_one_of", label: "is one of" },
       { id: "is_not_one_of", label: "is not one of" },
@@ -304,7 +317,7 @@ export const GITHUB_TRIGGER_CONDITION_CATALOG = [
   {
     field: "labels",
     label: "Labels",
-    events: ["issues", "pull_request"],
+    events: ["issues", "pull_request", "pull_request_review"],
     operators: [
       { id: "include_any", label: "include any" },
       { id: "include_all", label: "include all" },
@@ -314,7 +327,7 @@ export const GITHUB_TRIGGER_CONDITION_CATALOG = [
   {
     field: "base_branch",
     label: "Base branch",
-    events: ["pull_request"],
+    events: ["pull_request", "pull_request_review"],
     operators: [
       { id: "is_one_of", label: "is one of" },
       { id: "is_not_one_of", label: "is not one of" },
@@ -323,7 +336,7 @@ export const GITHUB_TRIGGER_CONDITION_CATALOG = [
   {
     field: "draft_state",
     label: "Draft state",
-    events: ["pull_request"],
+    events: ["pull_request", "pull_request_review"],
     operators: [
       { id: "is_draft", label: "is draft" },
       { id: "is_not_draft", label: "is not draft" },
@@ -336,7 +349,7 @@ export type GithubTriggerConditionField =
 
 export const githubTriggerConfigSchema = z
   .object({
-    event: z.enum(["issues", "pull_request"]),
+    event: z.enum(["issues", "pull_request", "pull_request_review"]),
     actions: z.array(identifierSchema).min(1).max(16),
     conditions: z
       .array(githubTriggerConditionSchema)
@@ -359,9 +372,11 @@ export function findGithubTriggerChoice(
 
 export function githubEventAllowedForActionPreset(
   preset: ActionPreset,
-  event: "issues" | "pull_request",
+  event: GithubTriggerEvent,
 ): boolean {
-  return preset === "fix_issue" ? event === "issues" : event === "pull_request";
+  return preset === "fix_issue"
+    ? event === "issues"
+    : event === "pull_request" || event === "pull_request_review";
 }
 
 export function githubTriggerConfigAllowedForActionPreset(
@@ -384,7 +399,7 @@ export function validateActionPresetGithubTriggerConsistency(
   const expected =
     preset === "fix_issue"
       ? "issue triggers (created or edited)"
-      : "pull request triggers (opened or synchronize)";
+      : "pull request triggers (opened, synchronize, or review submitted)";
   return `Action preset "${preset}" cannot use ${triggerLabel}. Use ${expected}.`;
 }
 
