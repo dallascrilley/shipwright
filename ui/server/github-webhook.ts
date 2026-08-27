@@ -173,7 +173,7 @@ export class GitHubWebhookIngress {
       // The queue entry deliberately carries only the target, not the review id
       // or the head SHA validated above. Execution re-authorizes the pull
       // request and re-derives its head from GitHub at run time: see
-      // `runReview` in src/pipeline/review-run.ts, which compares the freshly
+      // `runReviewAgent` in src/pipeline/review-run.ts, which compares the freshly
       // fetched `currentPullRequest.headSha` and `getBranchSha` result against
       // the authorized head and aborts with "pull request head moved after
       // authorization", then pins the workspace via `assertRunIdentity`.
