@@ -15,6 +15,8 @@ const config = {
   webhookSecret: "w".repeat(32),
   allowedRepositories: new Set(["dallascrilley/shipwright"]),
   allowedOwners: new Set(["dallascrilley"]),
+  expectedReviewerLogin: "review-app[bot]",
+  installationId: 42,
 };
 
 function requestHeaders() {
@@ -146,6 +148,7 @@ describe("POST /api/github/webhook", () => {
       action: "submitted",
       repository: { full_name: "dallascrilley/shipwright" },
       installation: { id: 42 },
+      sender: { login: "review-app[bot]" },
       review: {
         id: 501,
         user: { login: "review-app[bot]", type: "Bot" },
@@ -198,6 +201,7 @@ describe("POST /api/github/webhook", () => {
           action: "submitted",
           repository: { full_name: "dallascrilley/shipwright" },
           installation: { id: 42 },
+          sender: { login: "review-app[bot]" },
           review: {
             id: 502,
             user: { login: "review-app[bot]", type: "Bot" },

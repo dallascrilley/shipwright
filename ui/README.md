@@ -66,9 +66,10 @@ matching belongs to the U3/U4 trigger ingress that supplies one.
 `ui/server/routes/api/github/webhook.post.ts` is the public GitHub callback.
 `ui/server/github-webhook.ts` enforces the body limit and verifies the GitHub
 HMAC before parsing. It then applies repository scope and enabled-state checks,
-validates submitted pull-request review provenance (installation, App reviewer,
-review ID, reviewed commit, and current head), extracts only the bounded issue/PR
-target plus condition fields, and evaluates conditions before queueing.
+authorizes submitted pull-request review provenance (submitted action, exact
+configured installation and reviewer bot identity, review ID, matching sender,
+reviewed commit, and current head), extracts only the bounded issue/PR target
+plus condition fields, and evaluates conditions before queueing.
 
 ### GitHub trigger conditions
 
@@ -96,8 +97,10 @@ remain independent gates.
 Raw expressions, nested boolean groups, regex, changed-file filters, title/body
 matching, schedule conditions, JSON import, and additional GitHub event types
 remain deliberately out of scope. Review-trigger provenance is fixed to
-submitted reviews from GitHub App reviewers; review-body matching and arbitrary
-reviewer identity rules remain out of scope.
+submitted reviews from the single configured reviewer bot identity; review-body
+matching and operator-authored reviewer identity rules remain out of scope.
+Review state is not filtered: approved and commented reviews are accepted too,
+and the repair stage no-ops when a review carries no actionable findings.
 
 `ScheduleScheduler` accepts five-field cron schedules with a valid IANA timezone
 and a five-minute minimum interval, including across forward timezone changes.

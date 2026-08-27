@@ -18,7 +18,21 @@ function signPayload(payload: string): string {
   return `sha256=${createHmac("sha256", WEBHOOK_SECRET).update(payload).digest("hex")}`;
 }
 
-function createFixture() {
+const EXPECTED_REVIEWER_LOGIN = "review-app[bot]";
+const EXPECTED_INSTALLATION_ID = 42;
+
+type ReviewAuthorizationOverride = {
+  expectedReviewerLogin?: string;
+  expectedReviewerUserId?: number;
+  installationId?: number;
+};
+
+function createFixture(
+  authorization: ReviewAuthorizationOverride = {
+    expectedReviewerLogin: EXPECTED_REVIEWER_LOGIN,
+    installationId: EXPECTED_INSTALLATION_ID,
+  },
+) {
   const now = () => "2026-07-21T00:00:00.000Z";
   const store = new MemoryAgentControlPlaneStore();
   let id = 0;
@@ -35,6 +49,7 @@ function createFixture() {
     allowedOwners: new Set(),
     store,
     dispatcher,
+    ...authorization,
   });
   return { controlPlane, dispatcher, ingress, store };
 }
@@ -61,8 +76,11 @@ function createEnabledIssueTrigger(conditions: GithubTriggerCondition[] = []) {
   return { ...fixture, agent, trigger };
 }
 
-function createEnabledReviewTrigger(conditions: GithubTriggerCondition[] = []) {
-  const fixture = createFixture();
+function createEnabledReviewTrigger(
+  conditions: GithubTriggerCondition[] = [],
+  authorization?: ReviewAuthorizationOverride,
+) {
+  const fixture = createFixture(authorization);
   const agent = fixture.controlPlane.createAgent({
     name: "Review intake",
     instructions: "Process App-submitted reviews as a dry run.",
@@ -111,10 +129,11 @@ const issuePayload = {
 const reviewPayload = {
   action: "submitted",
   repository: { full_name: "dallascrilley/shipwright" },
-  installation: { id: 42 },
+  installation: { id: EXPECTED_INSTALLATION_ID },
+  sender: { login: EXPECTED_REVIEWER_LOGIN },
   review: {
     id: 101,
-    user: { login: "review-app[bot]", type: "Bot" },
+    user: { login: EXPECTED_REVIEWER_LOGIN, type: "Bot", id: 555 },
     commit_id: "review-head-sha",
     body: "review-body-marker",
   },
@@ -371,6 +390,27 @@ describe("GitHubWebhookIngress", () => {
           pull_request: { ...reviewPayload.pull_request, head: undefined },
         },
       ],
+      [
+        "unexpected reviewer login",
+        {
+          ...reviewPayload,
+          sender: { login: "other-app[bot]" },
+          review: {
+            ...reviewPayload.review,
+            user: { login: "other-app[bot]", type: "Bot", id: 555 },
+          },
+        },
+      ],
+      [
+        "unexpected installation id",
+        { ...reviewPayload, installation: { id: 4242 } },
+      ],
+      ["missing sender", { ...reviewPayload, sender: undefined }],
+      [
+        "sender mismatched with reviewer",
+        { ...reviewPayload, sender: { login: "someone-else[bot]" } },
+      ],
+      ["non-submitted action", { ...reviewPayload, action: "dismissed" }],
     ] as const;
 
     for (const [name, payload] of invalidPayloads) {
@@ -386,6 +426,56 @@ describe("GitHubWebhookIngress", () => {
       ).resolves.toEqual({ status: "rejected", reason: "invalid_payload" });
       expect(fixture.dispatcher.list()).toHaveLength(0);
     }
+  });
+
+  test("rejects an otherwise valid submitted review when no reviewer identity is configured", async () => {
+    const fixture = createEnabledReviewTrigger([], {
+      installationId: EXPECTED_INSTALLATION_ID,
+    });
+
+    await expect(
+      fixture.ingress.receive(
+        await signedInput(
+          "pull_request_review",
+          "delivery-review-unconfigured",
+          reviewPayload,
+        ),
+      ),
+    ).resolves.toEqual({ status: "rejected", reason: "invalid_payload" });
+    expect(fixture.dispatcher.list()).toHaveLength(0);
+  });
+
+  test("pins the reviewer bot user id when one is configured", async () => {
+    const authorization = {
+      expectedReviewerLogin: EXPECTED_REVIEWER_LOGIN,
+      expectedReviewerUserId: 555,
+      installationId: EXPECTED_INSTALLATION_ID,
+    };
+
+    const matching = createEnabledReviewTrigger([], authorization);
+    await expect(
+      matching.ingress.receive(
+        await signedInput(
+          "pull_request_review",
+          "delivery-review-user-id-match",
+          reviewPayload,
+        ),
+      ),
+    ).resolves.toMatchObject({ status: "accepted", matched: 1 });
+
+    const impostor = createEnabledReviewTrigger([], authorization);
+    await expect(
+      impostor.ingress.receive(
+        await signedInput("pull_request_review", "delivery-review-user-id-x", {
+          ...reviewPayload,
+          review: {
+            ...reviewPayload.review,
+            user: { login: EXPECTED_REVIEWER_LOGIN, type: "Bot", id: 999 },
+          },
+        }),
+      ),
+    ).resolves.toEqual({ status: "rejected", reason: "invalid_payload" });
+    expect(impostor.dispatcher.list()).toHaveLength(0);
   });
 
   test("extracts pull request base branch and draft state after signature verification", async () => {

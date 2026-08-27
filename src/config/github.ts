@@ -12,6 +12,17 @@ export interface GitHubWebhookConfig {
   webhookSecret: string;
   allowedRepositories: Set<string>;
   allowedOwners: Set<string>;
+  /**
+   * Reviewer identity authorized to trigger repair from a submitted review.
+   * The `pull_request_review` payload identifies the reviewer as a bot *user*
+   * (login plus user id), never as an App id, so identity is pinned on the
+   * lowercased login and optionally the numeric user id. When this is unset,
+   * review deliveries are rejected rather than trusting any bot reviewer.
+   */
+  expectedReviewerLogin?: string;
+  expectedReviewerUserId?: number;
+  /** When set, review deliveries must carry exactly this installation id. */
+  installationId?: number;
 }
 
 /** Exact `owner/repo` names plus owners granted an `owner/*` scope. */
@@ -79,10 +90,25 @@ export function parseGitHubWebhookConfig(
     throw new Error("GitHub webhook secret must be at least 32 characters");
   }
   const { repositories, owners } = parseAllowedRepositories(env);
+  const expectedReviewerLogin =
+    env.GITHUB_REVIEW_BOT_LOGIN?.trim().toLowerCase() || undefined;
   return {
     webhookSecret,
     allowedRepositories: repositories,
     allowedOwners: owners,
+    expectedReviewerLogin,
+    expectedReviewerUserId: env.GITHUB_REVIEW_BOT_USER_ID
+      ? parsePositiveInteger(
+          env.GITHUB_REVIEW_BOT_USER_ID,
+          "GITHUB_REVIEW_BOT_USER_ID",
+        )
+      : undefined,
+    installationId: env.GITHUB_APP_INSTALLATION_ID
+      ? parsePositiveInteger(
+          env.GITHUB_APP_INSTALLATION_ID,
+          "GITHUB_APP_INSTALLATION_ID",
+        )
+      : undefined,
   };
 }
 

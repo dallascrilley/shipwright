@@ -67,6 +67,18 @@ export type GitHubWebhookIngressOptions = {
   allowedOwners: ReadonlySet<string>;
   store: AgentControlPlaneStore;
   dispatcher: QueueDispatcher;
+} & ReviewAuthorization;
+
+/**
+ * Identity a submitted review must prove before it may enqueue repair. The
+ * reviewer is pinned on its bot *user* identity because that is what the
+ * `pull_request_review` payload carries; `installationId` narrows the delivery
+ * to the installation Shipwright itself runs as.
+ */
+type ReviewAuthorization = {
+  expectedReviewerLogin?: string;
+  expectedReviewerUserId?: number;
+  installationId?: number;
 };
 
 /**
@@ -158,6 +170,15 @@ export class GitHubWebhookIngress {
         (item) => item.evaluation.matched,
       )?.candidate;
       if (!selected) continue;
+      // The queue entry deliberately carries only the target, not the review id
+      // or the head SHA validated above. Execution re-authorizes the pull
+      // request and re-derives its head from GitHub at run time: see
+      // `runReview` in src/pipeline/review-run.ts, which compares the freshly
+      // fetched `currentPullRequest.headSha` and `getBranchSha` result against
+      // the authorized head and aborts with "pull request head moved after
+      // authorization", then pins the workspace via `assertRunIdentity`.
+      // Persisting the intake head would add a second, staler trust anchor for
+      // a value the pipeline must re-verify anyway.
       this.options.dispatcher.enqueue({
         agentId: selected.agentId,
         triggerId: selected.triggerId,
@@ -229,7 +250,12 @@ export class GitHubWebhookIngress {
     }
     if (
       event === "pull_request_review" &&
-      !isValidSubmittedReview(payload, subject)
+      !isAuthorizedSubmittedReview(
+        payload,
+        subject,
+        stringValue(payload.action),
+        this.options,
+      )
     ) {
       return undefined;
     }
@@ -335,19 +361,36 @@ function readLabels(
 }
 
 /**
- * A review delivery is actionable only when it is a submitted review from a
- * GitHub App, and the review was created against the pull request's current
- * head. These values are authenticated by the webhook signature but remain
- * untrusted until all of the cross-field checks pass.
+ * A review delivery is actionable only when it is a *submitted* review from the
+ * one configured reviewer identity, arriving on the configured installation, and
+ * created against the pull request's current head. These values are
+ * authenticated by the webhook signature but remain untrusted until every
+ * cross-field check passes, so this never widens to "any bot".
+ *
+ * `review.state` is deliberately not filtered: approved and commented reviews
+ * are accepted alongside changes_requested, because the repair stage no-ops when
+ * a review carries zero actionable findings.
  */
-function isValidSubmittedReview(
+function isAuthorizedSubmittedReview(
   payload: Record<string, unknown>,
   pullRequest: unknown,
+  action: string,
+  authorization: ReviewAuthorization,
 ): boolean {
+  // Enforced here rather than resting on trigger-config curation alone.
+  if (action !== "submitted") return false;
+
+  // Fail closed: with no pinned reviewer identity, no reviewer is authorized.
+  const expectedLogin = authorization.expectedReviewerLogin;
+  if (!expectedLogin) return false;
+
   const installation = payload.installation;
+  if (!isRecord(installation) || !isPositiveSafeInteger(installation.id)) {
+    return false;
+  }
   if (
-    !isRecord(installation) ||
-    !isPositiveSafeInteger(installation.id)
+    authorization.installationId !== undefined &&
+    installation.id !== authorization.installationId
   ) {
     return false;
   }
@@ -356,17 +399,25 @@ function isValidSubmittedReview(
   if (!isRecord(review) || !isPositiveSafeInteger(review.id)) return false;
 
   const reviewer = review.user;
+  if (!isRecord(reviewer) || reviewer.type !== "Bot") return false;
   if (
-    !isRecord(reviewer) ||
-    reviewer.type !== "Bot" ||
     typeof reviewer.login !== "string" ||
-    reviewer.login.length === 0
+    reviewer.login.toLowerCase() !== expectedLogin
   ) {
     return false;
   }
   if (
-    payload.sender !== undefined &&
-    (!isRecord(payload.sender) || payload.sender.login !== reviewer.login)
+    authorization.expectedReviewerUserId !== undefined &&
+    reviewer.id !== authorization.expectedReviewerUserId
+  ) {
+    return false;
+  }
+
+  const sender = payload.sender;
+  if (
+    !isRecord(sender) ||
+    typeof sender.login !== "string" ||
+    sender.login !== reviewer.login
   ) {
     return false;
   }
