@@ -45,6 +45,7 @@ import {
   skillIdFromLegacyPath,
 } from "./skills";
 import {
+  resolveProtectedVerificationPaths,
   resolveStartVerifySelection,
 } from "./verify-presets";
 
@@ -689,6 +690,11 @@ export async function executeOperatorPipeline(
       {
         pullRequestUrl: request.pullRequestUrl,
         verifyCommand: request.verifyCommand,
+        // Resolved from server config by preset id, never from the stored
+        // request, so an agent cannot forge or weaken the protection. An
+        // operator can still opt out at start via the raw-command path
+        // (empty presetId), which is a deliberate operator decision.
+        protectedPaths: resolveProtectedVerificationPaths(request.presetId),
         publish: request.publish,
         timeoutMinutes: request.timeoutMinutes,
       },

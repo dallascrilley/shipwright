@@ -208,3 +208,31 @@ test("isProviderQuotaError matches quota exhaustion but not agent or verify fail
   expect(isProviderQuotaError("independent verification failed")).toBe(false);
   expect(isProviderQuotaError("")).toBe(false);
 });
+
+test("an agent change to a verification-protected path cannot publish", async () => {
+  const { deps, events, receipts } = fixture({ changes: ["seed/average.js", "seed/verify.js"] });
+  await expect(
+    runReviewAgent({ ...request, protectedPaths: ["seed/verify.js"] }, deps),
+  ).rejects.toThrow("verification-protected path changed: seed/verify.js");
+  // The sandbox is quiesced (killing any verify-forked writer) before the
+  // protected-path gate, so verify runs but no remote write happens.
+  expect(events).toContain("verify");
+  expect(events.indexOf("quiesce")).toBeLessThan(events.indexOf("inspect"));
+  expect(events).not.toContain("commit");
+  expect(events).not.toContain("push");
+  expect(events).not.toContain("reply");
+  expect(events).not.toContain("resolve");
+  expect(events.at(-1)).toBe("destroy");
+  const failed = receipts.at(-1) as { phase?: string };
+  expect(failed.phase).toBe("policy");
+});
+
+test("protected paths leave an untouched-gate repair unaffected", async () => {
+  const { deps, events } = fixture();
+  const receipt = await runReviewAgent(
+    { ...request, protectedPaths: ["seed/verify.js"] },
+    deps,
+  );
+  expect(receipt.commitSha).toBe("commit1");
+  expect(events).toContain("verify");
+});

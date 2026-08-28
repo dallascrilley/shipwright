@@ -6,6 +6,12 @@ export interface VerifyPreset {
   repositories?: string[];
   /** Anchored globs against owner/repo, e.g. "acme/*". */
   repositoryGlobs?: string[];
+  /**
+   * Repo-relative files or directories the verification command depends on.
+   * The review pipeline rejects agent changes that touch them, so a repair
+   * cannot green the gate by editing the gate itself.
+   */
+  protectedPaths?: string[];
 }
 
 export type VerifyPresetSelectionSource =
@@ -57,6 +63,9 @@ function clonePreset(preset: VerifyPreset): VerifyPreset {
       : {}),
     ...(preset.repositoryGlobs
       ? { repositoryGlobs: [...preset.repositoryGlobs] }
+      : {}),
+    ...(preset.protectedPaths
+      ? { protectedPaths: [...preset.protectedPaths] }
       : {}),
   };
 }
@@ -171,6 +180,43 @@ function validatePreset(entry: unknown, index: number): VerifyPreset {
     }
   }
 
+  let protectedPaths: string[] | undefined;
+  if (raw.protectedPaths !== undefined) {
+    if (
+      !Array.isArray(raw.protectedPaths) ||
+      raw.protectedPaths.some((value) => typeof value !== "string")
+    ) {
+      throw new Error(
+        `${VERIFY_PRESETS_ENV}[${index}].protectedPaths must be a string array`,
+      );
+    }
+    protectedPaths = raw.protectedPaths.map((value: unknown, entryIndex: number) => {
+      const original = String(value).trim();
+      if (
+        !original ||
+        original.startsWith("/") ||
+        original.includes("\\") ||
+        original.split("/").some((segment) => segment === "..")
+      ) {
+        throw new Error(
+          `${VERIFY_PRESETS_ENV}[${index}].protectedPaths[${entryIndex}] must be a non-empty repo-relative path: ${original}`,
+        );
+      }
+      // Collapse duplicate slashes and drop "." segments so an entry cannot
+      // silently protect nothing by never matching a git-reported path.
+      const normalized = original
+        .split("/")
+        .filter((segment) => segment !== "" && segment !== ".")
+        .join("/");
+      if (!normalized) {
+        throw new Error(
+          `${VERIFY_PRESETS_ENV}[${index}].protectedPaths[${entryIndex}] normalizes to an empty path: ${original}`,
+        );
+      }
+      return normalized;
+    });
+  }
+
   return {
     id,
     label,
@@ -179,6 +225,7 @@ function validatePreset(entry: unknown, index: number): VerifyPreset {
     ...(repositoryGlobs && repositoryGlobs.length > 0
       ? { repositoryGlobs }
       : {}),
+    ...(protectedPaths && protectedPaths.length > 0 ? { protectedPaths } : {}),
   };
 }
 
@@ -250,6 +297,21 @@ export function listVerifyPresets(
   env: NodeJS.ProcessEnv = process.env,
 ): VerifyPreset[] {
   return loadConfiguredPresets(env).map(clonePreset);
+}
+
+/**
+ * Protected verification paths for one preset id, resolved server-side from
+ * configuration so a client-supplied request can never weaken them. Blank or
+ * unknown ids (raw commands, legacy records) resolve to no protection.
+ */
+export function resolveProtectedVerificationPaths(
+  presetId: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const id = presetId?.trim() ?? "";
+  if (!id) return [];
+  const preset = loadConfiguredPresets(env).find((entry) => entry.id === id);
+  return preset?.protectedPaths ? [...preset.protectedPaths] : [];
 }
 
 export function resolveVerifyPreset(

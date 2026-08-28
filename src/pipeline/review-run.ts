@@ -46,7 +46,12 @@ export interface ReviewWorkspacePort {
   prepareReviewArtifact(path: string): Promise<void>;
   readAndRemoveArtifact(path: string): Promise<string>;
   verify(command: string, timeoutMs: number): Promise<{ exitCode?: number | null; stdout?: string; stderr?: string }>;
-  inspectChanges(): Promise<ChangeInspection>;
+  /**
+   * Change set of the workspace against the authorized head, computed with
+   * host-side git and a scratch index so an agent that commits, sets
+   * skip-worktree, or tampers with sandbox git config cannot hide a change.
+   */
+  inspectChanges(authorizedHeadSha: string): Promise<ChangeInspection>;
   quiesce(): Promise<void>;
   assertRunIdentity(headSha: string, branch: string): Promise<void>;
   commit(message: string): Promise<string>;
@@ -70,6 +75,12 @@ export interface ReviewPipelineDependencies {
 export interface ReviewRunRequest {
   pullRequestUrl: string;
   verifyCommand: string;
+  /**
+   * Repo-relative files or directories the verification command depends on.
+   * An agent change touching one fails the run before verification executes,
+   * so a tampered gate can never green its own check.
+   */
+  protectedPaths?: readonly string[];
   publish: boolean;
   timeoutMinutes: number;
 }
@@ -171,9 +182,20 @@ export async function runReviewAgent(
     deps.signal?.throwIfAborted();
     phase = receipt.phase = "policy";
     await emitProgress();
-    const changes = await workspace.inspectChanges();
+    // Stop the sandbox BEFORE any host-git inspection. verify runs
+    // agent-controlled code that can fork a background writer inside the
+    // container; quiescing kills every container process, so host git then
+    // touches a worktree with no live writer and the repo-config integrity
+    // check cannot be raced (TOCTOU). All change detection, protected-path
+    // enforcement, and the commit run against this now-static tree. A tampered
+    // gate can still run during verify, but it runs sandboxed and its edit to a
+    // protected path is caught here, so it cannot publish.
+    await workspace.quiesce();
+    const changes = await workspace.inspectChanges(authorized.pullRequest.headSha);
     receipt.changedFiles = changes.changedFiles;
-    if (changes.changedFiles.length > 0) assertPublishableChange(changes);
+    if (changes.changedFiles.length > 0) {
+      assertPublishableChange(changes, request.protectedPaths ?? []);
+    }
     const outcomes = parseReviewOutcomes(serializedOutcomes, expectedThreadIds, changes.changedFiles);
     await emitProgress();
 
@@ -201,11 +223,8 @@ export async function runReviewAgent(
     if (remoteHead !== authorized.pullRequest.headSha) throw new Error("pull request head moved after authorization");
     deps.signal?.throwIfAborted();
     if (changes.changedFiles.length > 0) {
-      const finalChanges = await workspace.inspectChanges();
-      assertUnchangedInspection(changes, finalChanges);
-      deps.signal?.throwIfAborted();
-      await workspace.quiesce();
-      deps.signal?.throwIfAborted();
+      // The sandbox is already quiesced; the worktree is static. Re-assert the
+      // authorized head/branch and repo config before committing.
       await workspace.assertRunIdentity(authorized.pullRequest.headSha, authorized.pullRequest.headBranch);
       deps.signal?.throwIfAborted();
       receipt.commitSha = await workspace.commit(`fix: address review feedback (#${authorized.pullRequest.number})`);
@@ -214,8 +233,6 @@ export async function runReviewAgent(
       const pushedHead = await authorized.repositoryClient.getBranchSha(authorized.pullRequest.headBranch);
       if (pushedHead !== receipt.commitSha) throw new Error("pushed pull request head does not match the generated commit");
       await emitProgress();
-    } else {
-      await workspace.quiesce();
     }
 
     deps.signal?.throwIfAborted();
@@ -286,15 +303,6 @@ function markLastAgentAttemptFailed(execution: AgentExecution): void {
 }
 
 export const defaultReviewReceiptWriter = writeReviewReceipt;
-
-function assertUnchangedInspection(before: ChangeInspection, after: ChangeInspection): void {
-  if (
-    before.patch !== after.patch ||
-    before.changedFiles.join("\0") !== after.changedFiles.join("\0")
-  ) {
-    throw new Error("repository changes moved after policy inspection");
-  }
-}
 
 function buildThreadReply(
   thread: ReviewThread,

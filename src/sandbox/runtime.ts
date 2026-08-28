@@ -270,7 +270,7 @@ export class SandboxWorkspace {
       args: ["switch", "-c", input.branch],
       cwd: SANDBOX_WORKSPACE,
     });
-    await this.captureLocalConfig();
+    await this.captureAuthorizedRepoConfig();
   }
 
   async clonePullRequest(input: PullRequestCloneInput): Promise<void> {
@@ -298,7 +298,7 @@ export class SandboxWorkspace {
     if (head.stdout.trim() !== input.headSha) {
       throw new Error(`pull request head moved: expected ${input.headSha}, received ${head.stdout.trim()}`);
     }
-    await this.captureLocalConfig();
+    await this.captureAuthorizedRepoConfig();
   }
 
   async prepareReviewArtifact(path: string): Promise<void> {
@@ -336,46 +336,63 @@ export class SandboxWorkspace {
   }
 
   async verify(command: string, timeoutMs: number): Promise<ProcessRunResponse> {
+    // `sh -c`, never `sh -lc`: a login shell sources /etc/profile and
+    // ~/.profile, and $HOME is outside the inspected workspace, so a login
+    // shell would let the agent green any gate by writing ~/.profile. Clearing
+    // ENV/BASH_ENV stops non-login sh/bash from sourcing an agent-named file.
     return this.run({
       command: "sh",
-      args: ["-lc", command],
+      args: ["-c", command],
       cwd: SANDBOX_WORKSPACE,
+      env: { ENV: "", BASH_ENV: "" },
       timeoutMs,
       maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
     });
   }
 
-  async inspectChanges(): Promise<ChangeInspection> {
-    const tracked = await this.runOrThrow("tracked change listing", {
-      command: "git",
-      args: ["diff", "--name-only", "-z", "HEAD"],
-      cwd: SANDBOX_WORKSPACE,
-    });
-    const untracked = await this.runOrThrow("untracked change listing", {
-      command: "git",
-      args: ["ls-files", "--others", "--exclude-standard", "-z"],
-      cwd: SANDBOX_WORKSPACE,
-    });
-    const changedFiles = [...new Set([...parseNulList(tracked.stdout), ...parseNulList(untracked.stdout)])].sort();
-
-    if (untracked.stdout) {
-      await this.runOrThrow("untracked diff preparation", {
-        command: "git",
-        args: ["add", "--intent-to-add", "--", ...parseNulList(untracked.stdout)],
-        cwd: SANDBOX_WORKSPACE,
-      });
+  async inspectChanges(authorizedHeadSha: string): Promise<ChangeInspection> {
+    if (!/^[0-9a-f]{40}$/.test(authorizedHeadSha)) {
+      throw new Error("inspectChanges requires a full authorized head SHA");
     }
-    const diff = await this.runOrThrow("change diff", {
-      command: "git",
-      args: ["diff", "--binary", "--no-ext-diff", "HEAD"],
-      cwd: SANDBOX_WORKSPACE,
-      maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES + 1,
-    });
-    return {
-      changedFiles,
-      patch: diff.stdout,
-      patchBytes: new TextEncoder().encode(diff.stdout).byteLength,
-    };
+    // Host git reads the repo-local .git/config, which lives in the
+    // agent-writable workspace. A `git add`/`diff` applies clean/textconv
+    // filters and consults core.fsmonitor, so an agent-planted
+    // filter.<name>.clean or core.fsmonitor would execute on the HOST as the
+    // service user. The clone-time capture predates any agent execution;
+    // assert the local config is unchanged before staging anything.
+    await this.assertAuthorizedRepoConfig();
+    // Compute the change set with HOST git against the authorized head using a
+    // scratch index. Host git ignores sandbox git config (fsmonitor/hooks) and
+    // reads no global/system config; diffing against the fixed SHA (not HEAD)
+    // defeats an agent `git commit`, and a fresh index built by read-tree
+    // carries no skip-worktree/assume-unchanged bits, so `add -A` re-examines
+    // every working-tree file. Ignored paths (e.g. node_modules) remain
+    // invisible by git's design; gates must not depend on agent-writable
+    // ignored content, and such paths should be named in the preset's
+    // protectedPaths alongside .gitignore and lockfiles.
+    const indexDirectory = await mkdtemp(join(tmpdir(), "shipwright-index-"));
+    const indexPath = join(indexDirectory, "index");
+    try {
+      const indexEnv = { GIT_INDEX_FILE: indexPath };
+      await this.hostGit(["read-tree", authorizedHeadSha], indexEnv);
+      await this.hostGit(["-c", "core.hooksPath=/dev/null", "add", "-A"], indexEnv);
+      const names = await this.hostGit(
+        ["diff", "--cached", "--name-only", "-z", authorizedHeadSha],
+        indexEnv,
+      );
+      const changedFiles = parseNulList(names).sort();
+      const patch = await this.hostGit(
+        ["diff", "--cached", "--binary", "--no-ext-diff", authorizedHeadSha],
+        indexEnv,
+      );
+      return {
+        changedFiles,
+        patch,
+        patchBytes: new TextEncoder().encode(patch).byteLength,
+      };
+    } finally {
+      await rm(indexDirectory, { recursive: true, force: true });
+    }
   }
 
   async assertRunIdentity(baseSha: string, branch: string): Promise<void> {
@@ -491,8 +508,23 @@ export class SandboxWorkspace {
     }
   }
 
-  private async captureLocalConfig(): Promise<void> {
+  async captureAuthorizedRepoConfig(): Promise<void> {
     this.authorizedLocalConfig = await this.hostGit(["config", "--local", "--null", "--list"]);
+  }
+
+  // Fail closed if the repo-local git config drifted from the clone-time
+  // capture. Any agent-added key (filter.*.clean, core.fsmonitor,
+  // core.hooksPath, textconv, ...) can turn a later host `add`/`diff` into
+  // host code execution, so this must run before any host working-tree op.
+  // `git config --list` itself executes nothing.
+  private async assertAuthorizedRepoConfig(): Promise<void> {
+    if (this.authorizedLocalConfig === undefined) {
+      throw new Error("repository config was not captured before inspection");
+    }
+    const current = await this.hostGit(["config", "--local", "--null", "--list"]);
+    if (current !== this.authorizedLocalConfig) {
+      throw new Error("repository Git configuration changed after authorization");
+    }
   }
 
   private async hostGit(args: string[], extraEnv: Record<string, string> = {}): Promise<string> {

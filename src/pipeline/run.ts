@@ -18,7 +18,7 @@ export interface WorkspacePort {
   clone(input: { owner: string; repo: string; defaultBranch: string; baseSha: string; branch: string; token: string }): Promise<void>;
   prepareForAgent(): Promise<void>;
   verify(command: string, timeoutMs: number): Promise<{ exitCode?: number | null; stdout?: string; stderr?: string }>;
-  inspectChanges(): Promise<{ changedFiles: string[]; patch: string; patchBytes: number }>;
+  inspectChanges(authorizedBaseSha: string): Promise<{ changedFiles: string[]; patch: string; patchBytes: number }>;
   quiesce(): Promise<void>;
   assertRunIdentity(baseSha: string, branch: string): Promise<void>;
   commit(message: string): Promise<string>;
@@ -114,7 +114,12 @@ export async function runShipwright(request: RunRequest, deps: PipelineDependenc
     deps.signal?.throwIfAborted();
     receipt.phase = "policy";
     await emitProgress();
-    const changes = await workspace.inspectChanges();
+    // Quiesce the sandbox before any host-git inspection: verify runs
+    // agent-controlled code that can fork a background writer, and host git
+    // reads the agent-writable repo config, so inspecting a live worktree is a
+    // TOCTOU host-RCE window. A stopped container has no writer.
+    await workspace.quiesce();
+    const changes = await workspace.inspectChanges(authorized.issue.baseSha);
     receipt.changedFiles = changes.changedFiles;
     assertPublishableChange(changes);
     await emitProgress();
@@ -123,16 +128,6 @@ export async function runShipwright(request: RunRequest, deps: PipelineDependenc
     if (request.publish) {
       receipt.phase = "publish";
       await emitProgress();
-      deps.signal?.throwIfAborted();
-      const finalChanges = await workspace.inspectChanges();
-      if (
-        finalChanges.patch !== changes.patch ||
-        finalChanges.changedFiles.join("\0") !== changes.changedFiles.join("\0")
-      ) {
-        throw new PipelineError("publish", "changes_moved", "repository changes moved after policy inspection");
-      }
-      deps.signal?.throwIfAborted();
-      await workspace.quiesce();
       deps.signal?.throwIfAborted();
       await workspace.assertRunIdentity(authorized.issue.baseSha, branch);
       deps.signal?.throwIfAborted();
