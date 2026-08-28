@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { assertPublishableChange } from "../../src/pipeline/policy.js";
+import {
+  assertPublishableChange,
+  findProtectedVerificationPath,
+} from "../../src/pipeline/policy.js";
 
 describe("assertPublishableChange", () => {
   test("accepts a small source change", () => {
@@ -52,5 +55,31 @@ describe("assertPublishableChange", () => {
         patch: "const key = \"sk-" + "e".repeat(40) + "\";\n",
       }),
     ).toThrow("patch appears to contain a secret");
+  });
+});
+
+describe("verification-protected paths", () => {
+  test("findProtectedVerificationPath matches exact files and directory contents", () => {
+    expect(findProtectedVerificationPath(["seed/verify.js"], ["seed/verify.js"])).toBe("seed/verify.js");
+    expect(findProtectedVerificationPath(["scripts/qa/check.sh"], ["scripts/qa"])).toBe("scripts/qa/check.sh");
+    expect(findProtectedVerificationPath(["scripts/qa/check.sh"], ["scripts/qa/"])).toBe("scripts/qa/check.sh");
+    expect(findProtectedVerificationPath(["src/a.ts"], ["seed/verify.js"])).toBeUndefined();
+    expect(findProtectedVerificationPath(["seeds/x.js"], ["seed"])).toBeUndefined();
+    expect(findProtectedVerificationPath(["seed/verify.js"], [])).toBeUndefined();
+  });
+
+  test("assertPublishableChange rejects a change to a verification-protected path", () => {
+    expect(() =>
+      assertPublishableChange(
+        { changedFiles: ["seed/average.js", "seed/verify.js"], patchBytes: 64 },
+        ["seed/verify.js"],
+      ),
+    ).toThrow("verification-protected path changed: seed/verify.js");
+    expect(() =>
+      assertPublishableChange(
+        { changedFiles: ["seed/average.js"], patchBytes: 64 },
+        ["seed/verify.js"],
+      ),
+    ).not.toThrow();
   });
 });

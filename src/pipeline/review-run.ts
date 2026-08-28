@@ -15,7 +15,7 @@ import { parsePullRequestUrl } from "../github/pull-request-ref.js";
 import { findMarkedReply, reviewRunMarker, unresolvedCurrentThreads } from "../github/review-client.js";
 import type { PullRequestRef, ReviewThread } from "../github/types.js";
 import type { ChangeInspection } from "../sandbox/runtime.js";
-import { assertPublishableChange } from "./policy.js";
+import { assertPublishableChange, findProtectedVerificationPath } from "./policy.js";
 import { parseReviewOutcomes, type ReviewOutcome } from "./review-outcomes.js";
 import { redactSecrets, truncateTail, type AgentExecution } from "./receipt.js";
 import { type ReviewRunPhase, type ReviewRunReceipt, writeReviewReceipt } from "./review-receipt.js";
@@ -70,6 +70,12 @@ export interface ReviewPipelineDependencies {
 export interface ReviewRunRequest {
   pullRequestUrl: string;
   verifyCommand: string;
+  /**
+   * Repo-relative files or directories the verification command depends on.
+   * An agent change touching one fails the run before verification executes,
+   * so a tampered gate can never green its own check.
+   */
+  protectedPaths?: readonly string[];
   publish: boolean;
   timeoutMinutes: number;
 }
@@ -153,6 +159,19 @@ export async function runReviewAgent(
 
     phase = receipt.phase = "verify";
     await emitProgress();
+    if (request.protectedPaths?.length) {
+      const preVerifyChanges = await workspace.inspectChanges();
+      const tampered = findProtectedVerificationPath(
+        preVerifyChanges.changedFiles,
+        request.protectedPaths,
+      );
+      if (tampered) {
+        markLastAgentAttemptFailed(deps.execution);
+        throw new Error(
+          `verification blocked: verification-protected path changed: ${tampered}`,
+        );
+      }
+    }
     const verification = await abortable(
       workspace.verify(request.verifyCommand, request.timeoutMinutes * 60_000),
       deps.signal,
@@ -173,7 +192,9 @@ export async function runReviewAgent(
     await emitProgress();
     const changes = await workspace.inspectChanges();
     receipt.changedFiles = changes.changedFiles;
-    if (changes.changedFiles.length > 0) assertPublishableChange(changes);
+    if (changes.changedFiles.length > 0) {
+      assertPublishableChange(changes, request.protectedPaths ?? []);
+    }
     const outcomes = parseReviewOutcomes(serializedOutcomes, expectedThreadIds, changes.changedFiles);
     await emitProgress();
 

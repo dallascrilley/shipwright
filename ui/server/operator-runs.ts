@@ -45,6 +45,7 @@ import {
   skillIdFromLegacyPath,
 } from "./skills";
 import {
+  resolveProtectedVerificationPaths,
   resolveStartVerifySelection,
 } from "./verify-presets";
 
@@ -689,6 +690,9 @@ export async function executeOperatorPipeline(
       {
         pullRequestUrl: request.pullRequestUrl,
         verifyCommand: request.verifyCommand,
+        // Resolved from server config, never from the stored request, so a
+        // client cannot weaken the verification-path protection.
+        protectedPaths: resolveProtectedVerificationPaths(request.presetId),
         publish: request.publish,
         timeoutMinutes: request.timeoutMinutes,
       },

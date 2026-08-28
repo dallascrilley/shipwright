@@ -5,6 +5,7 @@ import {
   DEFAULT_VERIFY_PRESET_ID,
   listVerifyPresets,
   resetVerifyPresetCache,
+  resolveProtectedVerificationPaths,
   resolveStartVerifySelection,
   resolveVerifyPreset,
   selectVerifyPreset,
@@ -60,6 +61,49 @@ describe("listVerifyPresets / resolveVerifyPreset", () => {
     expect(resolveVerifyPreset("pytest", env).repositories).toEqual([
       "acme/widgets",
     ]);
+  });
+
+  test("parses, normalizes, and resolves protectedPaths", () => {
+    const env = {
+      [VERIFY_PRESETS_ENV]: JSON.stringify([
+        {
+          id: "canary",
+          label: "canary verify",
+          command: "node seed/verify.js",
+          protectedPaths: ["./seed/verify.js", "scripts/qa/"],
+        },
+      ]),
+    };
+    expect(resolveVerifyPreset("canary", env).protectedPaths).toEqual([
+      "seed/verify.js",
+      "scripts/qa",
+    ]);
+    expect(resolveProtectedVerificationPaths("canary", env)).toEqual([
+      "seed/verify.js",
+      "scripts/qa",
+    ]);
+    expect(resolveProtectedVerificationPaths("", env)).toEqual([]);
+    expect(resolveProtectedVerificationPaths("unknown-id", env)).toEqual([]);
+    expect(resolveProtectedVerificationPaths("bun-test", env)).toEqual([]);
+  });
+
+  test("rejects non-repo-relative protectedPaths", () => {
+    for (const entry of ["/abs/path", "../escape", "seed/../verify.js"]) {
+      expect(() =>
+        listVerifyPresets({
+          [VERIFY_PRESETS_ENV]: JSON.stringify([
+            { id: "bad", label: "Bad", command: "true", protectedPaths: [entry] },
+          ]),
+        }),
+      ).toThrow(/repo-relative/);
+    }
+    expect(() =>
+      listVerifyPresets({
+        [VERIFY_PRESETS_ENV]: JSON.stringify([
+          { id: "bad", label: "Bad", command: "true", protectedPaths: "seed" },
+        ]),
+      }),
+    ).toThrow(/string array/);
   });
 });
 
