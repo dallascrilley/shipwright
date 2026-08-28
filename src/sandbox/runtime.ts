@@ -270,7 +270,7 @@ export class SandboxWorkspace {
       args: ["switch", "-c", input.branch],
       cwd: SANDBOX_WORKSPACE,
     });
-    await this.captureLocalConfig();
+    await this.captureAuthorizedRepoConfig();
   }
 
   async clonePullRequest(input: PullRequestCloneInput): Promise<void> {
@@ -298,7 +298,7 @@ export class SandboxWorkspace {
     if (head.stdout.trim() !== input.headSha) {
       throw new Error(`pull request head moved: expected ${input.headSha}, received ${head.stdout.trim()}`);
     }
-    await this.captureLocalConfig();
+    await this.captureAuthorizedRepoConfig();
   }
 
   async prepareReviewArtifact(path: string): Promise<void> {
@@ -354,6 +354,13 @@ export class SandboxWorkspace {
     if (!/^[0-9a-f]{40}$/.test(authorizedHeadSha)) {
       throw new Error("inspectChanges requires a full authorized head SHA");
     }
+    // Host git reads the repo-local .git/config, which lives in the
+    // agent-writable workspace. A `git add`/`diff` applies clean/textconv
+    // filters and consults core.fsmonitor, so an agent-planted
+    // filter.<name>.clean or core.fsmonitor would execute on the HOST as the
+    // service user. The clone-time capture predates any agent execution;
+    // assert the local config is unchanged before staging anything.
+    await this.assertAuthorizedRepoConfig();
     // Compute the change set with HOST git against the authorized head using a
     // scratch index. Host git ignores sandbox git config (fsmonitor/hooks) and
     // reads no global/system config; diffing against the fixed SHA (not HEAD)
@@ -501,8 +508,23 @@ export class SandboxWorkspace {
     }
   }
 
-  private async captureLocalConfig(): Promise<void> {
+  async captureAuthorizedRepoConfig(): Promise<void> {
     this.authorizedLocalConfig = await this.hostGit(["config", "--local", "--null", "--list"]);
+  }
+
+  // Fail closed if the repo-local git config drifted from the clone-time
+  // capture. Any agent-added key (filter.*.clean, core.fsmonitor,
+  // core.hooksPath, textconv, ...) can turn a later host `add`/`diff` into
+  // host code execution, so this must run before any host working-tree op.
+  // `git config --list` itself executes nothing.
+  private async assertAuthorizedRepoConfig(): Promise<void> {
+    if (this.authorizedLocalConfig === undefined) {
+      throw new Error("repository config was not captured before inspection");
+    }
+    const current = await this.hostGit(["config", "--local", "--null", "--list"]);
+    if (current !== this.authorizedLocalConfig) {
+      throw new Error("repository Git configuration changed after authorization");
+    }
   }
 
   private async hostGit(args: string[], extraEnv: Record<string, string> = {}): Promise<string> {
