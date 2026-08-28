@@ -203,9 +203,14 @@ rather than silently resumed. See [ui/DEVELOPING.md](ui/DEVELOPING.md).
 
 **Always-on automations.** Signed GitHub webhooks can enqueue runs for
 allowlisted repositories, narrowed by event actor, labels, base branch, and
-draft state. Conditions within one trigger are ANDed; separate triggers are
-alternatives and still queue at most one execution per delivery. Missing or
-malformed event data fails closed. Conditions never grant publish authority.
+draft state. Submitted pull-request reviews are accepted only from the one
+reviewer identity configured in `GITHUB_REVIEW_BOT_LOGIN`, and only when the
+installation, review identity, reviewed commit, and pull-request head are
+present and consistent; with no reviewer configured, review deliveries are
+rejected rather than trusting any bot. Conditions within one trigger are
+ANDed; separate triggers are alternatives and still queue at most one execution
+per delivery. Missing or malformed event data fails closed. Conditions never
+grant publish authority.
 See [docs/runbooks/always-on-activation.md](docs/runbooks/always-on-activation.md).
 
 **Deployment.** A systemd service on a dedicated Linux VM, reachable privately

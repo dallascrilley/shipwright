@@ -3,7 +3,10 @@ import { createHmac } from "node:crypto";
 import { H3 } from "h3";
 import { describe, expect, test, vi } from "vitest";
 
-import type { GithubTriggerCondition } from "../../../../shared/agent-definition";
+import type {
+  GithubTriggerCondition,
+  GithubTriggerEvent,
+} from "../../../../shared/agent-definition";
 import { MemoryAgentControlPlaneStore } from "../../../agent-control-plane";
 import { AgentManagementService } from "../../../agent-management";
 import { createGitHubWebhookRoute } from "./webhook.post";
@@ -12,6 +15,8 @@ const config = {
   webhookSecret: "w".repeat(32),
   allowedRepositories: new Set(["dallascrilley/shipwright"]),
   allowedOwners: new Set(["dallascrilley"]),
+  expectedReviewerLogin: "review-app[bot]",
+  installationId: 42,
 };
 
 function requestHeaders() {
@@ -46,7 +51,7 @@ function createService() {
 async function createEnabledAgent(
   service: AgentManagementService,
   conditions: GithubTriggerCondition[] = [],
-  event: "issues" | "pull_request" = "issues",
+  event: GithubTriggerEvent = "issues",
   action: string = "opened",
 ) {
   const actionPreset =
@@ -89,7 +94,11 @@ function createApp(service: AgentManagementService) {
   );
 }
 
-function signedRequest(payload: object, deliveryId: string, event = "issues") {
+function signedRequest(
+  payload: object,
+  deliveryId: string,
+  event: GithubTriggerEvent = "issues",
+) {
   const rawBody = JSON.stringify(payload);
   const signature = `sha256=${createHmac("sha256", config.webhookSecret)
     .update(rawBody)
@@ -124,6 +133,99 @@ describe("POST /api/github/webhook", () => {
     expect(service.getSnapshot().executions[0]?.idempotencyKey).toBe(
       `github:delivery-1:${agent.currentRevision}`,
     );
+  });
+
+  test("a submitted App review validates provenance before queueing and replay remains idempotent", async () => {
+    const service = createService();
+    const { agent, trigger } = await createEnabledAgent(
+      service,
+      [],
+      "pull_request_review",
+      "submitted",
+    );
+    const app = createApp(service);
+    const payload = {
+      action: "submitted",
+      repository: { full_name: "dallascrilley/shipwright" },
+      installation: { id: 42 },
+      sender: { login: "review-app[bot]" },
+      review: {
+        id: 501,
+        user: { login: "review-app[bot]", type: "Bot" },
+        commit_id: "head-sha",
+        body: "untrusted-review-body-marker",
+      },
+      pull_request: {
+        number: 7,
+        head: { sha: "head-sha" },
+        base: { ref: "main" },
+        draft: false,
+        labels: [],
+      },
+    };
+    const init = signedRequest(payload, "delivery-review-route", "pull_request_review");
+
+    const first = await app.request("/api/github/webhook", init);
+    expect(first.status).toBe(202);
+    await expect(first.json()).resolves.toMatchObject({
+      status: "accepted",
+      matched: 1,
+      conditionFiltered: 0,
+    });
+    expect(service.getSnapshot().queueEntries).toHaveLength(1);
+    expect(service.getSnapshot().executions[0]).toMatchObject({
+      agentRevision: trigger.agentRevision,
+      idempotencyKey: `github:delivery-review-route:${trigger.agentRevision}`,
+      target: { kind: "pull", number: 7 },
+    });
+    expect(service.getSnapshot().revisions[0]?.draft.publicationPolicy).toBe(
+      "dry_run",
+    );
+    expect(JSON.stringify(service.getSnapshot())).not.toContain(
+      "untrusted-review-body-marker",
+    );
+
+    expect((await app.request("/api/github/webhook", init)).status).toBe(202);
+    expect(service.getSnapshot().queueEntries).toHaveLength(1);
+    expect(agent.currentRevision).toBe(trigger.agentRevision);
+  });
+
+  test("rejects a submitted review with a mismatched head before the route can queue it", async () => {
+    const service = createService();
+    await createEnabledAgent(service, [], "pull_request_review", "submitted");
+    const app = createApp(service);
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRequest(
+        {
+          action: "submitted",
+          repository: { full_name: "dallascrilley/shipwright" },
+          installation: { id: 42 },
+          sender: { login: "review-app[bot]" },
+          review: {
+            id: 502,
+            user: { login: "review-app[bot]", type: "Bot" },
+            commit_id: "reviewed-sha",
+          },
+          pull_request: {
+            number: 7,
+            head: { sha: "current-head-sha" },
+            base: { ref: "main" },
+            draft: false,
+            labels: [],
+          },
+        },
+        "delivery-review-mismatch",
+        "pull_request_review",
+      ),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      status: "rejected",
+      reason: "invalid_payload",
+    });
+    expect(service.getSnapshot().queueEntries).toHaveLength(0);
   });
 
   test("signed condition deliveries match or fail closed with safe evidence", async () => {

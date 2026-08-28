@@ -80,7 +80,17 @@ Advance **one stage at a time**. Do not skip to `publish_allowed` in this runboo
    - URL: `https://<SHIPWRIGHT_PUBLIC_HOST>/api/github/webhook`
    - Content type: `application/json`
    - Secret: same as `GITHUB_WEBHOOK_SECRET`
-   - Events: **Issues** and **Pull requests**
+   - Events: **Issues**, **Pull requests**, and **Pull request reviews**
+
+   To use review triggers, also pin the one reviewer identity you accept.
+   Shipwright rejects every review delivery while this is unset:
+
+   ```dotenv
+   GITHUB_REVIEW_BOT_LOGIN=your-reviewer[bot]
+   # optional, narrows further
+   GITHUB_REVIEW_BOT_USER_ID=...
+   GITHUB_APP_INSTALLATION_ID=...
+   ```
 
 4. Redeploy or restart so the service loads the secret:
 

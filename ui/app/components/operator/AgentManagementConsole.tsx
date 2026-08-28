@@ -41,6 +41,7 @@ import type {
   GithubTriggerCondition,
   GithubTriggerConditionField,
   GithubTriggerConditionInput,
+  GithubTriggerEvent,
 } from "../../../shared/agent-definition";
 import {
   ACTION_PRESET_CHOICES,
@@ -103,7 +104,7 @@ type GithubConditionDraft = GithubTriggerCondition;
 
 function conditionAllowedForEvent(
   field: GithubTriggerConditionField,
-  event: "issues" | "pull_request",
+  event: GithubTriggerEvent,
 ): boolean {
   const definition = GITHUB_TRIGGER_CONDITION_CATALOG.find(
     (item) => item.field === field,
@@ -1378,7 +1379,7 @@ function GithubConditionEditor({
   onChange,
   disabled,
 }: {
-  event: "issues" | "pull_request";
+  event: GithubTriggerEvent;
   conditions: GithubConditionDraft[];
   onChange: (conditions: GithubConditionDraft[]) => void;
   disabled: boolean;

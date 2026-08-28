@@ -49,7 +49,15 @@ Configure the GitHub App webhook with:
 - URL: `https://<SHIPWRIGHT_PUBLIC_HOST>/api/github/webhook`
 - Content type: `application/json`
 - Secret: the same value stored as `GITHUB_WEBHOOK_SECRET`
-- Events: Issues and Pull requests
+- Events: Issues, Pull requests, and Pull request reviews
+
+Pull-request review triggers additionally require `GITHUB_REVIEW_BOT_LOGIN`, the
+exact login of the reviewing App's bot user (for example `my-reviewer[bot]`).
+Review deliveries are rejected while it is unset, so no bot reviewer is trusted
+by default. Set `GITHUB_REVIEW_BOT_USER_ID` to also pin the reviewer's numeric
+user id, and `GITHUB_APP_INSTALLATION_ID` to require review deliveries to arrive
+on exactly that installation. The webhook payload identifies a reviewer as a bot
+user rather than by App id, which is why identity is pinned on login and user id.
 
 `POST /api/github/webhook` is intentionally outside session authentication
 because GitHub cannot hold a Shipwright session. The route authenticates every
