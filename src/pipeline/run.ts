@@ -114,6 +114,11 @@ export async function runShipwright(request: RunRequest, deps: PipelineDependenc
     deps.signal?.throwIfAborted();
     receipt.phase = "policy";
     await emitProgress();
+    // Quiesce the sandbox before any host-git inspection: verify runs
+    // agent-controlled code that can fork a background writer, and host git
+    // reads the agent-writable repo config, so inspecting a live worktree is a
+    // TOCTOU host-RCE window. A stopped container has no writer.
+    await workspace.quiesce();
     const changes = await workspace.inspectChanges(authorized.issue.baseSha);
     receipt.changedFiles = changes.changedFiles;
     assertPublishableChange(changes);
@@ -123,16 +128,6 @@ export async function runShipwright(request: RunRequest, deps: PipelineDependenc
     if (request.publish) {
       receipt.phase = "publish";
       await emitProgress();
-      deps.signal?.throwIfAborted();
-      const finalChanges = await workspace.inspectChanges(authorized.issue.baseSha);
-      if (
-        finalChanges.patch !== changes.patch ||
-        finalChanges.changedFiles.join("\0") !== changes.changedFiles.join("\0")
-      ) {
-        throw new PipelineError("publish", "changes_moved", "repository changes moved after policy inspection");
-      }
-      deps.signal?.throwIfAborted();
-      await workspace.quiesce();
       deps.signal?.throwIfAborted();
       await workspace.assertRunIdentity(authorized.issue.baseSha, branch);
       deps.signal?.throwIfAborted();
