@@ -46,7 +46,12 @@ export interface ReviewWorkspacePort {
   prepareReviewArtifact(path: string): Promise<void>;
   readAndRemoveArtifact(path: string): Promise<string>;
   verify(command: string, timeoutMs: number): Promise<{ exitCode?: number | null; stdout?: string; stderr?: string }>;
-  inspectChanges(): Promise<ChangeInspection>;
+  /**
+   * Change set of the workspace against the authorized head, computed with
+   * host-side git and a scratch index so an agent that commits, sets
+   * skip-worktree, or tampers with sandbox git config cannot hide a change.
+   */
+  inspectChanges(authorizedHeadSha: string): Promise<ChangeInspection>;
   quiesce(): Promise<void>;
   assertRunIdentity(headSha: string, branch: string): Promise<void>;
   commit(message: string): Promise<string>;
@@ -160,7 +165,7 @@ export async function runReviewAgent(
     phase = receipt.phase = "verify";
     await emitProgress();
     if (request.protectedPaths?.length) {
-      const preVerifyChanges = await workspace.inspectChanges();
+      const preVerifyChanges = await workspace.inspectChanges(authorized.pullRequest.headSha);
       const tampered = findProtectedVerificationPath(
         preVerifyChanges.changedFiles,
         request.protectedPaths,
@@ -190,7 +195,7 @@ export async function runReviewAgent(
     deps.signal?.throwIfAborted();
     phase = receipt.phase = "policy";
     await emitProgress();
-    const changes = await workspace.inspectChanges();
+    const changes = await workspace.inspectChanges(authorized.pullRequest.headSha);
     receipt.changedFiles = changes.changedFiles;
     if (changes.changedFiles.length > 0) {
       assertPublishableChange(changes, request.protectedPaths ?? []);
@@ -222,7 +227,7 @@ export async function runReviewAgent(
     if (remoteHead !== authorized.pullRequest.headSha) throw new Error("pull request head moved after authorization");
     deps.signal?.throwIfAborted();
     if (changes.changedFiles.length > 0) {
-      const finalChanges = await workspace.inspectChanges();
+      const finalChanges = await workspace.inspectChanges(authorized.pullRequest.headSha);
       assertUnchangedInspection(changes, finalChanges);
       deps.signal?.throwIfAborted();
       await workspace.quiesce();

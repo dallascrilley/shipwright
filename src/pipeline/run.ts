@@ -18,7 +18,7 @@ export interface WorkspacePort {
   clone(input: { owner: string; repo: string; defaultBranch: string; baseSha: string; branch: string; token: string }): Promise<void>;
   prepareForAgent(): Promise<void>;
   verify(command: string, timeoutMs: number): Promise<{ exitCode?: number | null; stdout?: string; stderr?: string }>;
-  inspectChanges(): Promise<{ changedFiles: string[]; patch: string; patchBytes: number }>;
+  inspectChanges(authorizedBaseSha: string): Promise<{ changedFiles: string[]; patch: string; patchBytes: number }>;
   quiesce(): Promise<void>;
   assertRunIdentity(baseSha: string, branch: string): Promise<void>;
   commit(message: string): Promise<string>;
@@ -114,7 +114,7 @@ export async function runShipwright(request: RunRequest, deps: PipelineDependenc
     deps.signal?.throwIfAborted();
     receipt.phase = "policy";
     await emitProgress();
-    const changes = await workspace.inspectChanges();
+    const changes = await workspace.inspectChanges(authorized.issue.baseSha);
     receipt.changedFiles = changes.changedFiles;
     assertPublishableChange(changes);
     await emitProgress();
@@ -124,7 +124,7 @@ export async function runShipwright(request: RunRequest, deps: PipelineDependenc
       receipt.phase = "publish";
       await emitProgress();
       deps.signal?.throwIfAborted();
-      const finalChanges = await workspace.inspectChanges();
+      const finalChanges = await workspace.inspectChanges(authorized.issue.baseSha);
       if (
         finalChanges.patch !== changes.patch ||
         finalChanges.changedFiles.join("\0") !== changes.changedFiles.join("\0")

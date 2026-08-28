@@ -190,20 +190,31 @@ function validatePreset(entry: unknown, index: number): VerifyPreset {
         `${VERIFY_PRESETS_ENV}[${index}].protectedPaths must be a string array`,
       );
     }
-    protectedPaths = raw.protectedPaths
-      .map((value) => String(value).trim().replace(/^\.\//, "").replace(/\/+$/, ""))
-      .filter(Boolean);
-    for (const entry of protectedPaths) {
+    protectedPaths = raw.protectedPaths.map((value: unknown, entryIndex: number) => {
+      const original = String(value).trim();
       if (
-        entry.startsWith("/") ||
-        entry.includes("\\") ||
-        entry.split("/").some((segment) => segment === "..")
+        !original ||
+        original.startsWith("/") ||
+        original.includes("\\") ||
+        original.split("/").some((segment) => segment === "..")
       ) {
         throw new Error(
-          `${VERIFY_PRESETS_ENV}[${index}].protectedPaths entry must be a repo-relative path: ${entry}`,
+          `${VERIFY_PRESETS_ENV}[${index}].protectedPaths[${entryIndex}] must be a non-empty repo-relative path: ${original}`,
         );
       }
-    }
+      // Collapse duplicate slashes and drop "." segments so an entry cannot
+      // silently protect nothing by never matching a git-reported path.
+      const normalized = original
+        .split("/")
+        .filter((segment) => segment !== "" && segment !== ".")
+        .join("/");
+      if (!normalized) {
+        throw new Error(
+          `${VERIFY_PRESETS_ENV}[${index}].protectedPaths[${entryIndex}] normalizes to an empty path: ${original}`,
+        );
+      }
+      return normalized;
+    });
   }
 
   return {

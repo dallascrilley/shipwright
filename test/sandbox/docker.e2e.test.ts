@@ -83,6 +83,11 @@ liveTest("removes the reserved outcome artifact and inspects staged changes", as
       ].join(" && ")],
       cwd: "/home/sandbox/workspace",
     });
+    const authorizedHead = (await workspace.runOrThrow("fixture head", {
+      command: "git",
+      args: ["rev-parse", "HEAD"],
+      cwd: "/home/sandbox/workspace",
+    })).stdout.trim();
     await workspace.prepareReviewArtifact(".agentos-review-resolution.json");
     await workspace.runOrThrow("staged fixture changes", {
       command: "sh",
@@ -95,9 +100,19 @@ liveTest("removes the reserved outcome artifact and inspects staged changes", as
       cwd: "/home/sandbox/workspace",
     });
     expect(await workspace.readAndRemoveArtifact(".agentos-review-resolution.json")).toContain("threads");
-    const changes = await workspace.inspectChanges();
+    const changes = await workspace.inspectChanges(authorizedHead);
     expect(changes.changedFiles).toEqual(["source.txt"]);
     expect(changes.patch).toContain("changed");
+
+    // A commit by the agent must not hide the change: host git diffs against
+    // the authorized head, not the moved sandbox HEAD.
+    await workspace.runOrThrow("agent commit that would move HEAD", {
+      command: "sh",
+      args: ["-c", "git commit -qm agent-move"],
+      cwd: "/home/sandbox/workspace",
+    });
+    const afterCommit = await workspace.inspectChanges(authorizedHead);
+    expect(afterCommit.changedFiles).toEqual(["source.txt"]);
   } finally {
     await workspace.destroy();
   }

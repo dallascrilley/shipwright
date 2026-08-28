@@ -87,6 +87,35 @@ describe("listVerifyPresets / resolveVerifyPreset", () => {
     expect(resolveProtectedVerificationPaths("bun-test", env)).toEqual([]);
   });
 
+  test("normalizes '.' and duplicate-slash segments in protectedPaths", () => {
+    const env = {
+      [VERIFY_PRESETS_ENV]: JSON.stringify([
+        {
+          id: "canary",
+          label: "canary",
+          command: "true",
+          protectedPaths: ["seed/./verify.js", "scripts//qa/"],
+        },
+      ]),
+    };
+    expect(resolveVerifyPreset("canary", env).protectedPaths).toEqual([
+      "seed/verify.js",
+      "scripts/qa",
+    ]);
+  });
+
+  test("rejects protectedPaths that normalize to empty", () => {
+    for (const entry of [".", "./", "//"]) {
+      expect(() =>
+        listVerifyPresets({
+          [VERIFY_PRESETS_ENV]: JSON.stringify([
+            { id: "bad", label: "Bad", command: "true", protectedPaths: [entry] },
+          ]),
+        }),
+      ).toThrow(/repo-relative|empty path/);
+    }
+  });
+
   test("rejects non-repo-relative protectedPaths", () => {
     for (const entry of ["/abs/path", "../escape", "seed/../verify.js"]) {
       expect(() =>

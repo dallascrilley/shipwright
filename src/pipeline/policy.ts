@@ -19,10 +19,11 @@ export function findProtectedVerificationPath(
   protectedPaths: readonly string[],
 ): string | undefined {
   if (protectedPaths.length === 0) return undefined;
+  const entries = protectedPaths
+    .map((entry) => entry.replace(/\/+$/, ""))
+    .filter(Boolean);
   return changedFiles.find((file) =>
-    protectedPaths.some(
-      (entry) => file === entry || file.startsWith(`${entry.replace(/\/+$/, "")}/`),
-    ),
+    entries.some((entry) => file === entry || file.startsWith(`${entry}/`)),
   );
 }
 
