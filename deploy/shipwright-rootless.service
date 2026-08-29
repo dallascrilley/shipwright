@@ -2,6 +2,7 @@
 Description=Shipwright GitHub issue operator
 After=shipwright-docker.service network-online.target
 Wants=network-online.target
+Wants=shipwright-docker.service
 BindsTo=shipwright-docker.service
 
 [Service]

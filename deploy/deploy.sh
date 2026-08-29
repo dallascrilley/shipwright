@@ -184,6 +184,8 @@ ssh "$target" bash -s -- "$release_path" "$docker_mode" <<'REMOTE'
       systemctl enable --now shipwright-docker || true
       gpasswd -d shipwright docker >/dev/null 2>&1 || true
     else
+      systemctl --user --machine=shipwright@ disable --now docker.service 2>/dev/null || true
+      loginctl disable-linger shipwright 2>/dev/null || true
       usermod -aG docker shipwright
     fi
     if [[ -n "$previous_release" ]]; then

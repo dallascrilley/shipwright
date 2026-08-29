@@ -42,6 +42,7 @@ describe("Shipwright Docker deployment modes", () => {
     const result = renderService("rootless", "1001");
 
     expect(result.stdout).toContain("BindsTo=shipwright-docker.service");
+    expect(result.stdout).toContain("Wants=shipwright-docker.service");
     expect(result.stdout).toContain("After=shipwright-docker.service");
     expect(result.stdout).toContain(
       "ExecStartPre=/bin/sh -c 'socket=/run/user/1001/docker.sock; docker_ping() { curl --fail --silent --show-error --connect-timeout 1 --max-time 2 --unix-socket \"$socket\" http://localhost/_ping >/dev/null; }; for attempt in $(seq 1 30); do test -S \"$socket\" && docker_ping && exit 0; sleep 1; done; exit 1'",
@@ -67,6 +68,8 @@ describe("Shipwright Docker deployment modes", () => {
     expect(result.stdout).toContain(
       "while docker_ping; do sleep 5; done",
     );
+    expect(result.stdout).toContain("Restart=on-failure");
+    expect(result.stdout).toContain("RestartSec=5s");
     expect(result.stdout).toContain(
       "curl --fail --silent --show-error --connect-timeout 1 --max-time 2 --unix-socket \"$socket\" http://localhost/_ping",
     );
@@ -95,6 +98,15 @@ describe("Shipwright Docker deployment modes", () => {
     expect(deploy).toContain("previous_docker_unit");
     expect(deploy).toContain("previous_used_rootless");
     expect(deploy).toContain("systemctl disable --now shipwright-docker");
+    expect(deploy).toContain(
+      "systemctl --user --machine=shipwright@ disable --now docker.service",
+    );
+    expect(deploy).toContain(
+      `else
+      systemctl --user --machine=shipwright@ disable --now docker.service 2>/dev/null || true
+      loginctl disable-linger shipwright 2>/dev/null || true
+      usermod -aG docker shipwright`,
+    );
     expect(deploy).toContain("loginctl disable-linger shipwright");
     expect(example).toContain("SHIPWRIGHT_DOCKER_MODE=rootful");
 });

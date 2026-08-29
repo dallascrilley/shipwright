@@ -11,6 +11,8 @@ Before=shipwright.service
 # shipwright.service stop the application instead of leaving it attached to a
 # dead socket.
 Type=simple
+Restart=on-failure
+RestartSec=5s
 ExecStart=/bin/sh -c 'socket=/run/user/%%SHIPWRIGHT_UID%%/docker.sock; docker_ping() { curl --fail --silent --show-error --connect-timeout 1 --max-time 2 --unix-socket "$socket" http://localhost/_ping >/dev/null; }; systemctl --user --machine=shipwright@ start docker.service || exit 1; for attempt in $(seq 1 30); do test -S "$socket" && docker_ping && break; sleep 1; done; docker_ping || exit 1; while docker_ping; do sleep 5; done; exit 1'
 ExecStop=/usr/bin/systemctl --user --machine=shipwright@ stop docker.service
 
