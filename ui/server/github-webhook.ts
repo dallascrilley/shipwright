@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 
 import { isRepositoryAllowed } from "../../src/config/github.js";
 import {
@@ -21,6 +22,11 @@ const ACTION_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,199}$/;
 const REPOSITORY_PATTERN = /^[^/\s]+\/[^/\s]+$/;
 export const MAX_WEBHOOK_BODY_BYTES = 1_048_576;
 export const MAX_WEBHOOK_DECISIONS = 20;
+
+export type GitHubWebhookRelayDestination =
+  | { kind: "disabled" }
+  | { kind: "invalid" }
+  | { kind: "private"; url: URL };
 
 type GitHubEvent = GithubTriggerEvent;
 
@@ -69,6 +75,54 @@ export type GitHubWebhookIngressOptions = {
   dispatcher: QueueDispatcher;
 } & ReviewAuthorization;
 
+export function hasValidGitHubWebhookSignature(
+  rawBody: string | Uint8Array,
+  signature: string,
+  webhookSecret: string,
+): boolean {
+  const expected = `sha256=${createHmac("sha256", webhookSecret)
+    .update(rawBody)
+    .digest("hex")}`;
+  const actualBytes = Buffer.from(signature);
+  const expectedBytes = Buffer.from(expected);
+  return (
+    actualBytes.byteLength === expectedBytes.byteLength &&
+    timingSafeEqual(actualBytes, expectedBytes)
+  );
+}
+
+export function isValidGitHubDeliveryId(value: string): boolean {
+  return DELIVERY_ID_PATTERN.test(value);
+}
+
+export function parseGitHubWebhookRelayDestination(
+  value: unknown,
+): GitHubWebhookRelayDestination {
+  if (value === undefined || value === null || value === "") {
+    return { kind: "disabled" };
+  }
+  if (typeof value !== "string") return { kind: "invalid" };
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return { kind: "invalid" };
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.pathname !== "/webhooks/github" ||
+    url.search !== "" ||
+    url.hash !== "" ||
+    !isPrivateHostname(url)
+  ) {
+    return { kind: "invalid" };
+  }
+  return { kind: "private", url };
+}
+
 /**
  * Identity a submitted review must prove before it may enqueue repair. The
  * reviewer is pinned on its bot *user* identity because that is what the
@@ -92,10 +146,16 @@ export class GitHubWebhookIngress {
     if (Buffer.byteLength(input.rawBody, "utf8") > MAX_WEBHOOK_BODY_BYTES) {
       return { status: "rejected", reason: "invalid_payload" };
     }
-    if (!this.hasValidSignature(input.rawBody, input.signature)) {
+    if (
+      !hasValidGitHubWebhookSignature(
+        input.rawBody,
+        input.signature,
+        this.options.webhookSecret,
+      )
+    ) {
       return { status: "rejected", reason: "invalid_signature" };
     }
-    if (!DELIVERY_ID_PATTERN.test(input.deliveryId)) {
+    if (!isValidGitHubDeliveryId(input.deliveryId)) {
       return { status: "rejected", reason: "invalid_payload" };
     }
     const event = this.parseEvent(input.event);
@@ -191,18 +251,6 @@ export class GitHubWebhookIngress {
     return acceptedResult(matched, decisions);
   }
 
-  private hasValidSignature(rawBody: string, signature: string): boolean {
-    const expected = `sha256=${createHmac("sha256", this.options.webhookSecret)
-      .update(rawBody)
-      .digest("hex")}`;
-    const actualBytes = Buffer.from(signature);
-    const expectedBytes = Buffer.from(expected);
-    return (
-      actualBytes.byteLength === expectedBytes.byteLength &&
-      timingSafeEqual(actualBytes, expectedBytes)
-    );
-  }
-
   private parseEvent(value: string): GitHubEvent | undefined {
     return value === "issues" ||
       value === "pull_request" ||
@@ -285,6 +333,44 @@ export class GitHubWebhookIngress {
       },
     };
   }
+}
+
+function isPrivateHostname(url: URL): boolean {
+  const hostname = url.hostname
+    .toLowerCase()
+    .replace(/^\[/, "")
+    .replace(/\]$/, "")
+    .replace(/\.$/, "");
+  if (hostname === "localhost") return true;
+
+  const ipVersion = isIP(hostname);
+  if (ipVersion === 4) return isPrivateIpv4(hostname);
+  if (ipVersion === 6) return isPrivateIpv6(hostname);
+  return url.protocol === "https:" && hostname.endsWith(".ts.net");
+}
+
+function isPrivateIpv4(hostname: string): boolean {
+  const [first = -1, second = -1] = hostname
+    .split(".")
+    .map((part) => Number(part));
+  return (
+    first === 10 ||
+    first === 127 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
+}
+
+function isPrivateIpv6(hostname: string): boolean {
+  if (hostname === "::1") return true;
+  const firstGroup = hostname.split(":", 1)[0] ?? "";
+  const prefix = Number.parseInt(firstGroup, 16);
+  return (
+    Number.isFinite(prefix) &&
+    ((prefix & 0xfe00) === 0xfc00 || (prefix & 0xffc0) === 0xfe80)
+  );
 }
 
 function acceptedResult(

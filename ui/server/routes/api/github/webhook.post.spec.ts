@@ -18,6 +18,7 @@ const config = {
   expectedReviewerLogin: "review-app[bot]",
   installationId: 42,
 };
+const privateRelayUrl = "http://127.0.0.1:4187/webhooks/github";
 
 function requestHeaders() {
   return {
@@ -88,10 +89,34 @@ function createApp(service: AgentManagementService) {
     "/api/github/webhook",
     createGitHubWebhookRoute({
       loadConfig: () => config,
+      loadRelayDestination: () => undefined,
       receive: (input, loadedConfig) =>
         service.receiveGitHubWebhook(input, loadedConfig),
     }),
   );
+}
+
+function signatureFor(rawBody: string): string {
+  return `sha256=${createHmac("sha256", config.webhookSecret)
+    .update(rawBody)
+    .digest("hex")}`;
+}
+
+function signedRawRequest(
+  rawBody: string,
+  deliveryId: string,
+  event: string,
+) {
+  return {
+    method: "POST",
+    headers: {
+      ...requestHeaders(),
+      "x-github-event": event,
+      "x-github-delivery": deliveryId,
+      "x-hub-signature-256": signatureFor(rawBody),
+    },
+    body: rawBody,
+  };
 }
 
 function signedRequest(
@@ -100,22 +125,272 @@ function signedRequest(
   event: GithubTriggerEvent = "issues",
 ) {
   const rawBody = JSON.stringify(payload);
-  const signature = `sha256=${createHmac("sha256", config.webhookSecret)
-    .update(rawBody)
-    .digest("hex")}`;
-  return {
-    method: "POST",
-    headers: {
-      ...requestHeaders(),
-      "x-github-event": event,
-      "x-github-delivery": deliveryId,
-      "x-hub-signature-256": signature,
-    },
-    body: rawBody,
-  };
+  return signedRawRequest(rawBody, deliveryId, event);
 }
 
 describe("POST /api/github/webhook", () => {
+  test("relays a signed pull request byte-for-byte after local intake", async () => {
+    const service = createService();
+    await createEnabledAgent(service, [], "pull_request", "opened");
+    const relayFetch = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(null, { status: 204 }),
+    );
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => config,
+        loadRelayDestination: () => privateRelayUrl,
+        receive: (input, loadedConfig) =>
+          service.receiveGitHubWebhook(input, loadedConfig),
+        relayFetch,
+      }),
+    );
+    const rawBody = ` {\n  "action": "opened",\n  "repository": { "full_name": "dallascrilley/shipwright" },\n  "number": 7,\n  "pull_request": { "number": 7, "base": { "ref": "main" }, "draft": false, "labels": [] }\n}\n`;
+    const signature = signatureFor(rawBody);
+
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRawRequest(rawBody, "delivery-relay-pr", "pull_request"),
+    );
+
+    expect(response.status).toBe(202);
+    expect(service.getSnapshot().queueEntries).toHaveLength(1);
+    expect(relayFetch).toHaveBeenCalledTimes(1);
+    const relayCall = relayFetch.mock.calls[0];
+    expect(relayCall).toBeDefined();
+    if (!relayCall) throw new Error("missing relay call");
+    expect(relayCall[0].toString()).toBe(privateRelayUrl);
+    const headers = new Headers(relayCall[1]?.headers);
+    expect(headers.get("x-github-delivery")).toBe("delivery-relay-pr");
+    expect(headers.get("x-github-event")).toBe("pull_request");
+    expect(headers.get("x-hub-signature-256")).toBe(signature);
+    await expect(new Response(relayCall[1]?.body).text()).resolves.toBe(rawBody);
+  });
+
+  test("relays check suites without invoking local queue intake", async () => {
+    const receive = vi.fn(async () => ({
+      status: "accepted" as const,
+      matched: 0,
+      conditionFiltered: 0,
+      decisions: [],
+      decisionsTruncated: 0,
+    }));
+    const relayFetch = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(null, { status: 204 }),
+    );
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => config,
+        loadRelayDestination: () => privateRelayUrl,
+        receive,
+        relayFetch,
+      }),
+    );
+    const rawBody = `{"check_suite":{"id":91},"action":"completed"}\n`;
+
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRawRequest(rawBody, "delivery-check-suite", "check_suite"),
+    );
+
+    expect(response.status).toBe(202);
+    expect(receive).not.toHaveBeenCalled();
+    expect(relayFetch).toHaveBeenCalledTimes(1);
+    const relayCall = relayFetch.mock.calls[0];
+    expect(relayCall).toBeDefined();
+    if (!relayCall) throw new Error("missing relay call");
+    await expect(new Response(relayCall[1]?.body).text()).resolves.toBe(rawBody);
+  });
+
+  test("rejects an invalid signature before local or relay effects", async () => {
+    const service = createService();
+    await createEnabledAgent(service, [], "pull_request", "opened");
+    const receive = vi.fn((input, loadedConfig) =>
+      service.receiveGitHubWebhook(input, loadedConfig),
+    );
+    const relayFetch = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(null, { status: 204 }),
+    );
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => config,
+        loadRelayDestination: () => privateRelayUrl,
+        receive,
+        relayFetch,
+      }),
+    );
+
+    const response = await app.request("/api/github/webhook", {
+      method: "POST",
+      headers: {
+        ...requestHeaders(),
+        "x-github-event": "pull_request",
+        "x-github-delivery": "delivery-invalid-signature",
+      },
+      body: "{}",
+    });
+
+    expect(response.status).toBe(401);
+    expect(receive).not.toHaveBeenCalled();
+    expect(relayFetch).not.toHaveBeenCalled();
+    expect(service.getSnapshot().queueEntries).toHaveLength(0);
+  });
+
+  test("returns retryable failures for a timeout and non-2xx before later success", async () => {
+    const service = createService();
+    await createEnabledAgent(service, [], "pull_request", "opened");
+    let attempt = 0;
+    const relayFetch = vi.fn(
+      (_input: string | URL | Request, init?: RequestInit) => {
+        attempt += 1;
+        if (attempt === 1) {
+          return new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (!signal) throw new Error("relay timeout signal missing");
+            signal.addEventListener(
+              "abort",
+              () => reject(new Error("relay timed out")),
+              { once: true },
+            );
+          });
+        }
+        return Promise.resolve(
+          new Response(null, { status: attempt === 2 ? 502 : 204 }),
+        );
+      },
+    );
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => config,
+        loadRelayDestination: () => privateRelayUrl,
+        receive: (input, loadedConfig) =>
+          service.receiveGitHubWebhook(input, loadedConfig),
+        relayFetch,
+        relayTimeoutMs: 5,
+      }),
+    );
+    const init = signedRequest(
+      {
+        action: "opened",
+        repository: { full_name: "dallascrilley/shipwright" },
+        number: 7,
+        pull_request: {
+          number: 7,
+          base: { ref: "main" },
+          draft: false,
+          labels: [],
+        },
+      },
+      "delivery-retry-relay",
+      "pull_request",
+    );
+
+    const timedOut = await app.request("/api/github/webhook", init);
+    expect(timedOut.status).toBe(503);
+    expect(timedOut.headers.get("retry-after")).toBe("10");
+    const rejected = await app.request("/api/github/webhook", init);
+    expect(rejected.status).toBe(503);
+    expect(rejected.headers.get("retry-after")).toBe("10");
+    expect((await app.request("/api/github/webhook", init)).status).toBe(202);
+
+    expect(relayFetch).toHaveBeenCalledTimes(3);
+    expect(service.getSnapshot().queueEntries).toHaveLength(1);
+  });
+
+  test("replays a successful pull request without duplicate local or relay work", async () => {
+    const service = createService();
+    await createEnabledAgent(service, [], "pull_request", "opened");
+    const relayFetch = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(null, { status: 204 }),
+    );
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => config,
+        loadRelayDestination: () => privateRelayUrl,
+        receive: (input, loadedConfig) =>
+          service.receiveGitHubWebhook(input, loadedConfig),
+        relayFetch,
+      }),
+    );
+    const init = signedRequest(
+      {
+        action: "opened",
+        repository: { full_name: "dallascrilley/shipwright" },
+        number: 7,
+        pull_request: {
+          number: 7,
+          base: { ref: "main" },
+          draft: false,
+          labels: [],
+        },
+      },
+      "delivery-relay-replay",
+      "pull_request",
+    );
+
+    expect((await app.request("/api/github/webhook", init)).status).toBe(202);
+    expect((await app.request("/api/github/webhook", init)).status).toBe(202);
+
+    expect(service.getSnapshot().queueEntries).toHaveLength(1);
+    expect(relayFetch).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    "not a URL",
+    "https://example.com/webhooks/github",
+    "http://private.internal/webhooks/github",
+    "http://symphony/webhooks/github",
+    "http://127.0.0.1:4187/not-github",
+  ])("rejects configured non-private relay destination %s", async (destination) => {
+    const receive = vi.fn(async () => ({
+      status: "accepted" as const,
+      matched: 0,
+      conditionFiltered: 0,
+      decisions: [],
+      decisionsTruncated: 0,
+    }));
+    const relayFetch = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(null, { status: 204 }),
+    );
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => config,
+        loadRelayDestination: () => destination,
+        receive,
+        relayFetch,
+      }),
+    );
+    const rawBody = "{}";
+
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRawRequest(rawBody, "delivery-bad-destination", "issues"),
+    );
+
+    expect(response.status).toBe(503);
+    expect(receive).not.toHaveBeenCalled();
+    expect(relayFetch).not.toHaveBeenCalled();
+  });
+
+  test.each([0, -1, 5_001, 1.5])(
+    "rejects an unbounded relay timeout %s",
+    (relayTimeoutMs) => {
+      expect(() =>
+        createGitHubWebhookRoute({ relayTimeoutMs }),
+      ).toThrow("GitHub webhook relay timeout must be between 1 and 5000 milliseconds");
+    },
+  );
+
   test("a signed delivery queues once and its replay leaves the durable queue unchanged", async () => {
     const service = createService();
     const { agent } = await createEnabledAgent(service);
@@ -431,7 +706,11 @@ describe("POST /api/github/webhook", () => {
     }));
     const app = new H3().post(
       "/api/github/webhook",
-      createGitHubWebhookRoute({ loadConfig: () => config, receive }),
+      createGitHubWebhookRoute({
+        loadConfig: () => config,
+        loadRelayDestination: () => undefined,
+        receive,
+      }),
     );
     const rawBody = JSON.stringify({
       action: "opened",
@@ -439,11 +718,10 @@ describe("POST /api/github/webhook", () => {
       issue: { number: 42 },
     });
 
-    const response = await app.request("/api/github/webhook", {
-      method: "POST",
-      headers: requestHeaders(),
-      body: rawBody,
-    });
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRawRequest(rawBody, "delivery-1", "issues"),
+    );
 
     expect(response.status).toBe(202);
     await expect(response.json()).resolves.toEqual({
@@ -458,7 +736,7 @@ describe("POST /api/github/webhook", () => {
         event: "issues",
         deliveryId: "delivery-1",
         rawBody,
-        signature: `sha256=${"a".repeat(64)}`,
+        signature: signatureFor(rawBody),
       },
       config,
     );
@@ -474,15 +752,15 @@ describe("POST /api/github/webhook", () => {
         "/api/github/webhook",
         createGitHubWebhookRoute({
           loadConfig: () => config,
+          loadRelayDestination: () => undefined,
           receive: async () => ({ status: "rejected", reason }),
         }),
       );
 
-      const response = await app.request("/api/github/webhook", {
-        method: "POST",
-        headers: requestHeaders(),
-        body: "{}",
-      });
+      const response = await app.request(
+        "/api/github/webhook",
+        signedRawRequest("{}", "delivery-1", "issues"),
+      );
 
       expect(response.status).toBe(status);
       await expect(response.json()).resolves.toEqual({
@@ -496,7 +774,11 @@ describe("POST /api/github/webhook", () => {
     const receive = vi.fn();
     const app = new H3().post(
       "/api/github/webhook",
-      createGitHubWebhookRoute({ loadConfig: () => config, receive }),
+      createGitHubWebhookRoute({
+        loadConfig: () => config,
+        loadRelayDestination: () => undefined,
+        receive,
+      }),
     );
 
     const response = await app.request("/api/github/webhook", {
@@ -514,6 +796,7 @@ describe("POST /api/github/webhook", () => {
     const app = new H3().post(
       "/api/github/webhook",
       createGitHubWebhookRoute({
+        loadRelayDestination: () => undefined,
         loadConfig: () => {
           throw new Error("secret configuration detail");
         },

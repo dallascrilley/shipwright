@@ -12,6 +12,8 @@ export interface GitHubWebhookConfig {
   webhookSecret: string;
   allowedRepositories: Set<string>;
   allowedOwners: Set<string>;
+  /** Optional private Symphony receiver. The HTTP adapter validates it before use. */
+  symphonyWebhookUrl?: string;
   /**
    * Reviewer identity authorized to trigger repair from a submitted review.
    * The `pull_request_review` payload identifies the reviewer as a bot *user*
@@ -96,6 +98,8 @@ export function parseGitHubWebhookConfig(
     webhookSecret,
     allowedRepositories: repositories,
     allowedOwners: owners,
+    symphonyWebhookUrl:
+      env.SHIPWRIGHT_SYMPHONY_WEBHOOK_URL?.trim() || undefined,
     expectedReviewerLogin,
     expectedReviewerUserId: env.GITHUB_REVIEW_BOT_USER_ID
       ? parsePositiveInteger(
