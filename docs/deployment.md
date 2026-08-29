@@ -146,7 +146,7 @@ GITHUB_REPOSITORY_ALLOWLIST=dallascrilley/*,DallasCrilleyMarTech/*
 
 This allowlist is only a Shipwright guardrail. The configured GitHub App must also be installed on both owners with access to the intended repositories. Leave `GITHUB_APP_INSTALLATION_ID` empty when the selector should enumerate repositories across every installation of that App; each run still resolves and verifies its repository installation before work starts.
 
-Production must set a random `BETTER_AUTH_SECRET` of at least 32 characters. Do not set `AUTH_DISABLED`. In Tailscale-only mode the tailnet is an additional network boundary; in public HTTPS mode Better Auth is the *sole* access control, so the secret strength and account hygiene matter even more. Authentication is never a function of the network path.
+Production must set a random `BETTER_AUTH_SECRET` of at least 32 characters. Do not set `AUTH_DISABLED`. Better Auth protects the operator console; the GitHub webhook uses its independent signature check. In Tailscale-only mode the tailnet is an additional network boundary. Authentication is never a function of the network path.
 
 ## Private access
 
@@ -171,16 +171,16 @@ Use the HTTPS URL reported by `tailscale serve status`. On first visit, create t
 
 Optional break-glass: temporarily allow SSH from a single trusted source IP on the cloud firewall, complete the repair, then remove the rule so public SSH stays closed.
 
-## Public HTTPS access (optional)
+## Public GitHub webhook ingress (optional)
 
-This path removes the Tailscale requirement for operators: anyone with the URL
-and a valid account can reach the console over public HTTPS. The service still
-binds only to loopback — Caddy is the sole public listener and terminates TLS.
+This path gives GitHub a public HTTPS endpoint without exposing the operator
+console. Operators still administer the host through Tailscale SSH. The service
+binds only to loopback; Caddy is the sole public listener and terminates TLS.
 
 Weigh the tradeoff before enabling it. The sandbox runner holds Docker daemon
-authority (root-equivalent on this host), so the public edge makes Better Auth
-the only thing standing between the internet and that authority. Keep
-`BETTER_AUTH_SECRET` strong and never set `AUTH_DISABLED`.
+authority, which is root-equivalent on this host. The public edge forwards only
+`POST /api/github/webhook`; every other request receives `404`. The application
+still verifies the GitHub signature before it parses or enqueues the payload.
 
 Operator steps:
 
@@ -201,15 +201,19 @@ Operator steps:
 
 The deploy renders `deploy/Caddyfile` to `/etc/caddy/Caddyfile` with the name
 substituted, validates it, opens host `ufw` 80/443 when `ufw` is active, and
-enables Caddy. The unauthenticated observability endpoints (`/healthz`,
-`/readyz`, `/metrics`) are answered `404` at the public edge and remain
-reachable only over loopback/tailnet for scrapers.
+enables Caddy. Caddy proxies only `POST /api/github/webhook`. The console and
+the observability endpoints remain on loopback; Caddy does not expose them.
 
 Verify from off-tailnet:
 
 ```sh
-curl -fsS https://shipwright.example.com/healthz   # expect 404 at the edge
-curl -fsSI https://shipwright.example.com/          # expect 200 with a valid cert
+curl -sS -o /dev/null -w '%{http_code}\n' https://shipwright.example.com/healthz
+# expect 404
+curl -sS -o /dev/null -w '%{http_code}\n' https://shipwright.example.com/api/github/webhook
+# expect 404 because GET is not allowed
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -X POST https://shipwright.example.com/api/github/webhook
+# expect 401 because the request has no GitHub signature
 ```
 
 On the host: `systemctl status caddy --no-pager` and
