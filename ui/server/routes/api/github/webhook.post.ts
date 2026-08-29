@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   assertBodySize,
   defineEventHandler,
@@ -24,6 +26,13 @@ import {
 const DEFAULT_RELAY_TIMEOUT_MS = 5_000;
 const MAX_COMPLETED_RELAY_DELIVERIES = 10_000;
 const RETRY_AFTER_SECONDS = "10";
+
+type RelayResult = "accepted" | "conflict" | "unavailable";
+
+type ActiveRelay = {
+  payloadSha256: string;
+  result: Promise<RelayResult>;
+};
 
 type RelayFetch = (
   input: string | URL | Request,
@@ -63,8 +72,8 @@ export function createGitHubWebhookRoute(
       `GitHub webhook relay timeout must be between 1 and ${DEFAULT_RELAY_TIMEOUT_MS} milliseconds`,
     );
   }
-  const completedRelays = new Set<string>();
-  const activeRelays = new Map<string, Promise<boolean>>();
+  const completedRelays = new Map<string, string>();
+  const activeRelays = new Map<string, ActiveRelay>();
 
   return defineEventHandler(async (event) => {
     await assertBodySize(event, MAX_WEBHOOK_BODY_BYTES);
@@ -92,8 +101,7 @@ export function createGitHubWebhookRoute(
       }
 
       const relayDestination = parseGitHubWebhookRelayDestination(
-        dependencies.loadRelayDestination?.(event) ??
-          config.symphonyWebhookUrl,
+        dependencies.loadRelayDestination?.(event) ?? config.symphonyWebhookUrl,
       );
       if (relayDestination.kind === "invalid") {
         console.error("GitHub webhook relay destination rejected");
@@ -104,15 +112,15 @@ export function createGitHubWebhookRoute(
         githubEvent === "check_suite" &&
         relayDestination.kind === "private"
       ) {
-        if (
-          !(await relayOnce({
-            destination: relayDestination,
-            deliveryId,
-            githubEvent,
-            signature,
-            rawBody,
-          }))
-        ) {
+        const relayResult = await relayOnce({
+          destination: relayDestination,
+          deliveryId,
+          githubEvent,
+          signature,
+          rawBody,
+        });
+        if (relayResult === "conflict") return conflict(event);
+        if (relayResult === "unavailable") {
           console.error("GitHub webhook relay unavailable");
           return unavailable(event, true);
         }
@@ -130,17 +138,20 @@ export function createGitHubWebhookRoute(
       if (result.status === "accepted") {
         if (
           githubEvent === "pull_request" &&
-          relayDestination.kind === "private" &&
-          !(await relayOnce({
+          relayDestination.kind === "private"
+        ) {
+          const relayResult = await relayOnce({
             destination: relayDestination,
             deliveryId,
             githubEvent,
             signature,
             rawBody,
-          }))
-        ) {
-          console.error("GitHub webhook relay unavailable");
-          return unavailable(event, true);
+          });
+          if (relayResult === "conflict") return conflict(event);
+          if (relayResult === "unavailable") {
+            console.error("GitHub webhook relay unavailable");
+            return unavailable(event, true);
+          }
         }
         setResponseStatus(event, 202);
         return result;
@@ -157,41 +168,47 @@ export function createGitHubWebhookRoute(
   });
 
   async function relayOnce(input: {
-    destination: Extract<
-      GitHubWebhookRelayDestination,
-      { kind: "private" }
-    >;
+    destination: Extract<GitHubWebhookRelayDestination, { kind: "private" }>;
     deliveryId: string;
     githubEvent: string;
     signature: string;
     rawBody: ArrayBuffer;
-  }): Promise<boolean> {
+  }): Promise<RelayResult> {
     const relayKey = `${input.destination.url.href}\n${input.deliveryId}`;
-    if (completedRelays.has(relayKey)) return true;
+    const payloadSha256 = createHash("sha256")
+      .update(new Uint8Array(input.rawBody))
+      .digest("hex");
+    const completedPayloadSha256 = completedRelays.get(relayKey);
+    if (completedPayloadSha256 !== undefined) {
+      return completedPayloadSha256 === payloadSha256 ? "accepted" : "conflict";
+    }
     const activeRelay = activeRelays.get(relayKey);
-    if (activeRelay) return activeRelay;
+    if (activeRelay) {
+      return activeRelay.payloadSha256 === payloadSha256
+        ? activeRelay.result
+        : "conflict";
+    }
 
     const attempt = sendRelay(input);
-    activeRelays.set(relayKey, attempt);
+    activeRelays.set(relayKey, { payloadSha256, result: attempt });
     try {
-      const succeeded = await attempt;
-      if (succeeded) rememberCompletedRelay(relayKey);
-      return succeeded;
+      const result = await attempt;
+      if (result === "accepted") {
+        rememberCompletedRelay(relayKey, payloadSha256);
+      }
+      return result;
     } finally {
       activeRelays.delete(relayKey);
     }
   }
 
   async function sendRelay(input: {
-    destination: Extract<
-      GitHubWebhookRelayDestination,
-      { kind: "private" }
-    >;
+    destination: Extract<GitHubWebhookRelayDestination, { kind: "private" }>;
     deliveryId: string;
     githubEvent: string;
     signature: string;
     rawBody: ArrayBuffer;
-  }): Promise<boolean> {
+  }): Promise<RelayResult> {
     try {
       const response = await relayFetch(input.destination.url, {
         method: "POST",
@@ -203,16 +220,20 @@ export function createGitHubWebhookRoute(
         body: input.rawBody,
         signal: AbortSignal.timeout(relayTimeoutMs),
       });
-      return response.ok;
+      if (response.status === 409) return "conflict";
+      return response.ok ? "accepted" : "unavailable";
     } catch {
-      return false;
+      return "unavailable";
     }
   }
 
-  function rememberCompletedRelay(relayKey: string): void {
-    completedRelays.add(relayKey);
+  function rememberCompletedRelay(
+    relayKey: string,
+    payloadSha256: string,
+  ): void {
+    completedRelays.set(relayKey, payloadSha256);
     if (completedRelays.size <= MAX_COMPLETED_RELAY_DELIVERIES) return;
-    const oldestRelayKey = completedRelays.values().next().value;
+    const oldestRelayKey = completedRelays.keys().next().value;
     if (oldestRelayKey !== undefined) completedRelays.delete(oldestRelayKey);
   }
 }
@@ -231,6 +252,11 @@ function unavailable(event: H3Event, retryable = false) {
   setResponseStatus(event, 503);
   if (retryable) setResponseHeader(event, "Retry-After", RETRY_AFTER_SECONDS);
   return { status: "unavailable" as const };
+}
+
+function conflict(event: H3Event) {
+  setResponseStatus(event, 409);
+  return { status: "conflict" as const };
 }
 
 export default createGitHubWebhookRoute();

@@ -1,4 +1,12 @@
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHmac } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import { env } from "node:process";
+import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 
 import { H3 } from "h3";
 import { describe, expect, test, vi } from "vitest";
@@ -19,6 +27,12 @@ const config = {
   installationId: 42,
 };
 const privateRelayUrl = "http://127.0.0.1:4187/webhooks/github";
+const EXPECTED_SYMPHONY_COMMIT = "61e941bbec3f9de9ed07ecaf440ec4be4b8c2149";
+const symphonyCheckout = env.SHIPWRIGHT_TEST_SYMPHONY_CHECKOUT ?? "";
+const symphonyPython = env.SHIPWRIGHT_TEST_PYTHON ?? "python3";
+const symphonyHarness = fileURLToPath(
+  new URL("./fixtures/symphony-webhook-harness.py", import.meta.url),
+);
 
 function requestHeaders() {
   return {
@@ -56,7 +70,9 @@ async function createEnabledAgent(
   action: string = "opened",
 ) {
   const actionPreset =
-    event === "issues" ? ("fix_issue" as const) : ("resolve_pr_feedback" as const);
+    event === "issues"
+      ? ("fix_issue" as const)
+      : ("resolve_pr_feedback" as const);
   const agent = await service.createAgent({
     name: event === "issues" ? "Issue triage" : "PR feedback",
     instructions:
@@ -102,11 +118,7 @@ function signatureFor(rawBody: string): string {
     .digest("hex")}`;
 }
 
-function signedRawRequest(
-  rawBody: string,
-  deliveryId: string,
-  event: string,
-) {
+function signedRawRequest(rawBody: string, deliveryId: string, event: string) {
   return {
     method: "POST",
     headers: {
@@ -126,6 +138,86 @@ function signedRequest(
 ) {
   const rawBody = JSON.stringify(payload);
   return signedRawRequest(rawBody, deliveryId, event);
+}
+
+async function unusedLoopbackPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    server.close();
+    throw new Error("failed to reserve a loopback port");
+  }
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+  return address.port;
+}
+
+async function startSymphonyHarness(input: {
+  workflowPath: string;
+  port: number;
+}): Promise<{ child: ChildProcess; stateDb: string }> {
+  const pythonPath = [join(symphonyCheckout, "src"), env.PYTHONPATH]
+    .filter((part): part is string => Boolean(part))
+    .join(delimiter);
+  const child = spawn(
+    symphonyPython,
+    [
+      symphonyHarness,
+      input.workflowPath,
+      String(input.port),
+      config.webhookSecret,
+      "dallascrilley/shipwright",
+      String(config.installationId),
+    ],
+    {
+      env: { ...env, PYTHONPATH: pythonPath },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  let stderr = "";
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+  const lines = createInterface({ input: child.stdout! });
+  const line = await new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error(`Symphony harness start timed out: ${stderr}`)),
+      5_000,
+    );
+    lines.once("line", (value) => {
+      clearTimeout(timeout);
+      resolve(value);
+    });
+    child.once("exit", (code) => {
+      clearTimeout(timeout);
+      reject(new Error(`Symphony harness exited ${code}: ${stderr}`));
+    });
+  });
+  lines.close();
+  const startup = JSON.parse(line) as { port: number; state_db: string };
+  expect(startup.port).toBe(input.port);
+  return { child, stateDb: startup.state_db };
+}
+
+async function stopSymphonyHarness(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null) return;
+  child.kill("SIGTERM");
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("Symphony harness did not stop after SIGTERM"));
+    }, 5_000);
+    child.once("exit", () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+  });
 }
 
 describe("POST /api/github/webhook", () => {
@@ -165,7 +257,9 @@ describe("POST /api/github/webhook", () => {
     expect(headers.get("x-github-delivery")).toBe("delivery-relay-pr");
     expect(headers.get("x-github-event")).toBe("pull_request");
     expect(headers.get("x-hub-signature-256")).toBe(signature);
-    await expect(new Response(relayCall[1]?.body).text()).resolves.toBe(rawBody);
+    await expect(new Response(relayCall[1]?.body).text()).resolves.toBe(
+      rawBody,
+    );
   });
 
   test("relays check suites without invoking local queue intake", async () => {
@@ -202,7 +296,9 @@ describe("POST /api/github/webhook", () => {
     const relayCall = relayFetch.mock.calls[0];
     expect(relayCall).toBeDefined();
     if (!relayCall) throw new Error("missing relay call");
-    await expect(new Response(relayCall[1]?.body).text()).resolves.toBe(rawBody);
+    await expect(new Response(relayCall[1]?.body).text()).resolves.toBe(
+      rawBody,
+    );
   });
 
   test("keeps check suites rejected when the private relay is disabled", async () => {
@@ -379,51 +475,143 @@ describe("POST /api/github/webhook", () => {
     expect(relayFetch).toHaveBeenCalledTimes(1);
   });
 
+  test("rejects a changed payload that reuses a completed relay delivery id", async () => {
+    const service = createService();
+    await createEnabledAgent(service, [], "pull_request", "opened");
+    const relayFetch = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(null, { status: 202 }),
+    );
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => config,
+        loadRelayDestination: () => privateRelayUrl,
+        receive: (input, loadedConfig) =>
+          service.receiveGitHubWebhook(input, loadedConfig),
+        relayFetch,
+      }),
+    );
+    const originalBody = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "dallascrilley/shipwright" },
+      number: 7,
+      pull_request: {
+        number: 7,
+        base: { ref: "main" },
+        draft: false,
+        labels: [],
+      },
+    });
+    const changedBody = `${originalBody.slice(0, -1)},"changed":true}`;
+
+    const accepted = await app.request(
+      "/api/github/webhook",
+      signedRawRequest(originalBody, "delivery-relay-conflict", "pull_request"),
+    );
+    const conflict = await app.request(
+      "/api/github/webhook",
+      signedRawRequest(changedBody, "delivery-relay-conflict", "pull_request"),
+    );
+
+    expect(accepted.status).toBe(202);
+    expect(conflict.status).toBe(409);
+    await expect(conflict.json()).resolves.toEqual({ status: "conflict" });
+    expect(relayFetch).toHaveBeenCalledTimes(1);
+    expect(service.getSnapshot().queueEntries).toHaveLength(1);
+  });
+
+  test("preserves a downstream Symphony delivery conflict as 409", async () => {
+    const service = createService();
+    await createEnabledAgent(service, [], "pull_request", "opened");
+    const relayFetch = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(JSON.stringify({ status: "conflict" }), { status: 409 }),
+    );
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => config,
+        loadRelayDestination: () => privateRelayUrl,
+        receive: (input, loadedConfig) =>
+          service.receiveGitHubWebhook(input, loadedConfig),
+        relayFetch,
+      }),
+    );
+
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRequest(
+        {
+          action: "opened",
+          repository: { full_name: "dallascrilley/shipwright" },
+          number: 7,
+          pull_request: {
+            number: 7,
+            base: { ref: "main" },
+            draft: false,
+            labels: [],
+          },
+        },
+        "delivery-downstream-conflict",
+        "pull_request",
+      ),
+    );
+
+    expect(response.status).toBe(409);
+    expect(response.headers.get("retry-after")).toBeNull();
+    await expect(response.json()).resolves.toEqual({ status: "conflict" });
+    expect(relayFetch).toHaveBeenCalledTimes(1);
+  });
+
   test.each([
     "not a URL",
     "https://example.com/webhooks/github",
     "http://private.internal/webhooks/github",
     "http://symphony/webhooks/github",
     "http://127.0.0.1:4187/not-github",
-  ])("rejects configured non-private relay destination %s", async (destination) => {
-    const receive = vi.fn(async () => ({
-      status: "accepted" as const,
-      matched: 0,
-      conditionFiltered: 0,
-      decisions: [],
-      decisionsTruncated: 0,
-    }));
-    const relayFetch = vi.fn(
-      async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response(null, { status: 204 }),
-    );
-    const app = new H3().post(
-      "/api/github/webhook",
-      createGitHubWebhookRoute({
-        loadConfig: () => config,
-        loadRelayDestination: () => destination,
-        receive,
-        relayFetch,
-      }),
-    );
-    const rawBody = "{}";
+  ])(
+    "rejects configured non-private relay destination %s",
+    async (destination) => {
+      const receive = vi.fn(async () => ({
+        status: "accepted" as const,
+        matched: 0,
+        conditionFiltered: 0,
+        decisions: [],
+        decisionsTruncated: 0,
+      }));
+      const relayFetch = vi.fn(
+        async (_input: string | URL | Request, _init?: RequestInit) =>
+          new Response(null, { status: 204 }),
+      );
+      const app = new H3().post(
+        "/api/github/webhook",
+        createGitHubWebhookRoute({
+          loadConfig: () => config,
+          loadRelayDestination: () => destination,
+          receive,
+          relayFetch,
+        }),
+      );
+      const rawBody = "{}";
 
-    const response = await app.request(
-      "/api/github/webhook",
-      signedRawRequest(rawBody, "delivery-bad-destination", "issues"),
-    );
+      const response = await app.request(
+        "/api/github/webhook",
+        signedRawRequest(rawBody, "delivery-bad-destination", "issues"),
+      );
 
-    expect(response.status).toBe(503);
-    expect(receive).not.toHaveBeenCalled();
-    expect(relayFetch).not.toHaveBeenCalled();
-  });
+      expect(response.status).toBe(503);
+      expect(receive).not.toHaveBeenCalled();
+      expect(relayFetch).not.toHaveBeenCalled();
+    },
+  );
 
   test.each([0, -1, 5_001, 1.5])(
     "rejects an unbounded relay timeout %s",
     (relayTimeoutMs) => {
-      expect(() =>
-        createGitHubWebhookRoute({ relayTimeoutMs }),
-      ).toThrow("GitHub webhook relay timeout must be between 1 and 5000 milliseconds");
+      expect(() => createGitHubWebhookRoute({ relayTimeoutMs })).toThrow(
+        "GitHub webhook relay timeout must be between 1 and 5000 milliseconds",
+      );
     },
   );
 
@@ -474,7 +662,11 @@ describe("POST /api/github/webhook", () => {
         labels: [],
       },
     };
-    const init = signedRequest(payload, "delivery-review-route", "pull_request_review");
+    const init = signedRequest(
+      payload,
+      "delivery-review-route",
+      "pull_request_review",
+    );
 
     const first = await app.request("/api/github/webhook", init);
     expect(first.status).toBe(202);
@@ -851,3 +1043,147 @@ describe("POST /api/github/webhook", () => {
     expect(receive).not.toHaveBeenCalled();
   });
 });
+
+// Opt-in cross-repository proof:
+// SHIPWRIGHT_TEST_SYMPHONY_CHECKOUT=/path/to/pinned/symphony \
+// SHIPWRIGHT_TEST_PYTHON=/path/to/python-with-aiohttp \
+// pnpm exec vitest run server/routes/api/github/webhook.post.spec.ts
+describe.skipIf(!symphonyCheckout)(
+  "Shipwright to the pinned Symphony signed receiver",
+  () => {
+    test("is retryable, byte-exact, replay-safe, and conflict-safe end to end", async () => {
+      const actualSymphonyCommit = execFileSync(
+        "git",
+        ["-C", symphonyCheckout, "rev-parse", "HEAD"],
+        { encoding: "utf8" },
+      ).trim();
+      expect(actualSymphonyCommit).toBe(EXPECTED_SYMPHONY_COMMIT);
+
+      const tempDirectory = await mkdtemp(
+        join(tmpdir(), "shipwright-wks-779-"),
+      );
+      const workflowPath = join(tempDirectory, "WORKFLOW.md");
+      await writeFile(workflowPath, "---\n---\n", { mode: 0o600 });
+      const port = await unusedLoopbackPort();
+      const relayUrl = `http://127.0.0.1:${port}/webhooks/github`;
+      const service = createService();
+      await createEnabledAgent(service, [], "pull_request", "opened");
+      const receive = vi.fn((input, loadedConfig) =>
+        service.receiveGitHubWebhook(input, loadedConfig),
+      );
+      const createRelayApp = () =>
+        new H3().post(
+          "/api/github/webhook",
+          createGitHubWebhookRoute({
+            loadConfig: () => config,
+            loadRelayDestination: () => relayUrl,
+            receive,
+            relayFetch: fetch,
+            relayTimeoutMs: 500,
+          }),
+        );
+      const app = createRelayApp();
+      const rawBody = ` {\n  "action": "opened",\n  "repository": { "id": 123, "full_name": "dallascrilley/shipwright" },\n  "installation": { "id": 42 },\n  "number": 7,\n  "pull_request": { "number": 7, "head": { "sha": "${"a".repeat(40)}" }, "base": { "ref": "main", "sha": "${"b".repeat(40)}" }, "draft": false, "labels": [] },\n  "body_marker": "wks-779-raw-body-must-not-persist"\n}\n`;
+      const deliveryId = "delivery-real-symphony";
+      let harness: { child: ChildProcess; stateDb: string } | undefined;
+
+      try {
+        const unavailable = await app.request(
+          "/api/github/webhook",
+          signedRawRequest(rawBody, deliveryId, "pull_request"),
+        );
+        expect(unavailable.status).toBe(503);
+        expect(unavailable.headers.get("retry-after")).toBe("10");
+        expect(service.getSnapshot().queueEntries).toHaveLength(1);
+
+        harness = await startSymphonyHarness({ workflowPath, port });
+        const accepted = await app.request(
+          "/api/github/webhook",
+          signedRawRequest(rawBody, deliveryId, "pull_request"),
+        );
+        expect(accepted.status).toBe(202);
+
+        const stateAfterPull = (await (
+          await fetch(`http://127.0.0.1:${port}/__test__/state`)
+        ).json()) as { delivery_count: number; counts: Record<string, number> };
+        expect(stateAfterPull).toEqual({
+          delivery_count: 1,
+          counts: { waiting_checks: 1 },
+        });
+
+        const replay = await app.request(
+          "/api/github/webhook",
+          signedRawRequest(rawBody, deliveryId, "pull_request"),
+        );
+        expect(replay.status).toBe(202);
+        expect(service.getSnapshot().queueEntries).toHaveLength(1);
+
+        const changedBody = rawBody.replace(
+          "wks-779-raw-body-must-not-persist",
+          "wks-779-changed-payload",
+        );
+        const localConflict = await app.request(
+          "/api/github/webhook",
+          signedRawRequest(changedBody, deliveryId, "pull_request"),
+        );
+        expect(localConflict.status).toBe(409);
+
+        const downstreamConflict = await createRelayApp().request(
+          "/api/github/webhook",
+          signedRawRequest(changedBody, deliveryId, "pull_request"),
+        );
+        expect(downstreamConflict.status).toBe(409);
+
+        const receiveCountBeforeCheckSuite = receive.mock.calls.length;
+        const checkSuiteBody = JSON.stringify({
+          action: "completed",
+          repository: {
+            id: 123,
+            full_name: "dallascrilley/shipwright",
+          },
+          installation: { id: 42 },
+          check_suite: { id: 91, head_sha: "a".repeat(40) },
+        });
+        const checkSuite = await app.request(
+          "/api/github/webhook",
+          signedRawRequest(
+            checkSuiteBody,
+            "delivery-real-check-suite",
+            "check_suite",
+          ),
+        );
+        expect(checkSuite.status).toBe(202);
+        expect(receive.mock.calls).toHaveLength(receiveCountBeforeCheckSuite);
+
+        const invalidSignature = await app.request("/api/github/webhook", {
+          ...signedRawRequest("{}", "delivery-invalid-real", "pull_request"),
+          headers: {
+            ...requestHeaders(),
+            "x-github-event": "pull_request",
+            "x-github-delivery": "delivery-invalid-real",
+            "x-hub-signature-256": `sha256=${"0".repeat(64)}`,
+          },
+        });
+        expect(invalidSignature.status).toBe(401);
+
+        const finalState = (await (
+          await fetch(`http://127.0.0.1:${port}/__test__/state`)
+        ).json()) as { delivery_count: number; counts: Record<string, number> };
+        expect(finalState).toEqual({
+          delivery_count: 2,
+          counts: { waiting_checks: 1 },
+        });
+
+        await stopSymphonyHarness(harness.child);
+        const stateDatabase = await readFile(harness.stateDb);
+        harness = undefined;
+        expect(
+          stateDatabase.includes("wks-779-raw-body-must-not-persist"),
+        ).toBe(false);
+      } finally {
+        if (harness) await stopSymphonyHarness(harness.child);
+        await rm(tempDirectory, { recursive: true, force: true });
+      }
+    });
+  },
+);
