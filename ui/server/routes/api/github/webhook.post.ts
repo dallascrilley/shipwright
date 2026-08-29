@@ -100,9 +100,11 @@ export function createGitHubWebhookRoute(
         return unavailable(event);
       }
 
-      if (githubEvent === "check_suite") {
+      if (
+        githubEvent === "check_suite" &&
+        relayDestination.kind === "private"
+      ) {
         if (
-          relayDestination.kind === "private" &&
           !(await relayOnce({
             destination: relayDestination,
             deliveryId,

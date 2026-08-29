@@ -205,6 +205,42 @@ describe("POST /api/github/webhook", () => {
     await expect(new Response(relayCall[1]?.body).text()).resolves.toBe(rawBody);
   });
 
+  test("keeps check suites rejected when the private relay is disabled", async () => {
+    const receive = vi.fn(async () => ({
+      status: "rejected" as const,
+      reason: "invalid_payload" as const,
+    }));
+    const relayFetch = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(null, { status: 204 }),
+    );
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => config,
+        receive,
+        relayFetch,
+      }),
+    );
+
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRawRequest(
+        '{"check_suite":{"id":91},"action":"completed"}\n',
+        "delivery-check-suite-disabled",
+        "check_suite",
+      ),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      status: "rejected",
+      reason: "invalid_payload",
+    });
+    expect(receive).toHaveBeenCalledTimes(1);
+    expect(relayFetch).not.toHaveBeenCalled();
+  });
+
   test("rejects an invalid signature before local or relay effects", async () => {
     const service = createService();
     await createEnabledAgent(service, [], "pull_request", "opened");

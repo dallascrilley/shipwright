@@ -82,6 +82,18 @@ return `400`; unavailable host configuration or durable state returns `503`.
 Keep the endpoint behind the existing HTTPS edge and never place the webhook
 secret in a URL, repository file, fixture, receipt, or command history.
 
+To hand off the PR feedback loop to a private Symphony receiver, optionally set
+`SHIPWRIGHT_SYMPHONY_WEBHOOK_URL` in the host environment. The value must be a
+credential-free `http` or `https` URL whose path is exactly
+`/webhooks/github` and whose host is loopback, private-address space, or a
+Tailscale `.ts.net` name. When configured, signed `pull_request` and
+`check_suite` deliveries are forwarded byte-for-byte with the original GitHub
+event, delivery, and signature headers. Pull-request deliveries still pass
+through Shipwright's local intake; check-suite deliveries are relay-only.
+Timeouts and non-2xx responses return `503` with `Retry-After: 10`, so GitHub
+can redeliver. The relay is disabled when the variable is unset, and it is not
+added to the public Caddy route.
+
 ## Observability
 
 The service exposes three unauthenticated loopback endpoints (added to the
