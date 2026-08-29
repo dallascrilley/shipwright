@@ -91,9 +91,10 @@ Tailscale `.ts.net` name. When configured, signed `pull_request` and
 `check_suite` deliveries are forwarded byte-for-byte with the original GitHub
 event, delivery, and signature headers. Pull-request deliveries still pass
 through Shipwright's local intake; check-suite deliveries are relay-only.
-Timeouts and non-2xx responses return `503` with `Retry-After: 10`, so GitHub
-can redeliver. The relay is disabled when the variable is unset, and it is not
-added to the public Caddy route.
+Only Symphony's `202` response is an accepted private-ingress receipt. Timeouts
+and every other response return `503` with `Retry-After: 10`, so GitHub can
+redeliver. The relay is disabled when the variable is unset, and it is not added
+to the public Caddy route.
 
 ## Observability
 
