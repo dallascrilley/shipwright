@@ -185,33 +185,42 @@ async function startSymphonyHarness(input: {
     stderr += String(chunk);
   });
   const lines = createInterface({ input: child.stdout! });
-  const line = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error(`Symphony harness start timed out: ${stderr}`)),
-      5_000,
-    );
-    lines.once("line", (value) => {
-      clearTimeout(timeout);
-      resolve(value);
+  try {
+    const line = await new Promise<string>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error(`Symphony harness start timed out: ${stderr}`)),
+        5_000,
+      );
+      lines.once("line", (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      });
+      child.once("exit", (code) => {
+        clearTimeout(timeout);
+        reject(new Error(`Symphony harness exited ${code}: ${stderr}`));
+      });
     });
-    child.once("exit", (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`Symphony harness exited ${code}: ${stderr}`));
-    });
-  });
-  lines.close();
-  const startup = JSON.parse(line) as { port: number; state_db: string };
-  expect(startup.port).toBe(input.port);
-  return { child, stateDb: startup.state_db };
+    lines.close();
+    const startup = JSON.parse(line) as { port: number; state_db: string };
+    expect(startup.port).toBe(input.port);
+    return { child, stateDb: startup.state_db };
+  } catch (error) {
+    lines.close();
+    await stopSymphonyHarness(child);
+    throw error;
+  }
 }
 
 async function stopSymphonyHarness(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null) return;
   child.kill("SIGTERM");
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
+    let timeout = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new Error("Symphony harness did not stop after SIGTERM"));
+      timeout = setTimeout(
+        () => reject(new Error("Symphony harness did not stop after SIGKILL")),
+        5_000,
+      );
     }, 5_000);
     child.once("exit", () => {
       clearTimeout(timeout);
@@ -407,25 +416,33 @@ describe("POST /api/github/webhook", () => {
         relayTimeoutMs: 5,
       }),
     );
-    const init = signedRequest(
-      {
-        action: "opened",
-        repository: { full_name: "dallascrilley/shipwright" },
+    const payload = {
+      action: "opened",
+      repository: { full_name: "dallascrilley/shipwright" },
+      number: 7,
+      pull_request: {
         number: 7,
-        pull_request: {
-          number: 7,
-          base: { ref: "main" },
-          draft: false,
-          labels: [],
-        },
+        base: { ref: "main" },
+        draft: false,
+        labels: [],
       },
-      "delivery-retry-relay",
-      "pull_request",
-    );
+    };
+    const init = signedRequest(payload, "delivery-retry-relay", "pull_request");
 
     const timedOut = await app.request("/api/github/webhook", init);
     expect(timedOut.status).toBe(503);
     expect(timedOut.headers.get("retry-after")).toBe("10");
+    const changedPayload = JSON.stringify({
+      ...payload,
+      action: "synchronize",
+    });
+    const conflict = await app.request(
+      "/api/github/webhook",
+      signedRawRequest(changedPayload, "delivery-retry-relay", "pull_request"),
+    );
+    expect(conflict.status).toBe(409);
+    expect(service.getSnapshot().queueEntries).toHaveLength(1);
+    expect(relayFetch).toHaveBeenCalledTimes(1);
     const rejected = await app.request("/api/github/webhook", init);
     expect(rejected.status).toBe(503);
     expect(rejected.headers.get("retry-after")).toBe("10");
@@ -1058,6 +1075,20 @@ describe.skipIf(!symphonyCheckout)(
         { encoding: "utf8" },
       ).trim();
       expect(actualSymphonyCommit).toBe(EXPECTED_SYMPHONY_COMMIT);
+      const executableTreeStatus = execFileSync(
+        "git",
+        [
+          "-C",
+          symphonyCheckout,
+          "status",
+          "--porcelain=v1",
+          "--untracked-files=all",
+          "--",
+          "src/symphony",
+        ],
+        { encoding: "utf8" },
+      );
+      expect(executableTreeStatus).toBe("");
 
       const tempDirectory = await mkdtemp(
         join(tmpdir(), "shipwright-wks-779-"),

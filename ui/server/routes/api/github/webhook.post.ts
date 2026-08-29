@@ -34,6 +34,20 @@ type ActiveRelay = {
   result: Promise<RelayResult>;
 };
 
+type RelayBinding = {
+  relayKey: string;
+  payloadSha256: string;
+};
+
+type RelayContext =
+  | { kind: "disabled" }
+  | { kind: "conflict" }
+  | {
+      kind: "bound";
+      binding: RelayBinding;
+      destination: Extract<GitHubWebhookRelayDestination, { kind: "private" }>;
+    };
+
 type RelayFetch = (
   input: string | URL | Request,
   init?: RequestInit,
@@ -72,7 +86,8 @@ export function createGitHubWebhookRoute(
       `GitHub webhook relay timeout must be between 1 and ${DEFAULT_RELAY_TIMEOUT_MS} milliseconds`,
     );
   }
-  const completedRelays = new Map<string, string>();
+  const relayPayloads = new Map<string, string>();
+  const completedRelays = new Set<string>();
   const activeRelays = new Map<string, ActiveRelay>();
 
   return defineEventHandler(async (event) => {
@@ -108,12 +123,18 @@ export function createGitHubWebhookRoute(
         return unavailable(event);
       }
 
-      if (
-        githubEvent === "check_suite" &&
-        relayDestination.kind === "private"
-      ) {
+      const relayContext = prepareRelay(
+        relayDestination,
+        githubEvent,
+        deliveryId,
+        rawBody,
+      );
+      if (relayContext.kind === "conflict") return conflict(event);
+
+      if (githubEvent === "check_suite" && relayContext.kind === "bound") {
         const relayResult = await relayOnce({
-          destination: relayDestination,
+          binding: relayContext.binding,
+          destination: relayContext.destination,
           deliveryId,
           githubEvent,
           signature,
@@ -136,12 +157,10 @@ export function createGitHubWebhookRoute(
       };
       const result = await receive(input, config);
       if (result.status === "accepted") {
-        if (
-          githubEvent === "pull_request" &&
-          relayDestination.kind === "private"
-        ) {
+        if (githubEvent === "pull_request" && relayContext.kind === "bound") {
           const relayResult = await relayOnce({
-            destination: relayDestination,
+            binding: relayContext.binding,
+            destination: relayContext.destination,
             deliveryId,
             githubEvent,
             signature,
@@ -168,20 +187,15 @@ export function createGitHubWebhookRoute(
   });
 
   async function relayOnce(input: {
+    binding: RelayBinding;
     destination: Extract<GitHubWebhookRelayDestination, { kind: "private" }>;
     deliveryId: string;
     githubEvent: string;
     signature: string;
     rawBody: ArrayBuffer;
   }): Promise<RelayResult> {
-    const relayKey = `${input.destination.url.href}\n${input.deliveryId}`;
-    const payloadSha256 = createHash("sha256")
-      .update(new Uint8Array(input.rawBody))
-      .digest("hex");
-    const completedPayloadSha256 = completedRelays.get(relayKey);
-    if (completedPayloadSha256 !== undefined) {
-      return completedPayloadSha256 === payloadSha256 ? "accepted" : "conflict";
-    }
+    const { relayKey, payloadSha256 } = input.binding;
+    if (completedRelays.has(relayKey)) return "accepted";
     const activeRelay = activeRelays.get(relayKey);
     if (activeRelay) {
       return activeRelay.payloadSha256 === payloadSha256
@@ -194,12 +208,50 @@ export function createGitHubWebhookRoute(
     try {
       const result = await attempt;
       if (result === "accepted") {
-        rememberCompletedRelay(relayKey, payloadSha256);
+        completedRelays.add(relayKey);
       }
       return result;
     } finally {
       activeRelays.delete(relayKey);
     }
+  }
+
+  function prepareRelay(
+    destination: GitHubWebhookRelayDestination,
+    githubEvent: string,
+    deliveryId: string,
+    rawBody: ArrayBuffer,
+  ): RelayContext {
+    if (
+      destination.kind !== "private" ||
+      (githubEvent !== "pull_request" && githubEvent !== "check_suite")
+    ) {
+      return { kind: "disabled" };
+    }
+    const binding = bindRelayDelivery(destination, deliveryId, rawBody);
+    return binding === null
+      ? { kind: "conflict" }
+      : { kind: "bound", binding, destination };
+  }
+
+  function bindRelayDelivery(
+    destination: Extract<GitHubWebhookRelayDestination, { kind: "private" }>,
+    deliveryId: string,
+    rawBody: ArrayBuffer,
+  ): RelayBinding | null {
+    const relayKey = `${destination.url.href}\n${deliveryId}`;
+    const payloadSha256 = createHash("sha256")
+      .update(new Uint8Array(rawBody))
+      .digest("hex");
+    const knownPayloadSha256 =
+      relayPayloads.get(relayKey) ?? activeRelays.get(relayKey)?.payloadSha256;
+    if (knownPayloadSha256 !== undefined) {
+      return knownPayloadSha256 === payloadSha256
+        ? { relayKey, payloadSha256 }
+        : null;
+    }
+    rememberRelayPayload(relayKey, payloadSha256);
+    return { relayKey, payloadSha256 };
   }
 
   async function sendRelay(input: {
@@ -227,14 +279,13 @@ export function createGitHubWebhookRoute(
     }
   }
 
-  function rememberCompletedRelay(
-    relayKey: string,
-    payloadSha256: string,
-  ): void {
-    completedRelays.set(relayKey, payloadSha256);
-    if (completedRelays.size <= MAX_COMPLETED_RELAY_DELIVERIES) return;
-    const oldestRelayKey = completedRelays.keys().next().value;
-    if (oldestRelayKey !== undefined) completedRelays.delete(oldestRelayKey);
+  function rememberRelayPayload(relayKey: string, payloadSha256: string): void {
+    relayPayloads.set(relayKey, payloadSha256);
+    if (relayPayloads.size <= MAX_COMPLETED_RELAY_DELIVERIES) return;
+    const oldestRelayKey = relayPayloads.keys().next().value;
+    if (oldestRelayKey === undefined) return;
+    relayPayloads.delete(oldestRelayKey);
+    completedRelays.delete(oldestRelayKey);
   }
 }
 
