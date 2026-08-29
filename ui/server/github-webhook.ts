@@ -1,6 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-import { isRepositoryAllowed } from "../../src/config/github.js";
+import {
+  isRepositoryAllowed,
+  type RepositoryScope,
+} from "../../src/config/github.js";
 import {
   targetMatchesScope,
   type ExecutionRequest,
@@ -15,6 +18,11 @@ import {
   type GitHubTriggerConditionReasonCode,
 } from "./github-trigger-conditions";
 import { QueueDispatcher } from "./queue-dispatcher";
+
+export {
+  parseGitHubWebhookRelayDestination,
+  type GitHubWebhookRelayDestination,
+} from "../../src/config/github.js";
 
 const DELIVERY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const ACTION_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,199}$/;
@@ -69,6 +77,78 @@ export type GitHubWebhookIngressOptions = {
   dispatcher: QueueDispatcher;
 } & ReviewAuthorization;
 
+export function hasValidGitHubWebhookSignature(
+  rawBody: string | Uint8Array,
+  signature: string,
+  webhookSecret: string,
+): boolean {
+  const expected = `sha256=${createHmac("sha256", webhookSecret)
+    .update(rawBody)
+    .digest("hex")}`;
+  const actualBytes = Buffer.from(signature);
+  const expectedBytes = Buffer.from(expected);
+  return (
+    actualBytes.byteLength === expectedBytes.byteLength &&
+    timingSafeEqual(actualBytes, expectedBytes)
+  );
+}
+
+export function isValidGitHubDeliveryId(value: string): boolean {
+  return DELIVERY_ID_PATTERN.test(value);
+}
+
+export type GitHubCheckSuiteRelayValidation =
+  | { kind: "valid" }
+  | { kind: "disallowed" }
+  | { kind: "invalid" };
+
+export function validateGitHubCheckSuiteRelayPayload(
+  rawBody: string,
+  scope: RepositoryScope,
+): GitHubCheckSuiteRelayValidation {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return { kind: "invalid" };
+  }
+  if (!isRecord(payload) || !ACTION_PATTERN.test(stringValue(payload.action))) {
+    return { kind: "invalid" };
+  }
+  const repository = parseGitHubWebhookRepository(payload);
+  if (repository === undefined) return { kind: "invalid" };
+  if (!isRepositoryAllowed(scope, repository)) return { kind: "disallowed" };
+  const checkSuite = payload.check_suite;
+  if (!isRecord(checkSuite) || !isPositiveSafeInteger(checkSuite.id)) {
+    return { kind: "invalid" };
+  }
+  return { kind: "valid" };
+}
+
+export function isGitHubWebhookRepositoryAllowed(
+  rawBody: string,
+  scope: RepositoryScope,
+): boolean {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return false;
+  }
+  if (!isRecord(payload)) return false;
+  const repository = parseGitHubWebhookRepository(payload);
+  return repository !== undefined && isRepositoryAllowed(scope, repository);
+}
+
+function parseGitHubWebhookRepository(
+  payload: Record<string, unknown>,
+): string | undefined {
+  const repository = isRecord(payload.repository)
+    ? stringValue(payload.repository.full_name).toLowerCase()
+    : "";
+  return REPOSITORY_PATTERN.test(repository) ? repository : undefined;
+}
+
 /**
  * Identity a submitted review must prove before it may enqueue repair. The
  * reviewer is pinned on its bot *user* identity because that is what the
@@ -92,10 +172,16 @@ export class GitHubWebhookIngress {
     if (Buffer.byteLength(input.rawBody, "utf8") > MAX_WEBHOOK_BODY_BYTES) {
       return { status: "rejected", reason: "invalid_payload" };
     }
-    if (!this.hasValidSignature(input.rawBody, input.signature)) {
+    if (
+      !hasValidGitHubWebhookSignature(
+        input.rawBody,
+        input.signature,
+        this.options.webhookSecret,
+      )
+    ) {
       return { status: "rejected", reason: "invalid_signature" };
     }
-    if (!DELIVERY_ID_PATTERN.test(input.deliveryId)) {
+    if (!isValidGitHubDeliveryId(input.deliveryId)) {
       return { status: "rejected", reason: "invalid_payload" };
     }
     const event = this.parseEvent(input.event);
@@ -189,18 +275,6 @@ export class GitHubWebhookIngress {
       matched += 1;
     }
     return acceptedResult(matched, decisions);
-  }
-
-  private hasValidSignature(rawBody: string, signature: string): boolean {
-    const expected = `sha256=${createHmac("sha256", this.options.webhookSecret)
-      .update(rawBody)
-      .digest("hex")}`;
-    const actualBytes = Buffer.from(signature);
-    const expectedBytes = Buffer.from(expected);
-    return (
-      actualBytes.byteLength === expectedBytes.byteLength &&
-      timingSafeEqual(actualBytes, expectedBytes)
-    );
   }
 
   private parseEvent(value: string): GitHubEvent | undefined {

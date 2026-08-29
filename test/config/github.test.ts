@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { isRepositoryAllowed, parseGitHubConfig } from "../../src/config/github.js";
+import {
+  isRepositoryAllowed,
+  parseGitHubConfig,
+  parseGitHubWebhookRelayDestination,
+  parseGitHubWebhookConfig,
+} from "../../src/config/github.js";
 
 const base = {
   GITHUB_APP_ID: "123",
@@ -43,6 +48,46 @@ describe("parseGitHubConfig", () => {
     });
     expect(config.allowedOwners).toEqual(new Set(["dallascrilleymartech"]));
     expect(config.allowedRepositories).toEqual(new Set(["dallascrilley/shipwright"]));
+  });
+});
+
+describe("parseGitHubWebhookConfig", () => {
+  const webhookBase = {
+    GITHUB_WEBHOOK_SECRET: "w".repeat(32),
+    GITHUB_REPOSITORY_ALLOWLIST: "dallascrilley/shipwright",
+  };
+
+  test("leaves the Symphony relay disabled when its URL is unset", () => {
+    expect(parseGitHubWebhookConfig(webhookBase).symphonyWebhookUrl).toBeUndefined();
+  });
+
+  test("normalizes the configured private Symphony webhook URL", () => {
+    expect(
+      parseGitHubWebhookConfig({
+        ...webhookBase,
+        SHIPWRIGHT_SYMPHONY_WEBHOOK_URL:
+          "  http://127.0.0.1:11100/webhooks/github  ",
+      }).symphonyWebhookUrl,
+    ).toBe("http://127.0.0.1:11100/webhooks/github");
+  });
+
+  test.each([
+    "not a URL",
+    "https://example.com/webhooks/github",
+    "http://private.internal/webhooks/github",
+  ])("rejects an invalid configured Symphony webhook URL: %s", (url) => {
+    expect(() =>
+      parseGitHubWebhookConfig({
+        ...webhookBase,
+        SHIPWRIGHT_SYMPHONY_WEBHOOK_URL: url,
+      }),
+    ).toThrow("SHIPWRIGHT_SYMPHONY_WEBHOOK_URL");
+  });
+
+  test("classifies an unset relay destination as disabled", () => {
+    expect(parseGitHubWebhookRelayDestination(undefined)).toEqual({
+      kind: "disabled",
+    });
   });
 });
 

@@ -135,12 +135,28 @@ export class QueueDispatcher {
         `Target is outside agent ${agent.agentId} repository scope.`,
       );
     }
-    const existing = snapshot.executions.find(
-      (execution) =>
-        execution.agentId === agent.agentId &&
-        execution.agentRevision === agentRevision &&
-        execution.idempotencyKey === input.idempotencyKey,
-    );
+    const existing = snapshot.executions.find((execution) => {
+      if (
+        execution.agentId !== agent.agentId ||
+        execution.source !== input.source
+      ) {
+        return false;
+      }
+      if (execution.idempotencyKey === input.idempotencyKey) return true;
+      if (input.source !== "github") return false;
+
+      const deliveryId = githubDeliveryId(input.idempotencyKey);
+      const existingDeliveryId = githubDeliveryId(execution.idempotencyKey);
+      return (
+        deliveryId !== undefined &&
+        deliveryId === existingDeliveryId &&
+        execution.triggerId !== undefined &&
+        !snapshot.triggers.some(
+          (trigger) =>
+            trigger.triggerId === execution.triggerId && trigger.enabled,
+        )
+      );
+    });
     if (existing) {
       return {
         execution: existing,
@@ -529,6 +545,17 @@ export class QueueDispatcher {
     const { lease: _lease, ...withoutLease } = entry;
     return withoutLease;
   }
+}
+
+/** Extract the delivery identity from the revision-scoped GitHub key. */
+function githubDeliveryId(idempotencyKey: string): string | undefined {
+  const prefix = "github:";
+  if (!idempotencyKey.startsWith(prefix)) return undefined;
+  const separator = idempotencyKey.lastIndexOf(":");
+  if (separator <= prefix.length) return undefined;
+  const revision = idempotencyKey.slice(separator + 1);
+  if (!/^[1-9]\d*$/.test(revision)) return undefined;
+  return idempotencyKey.slice(prefix.length, separator);
 }
 
 /** Queue entries carry no source; resolve it from the parent execution. */
