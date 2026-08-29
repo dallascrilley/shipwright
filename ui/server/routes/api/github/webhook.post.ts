@@ -228,7 +228,7 @@ export function createGitHubWebhookRoute(
         signal: AbortSignal.timeout(relayTimeoutMs),
       });
       await response.body?.cancel();
-      return response.ok;
+      return response.status === 202;
     } catch {
       return false;
     }
