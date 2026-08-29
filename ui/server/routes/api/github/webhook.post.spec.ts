@@ -134,7 +134,7 @@ describe("POST /api/github/webhook", () => {
     await createEnabledAgent(service, [], "pull_request", "opened");
     const relayFetch = vi.fn(
       async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response(null, { status: 204 }),
+        new Response(null, { status: 202 }),
     );
     const app = new H3().post(
       "/api/github/webhook",
@@ -178,7 +178,7 @@ describe("POST /api/github/webhook", () => {
     }));
     const relayFetch = vi.fn(
       async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response(null, { status: 204 }),
+        new Response(null, { status: 202 }),
     );
     const app = new H3().post(
       "/api/github/webhook",
@@ -277,7 +277,7 @@ describe("POST /api/github/webhook", () => {
     expect(service.getSnapshot().queueEntries).toHaveLength(0);
   });
 
-  test("returns retryable failures for a timeout and non-2xx before later success", async () => {
+  test("returns retryable failures for a timeout and non-202 receipt before later success", async () => {
     const service = createService();
     await createEnabledAgent(service, [], "pull_request", "opened");
     let attempt = 0;
@@ -296,7 +296,7 @@ describe("POST /api/github/webhook", () => {
           });
         }
         return Promise.resolve(
-          new Response(null, { status: attempt === 2 ? 502 : 204 }),
+          new Response(null, { status: attempt === 2 ? 204 : 202 }),
         );
       },
     );
@@ -344,7 +344,7 @@ describe("POST /api/github/webhook", () => {
     await createEnabledAgent(service, [], "pull_request", "opened");
     const relayFetch = vi.fn(
       async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response(null, { status: 204 }),
+        new Response(null, { status: 202 }),
     );
     const app = new H3().post(
       "/api/github/webhook",

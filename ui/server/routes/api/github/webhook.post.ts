@@ -203,7 +203,7 @@ export function createGitHubWebhookRoute(
         body: input.rawBody,
         signal: AbortSignal.timeout(relayTimeoutMs),
       });
-      return response.ok;
+      return response.status === 202;
     } catch {
       return false;
     }
