@@ -189,7 +189,7 @@ describe("POST /api/github/webhook", () => {
         relayFetch,
       }),
     );
-    const rawBody = `{"check_suite":{"id":91},"action":"completed"}\n`;
+    const rawBody = `{"check_suite":{"id":91},"action":"completed","repository":{"full_name":"dallascrilley/shipwright"}}\n`;
 
     const response = await app.request(
       "/api/github/webhook",
@@ -202,7 +202,51 @@ describe("POST /api/github/webhook", () => {
     const relayCall = relayFetch.mock.calls[0];
     expect(relayCall).toBeDefined();
     if (!relayCall) throw new Error("missing relay call");
+    const headers = new Headers(relayCall[1]?.headers);
+    expect(headers.get("content-type")).toBe("application/json");
+    expect(relayCall[1]?.redirect).toBe("error");
     await expect(new Response(relayCall[1]?.body).text()).resolves.toBe(rawBody);
+  });
+
+  test.each([
+    [
+      "malformed",
+      '{"check_suite":{"id":91},"action":"completed"}\n',
+      400,
+    ],
+    [
+      "disallowed repository",
+      '{"check_suite":{"id":91},"action":"completed","repository":{"full_name":"someoneelse/repository"}}\n',
+      202,
+    ],
+  ] as const)("does not relay %s check suites", async (_name, rawBody, status) => {
+    const receive = vi.fn();
+    const relayFetch = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(null, { status: 204 }),
+    );
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => config,
+        loadRelayDestination: () => privateRelayUrl,
+        receive,
+        relayFetch,
+      }),
+    );
+
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRawRequest(
+        rawBody,
+        `delivery-check-suite-${_name.replace(" ", "-")}`,
+        "check_suite",
+      ),
+    );
+
+    expect(response.status).toBe(status);
+    expect(receive).not.toHaveBeenCalled();
+    expect(relayFetch).not.toHaveBeenCalled();
   });
 
   test("keeps check suites rejected when the private relay is disabled", async () => {
@@ -337,6 +381,55 @@ describe("POST /api/github/webhook", () => {
 
     expect(relayFetch).toHaveBeenCalledTimes(3);
     expect(service.getSnapshot().queueEntries).toHaveLength(1);
+  });
+
+  test("cancels a successful relay response body", async () => {
+    const service = createService();
+    await createEnabledAgent(service, [], "pull_request", "opened");
+    let cancelled = false;
+    const relayFetch = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(
+          new ReadableStream({
+            cancel() {
+              cancelled = true;
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => config,
+        loadRelayDestination: () => privateRelayUrl,
+        receive: (input, loadedConfig) =>
+          service.receiveGitHubWebhook(input, loadedConfig),
+        relayFetch,
+      }),
+    );
+
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRequest(
+        {
+          action: "opened",
+          repository: { full_name: "dallascrilley/shipwright" },
+          number: 7,
+          pull_request: {
+            number: 7,
+            base: { ref: "main" },
+            draft: false,
+            labels: [],
+          },
+        },
+        "delivery-response-body",
+        "pull_request",
+      ),
+    );
+
+    expect(response.status).toBe(202);
+    expect(cancelled).toBe(true);
   });
 
   test("replays a successful pull request without duplicate local or relay work", async () => {

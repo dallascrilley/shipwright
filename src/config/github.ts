@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { isIP } from "node:net";
 
 export interface GitHubConfig {
   appId: number;
@@ -25,6 +26,39 @@ export interface GitHubWebhookConfig {
   expectedReviewerUserId?: number;
   /** When set, review deliveries must carry exactly this installation id. */
   installationId?: number;
+}
+
+export type GitHubWebhookRelayDestination =
+  | { kind: "disabled" }
+  | { kind: "invalid" }
+  | { kind: "private"; url: URL };
+
+export function parseGitHubWebhookRelayDestination(
+  value: unknown,
+): GitHubWebhookRelayDestination {
+  if (value === undefined || value === null || value === "") {
+    return { kind: "disabled" };
+  }
+  if (typeof value !== "string") return { kind: "invalid" };
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return { kind: "invalid" };
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.pathname !== "/webhooks/github" ||
+    url.search !== "" ||
+    url.hash !== "" ||
+    !isPrivateHostname(url)
+  ) {
+    return { kind: "invalid" };
+  }
+  return { kind: "private", url };
 }
 
 /** Exact `owner/repo` names plus owners granted an `owner/*` scope. */
@@ -94,12 +128,21 @@ export function parseGitHubWebhookConfig(
   const { repositories, owners } = parseAllowedRepositories(env);
   const expectedReviewerLogin =
     env.GITHUB_REVIEW_BOT_LOGIN?.trim().toLowerCase() || undefined;
+  const symphonyWebhookUrl =
+    env.SHIPWRIGHT_SYMPHONY_WEBHOOK_URL?.trim() || undefined;
+  if (
+    symphonyWebhookUrl !== undefined &&
+    parseGitHubWebhookRelayDestination(symphonyWebhookUrl).kind !== "private"
+  ) {
+    throw new Error(
+      "SHIPWRIGHT_SYMPHONY_WEBHOOK_URL must be a private /webhooks/github URL",
+    );
+  }
   return {
     webhookSecret,
     allowedRepositories: repositories,
     allowedOwners: owners,
-    symphonyWebhookUrl:
-      env.SHIPWRIGHT_SYMPHONY_WEBHOOK_URL?.trim() || undefined,
+    symphonyWebhookUrl,
     expectedReviewerLogin,
     expectedReviewerUserId: env.GITHUB_REVIEW_BOT_USER_ID
       ? parsePositiveInteger(
@@ -114,6 +157,44 @@ export function parseGitHubWebhookConfig(
         )
       : undefined,
   };
+}
+
+function isPrivateHostname(url: URL): boolean {
+  const hostname = url.hostname
+    .toLowerCase()
+    .replace(/^\[/, "")
+    .replace(/\]$/, "")
+    .replace(/\.$/, "");
+  if (hostname === "localhost") return true;
+
+  const ipVersion = isIP(hostname);
+  if (ipVersion === 4) return isPrivateIpv4(hostname);
+  if (ipVersion === 6) return isPrivateIpv6(hostname);
+  return url.protocol === "https:" && hostname.endsWith(".ts.net");
+}
+
+function isPrivateIpv4(hostname: string): boolean {
+  const [first = -1, second = -1] = hostname
+    .split(".")
+    .map((part) => Number(part));
+  return (
+    first === 10 ||
+    first === 127 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
+}
+
+function isPrivateIpv6(hostname: string): boolean {
+  if (hostname === "::1") return true;
+  const firstGroup = hostname.split(":", 1)[0] ?? "";
+  const prefix = Number.parseInt(firstGroup, 16);
+  return (
+    Number.isFinite(prefix) &&
+    ((prefix & 0xfe00) === 0xfc00 || (prefix & 0xffc0) === 0xfe80)
+  );
 }
 
 function parseAllowedRepositories(env: Environment): ParsedAllowlist {

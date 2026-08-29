@@ -1,7 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { isIP } from "node:net";
 
-import { isRepositoryAllowed } from "../../src/config/github.js";
+import {
+  isRepositoryAllowed,
+  type RepositoryScope,
+} from "../../src/config/github.js";
 import {
   targetMatchesScope,
   type ExecutionRequest,
@@ -17,16 +19,16 @@ import {
 } from "./github-trigger-conditions";
 import { QueueDispatcher } from "./queue-dispatcher";
 
+export {
+  parseGitHubWebhookRelayDestination,
+  type GitHubWebhookRelayDestination,
+} from "../../src/config/github.js";
+
 const DELIVERY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const ACTION_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,199}$/;
 const REPOSITORY_PATTERN = /^[^/\s]+\/[^/\s]+$/;
 export const MAX_WEBHOOK_BODY_BYTES = 1_048_576;
 export const MAX_WEBHOOK_DECISIONS = 20;
-
-export type GitHubWebhookRelayDestination =
-  | { kind: "disabled" }
-  | { kind: "invalid" }
-  | { kind: "private"; url: URL };
 
 type GitHubEvent = GithubTriggerEvent;
 
@@ -95,32 +97,34 @@ export function isValidGitHubDeliveryId(value: string): boolean {
   return DELIVERY_ID_PATTERN.test(value);
 }
 
-export function parseGitHubWebhookRelayDestination(
-  value: unknown,
-): GitHubWebhookRelayDestination {
-  if (value === undefined || value === null || value === "") {
-    return { kind: "disabled" };
-  }
-  if (typeof value !== "string") return { kind: "invalid" };
+export type GitHubCheckSuiteRelayValidation =
+  | { kind: "valid" }
+  | { kind: "disallowed" }
+  | { kind: "invalid" };
 
-  let url: URL;
+export function validateGitHubCheckSuiteRelayPayload(
+  rawBody: string,
+  scope: RepositoryScope,
+): GitHubCheckSuiteRelayValidation {
+  let payload: unknown;
   try {
-    url = new URL(value);
+    payload = JSON.parse(rawBody);
   } catch {
     return { kind: "invalid" };
   }
-  if (
-    (url.protocol !== "http:" && url.protocol !== "https:") ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.pathname !== "/webhooks/github" ||
-    url.search !== "" ||
-    url.hash !== "" ||
-    !isPrivateHostname(url)
-  ) {
+  if (!isRecord(payload) || !ACTION_PATTERN.test(stringValue(payload.action))) {
     return { kind: "invalid" };
   }
-  return { kind: "private", url };
+  const repository = isRecord(payload.repository)
+    ? stringValue(payload.repository.full_name).toLowerCase()
+    : "";
+  if (!REPOSITORY_PATTERN.test(repository)) return { kind: "invalid" };
+  if (!isRepositoryAllowed(scope, repository)) return { kind: "disallowed" };
+  const checkSuite = payload.check_suite;
+  if (!isRecord(checkSuite) || !isPositiveSafeInteger(checkSuite.id)) {
+    return { kind: "invalid" };
+  }
+  return { kind: "valid" };
 }
 
 /**
@@ -333,44 +337,6 @@ export class GitHubWebhookIngress {
       },
     };
   }
-}
-
-function isPrivateHostname(url: URL): boolean {
-  const hostname = url.hostname
-    .toLowerCase()
-    .replace(/^\[/, "")
-    .replace(/\]$/, "")
-    .replace(/\.$/, "");
-  if (hostname === "localhost") return true;
-
-  const ipVersion = isIP(hostname);
-  if (ipVersion === 4) return isPrivateIpv4(hostname);
-  if (ipVersion === 6) return isPrivateIpv6(hostname);
-  return url.protocol === "https:" && hostname.endsWith(".ts.net");
-}
-
-function isPrivateIpv4(hostname: string): boolean {
-  const [first = -1, second = -1] = hostname
-    .split(".")
-    .map((part) => Number(part));
-  return (
-    first === 10 ||
-    first === 127 ||
-    (first === 100 && second >= 64 && second <= 127) ||
-    (first === 169 && second === 254) ||
-    (first === 172 && second >= 16 && second <= 31) ||
-    (first === 192 && second === 168)
-  );
-}
-
-function isPrivateIpv6(hostname: string): boolean {
-  if (hostname === "::1") return true;
-  const firstGroup = hostname.split(":", 1)[0] ?? "";
-  const prefix = Number.parseInt(firstGroup, 16);
-  return (
-    Number.isFinite(prefix) &&
-    ((prefix & 0xfe00) === 0xfc00 || (prefix & 0xffc0) === 0xfe80)
-  );
 }
 
 function acceptedResult(

@@ -7,18 +7,19 @@ import {
 } from "h3";
 
 import {
+  parseGitHubWebhookRelayDestination,
   parseGitHubWebhookConfig,
   type GitHubWebhookConfig,
+  type GitHubWebhookRelayDestination,
 } from "../../../../../src/config/github.js";
 import { getAgentManagementService } from "../../../agent-management";
 import {
   MAX_WEBHOOK_BODY_BYTES,
   hasValidGitHubWebhookSignature,
   isValidGitHubDeliveryId,
-  parseGitHubWebhookRelayDestination,
+  validateGitHubCheckSuiteRelayPayload,
   type GitHubWebhookInput,
   type GitHubWebhookResult,
-  type GitHubWebhookRelayDestination,
 } from "../../../github-webhook";
 
 const DEFAULT_RELAY_TIMEOUT_MS = 5_000;
@@ -73,6 +74,7 @@ export function createGitHubWebhookRoute(
     const githubEvent = event.req.headers.get("x-github-event") ?? "";
     const deliveryId = event.req.headers.get("x-github-delivery") ?? "";
     const signature = event.req.headers.get("x-hub-signature-256") ?? "";
+    const contentType = event.req.headers.get("content-type");
 
     try {
       const config = loadConfig();
@@ -104,12 +106,25 @@ export function createGitHubWebhookRoute(
         githubEvent === "check_suite" &&
         relayDestination.kind === "private"
       ) {
+        const validation = validateGitHubCheckSuiteRelayPayload(
+          Buffer.from(rawBody).toString("utf8"),
+          config,
+        );
+        if (validation.kind === "invalid") {
+          setResponseStatus(event, 400);
+          return { status: "rejected", reason: "invalid_payload" };
+        }
+        if (validation.kind === "disallowed") {
+          setResponseStatus(event, 202);
+          return acceptedWithoutLocalIntake();
+        }
         if (
           !(await relayOnce({
             destination: relayDestination,
             deliveryId,
             githubEvent,
             signature,
+            contentType,
             rawBody,
           }))
         ) {
@@ -136,6 +151,7 @@ export function createGitHubWebhookRoute(
             deliveryId,
             githubEvent,
             signature,
+            contentType,
             rawBody,
           }))
         ) {
@@ -164,6 +180,7 @@ export function createGitHubWebhookRoute(
     deliveryId: string;
     githubEvent: string;
     signature: string;
+    contentType: string | null;
     rawBody: ArrayBuffer;
   }): Promise<boolean> {
     const relayKey = `${input.destination.url.href}\n${input.deliveryId}`;
@@ -190,6 +207,7 @@ export function createGitHubWebhookRoute(
     deliveryId: string;
     githubEvent: string;
     signature: string;
+    contentType: string | null;
     rawBody: ArrayBuffer;
   }): Promise<boolean> {
     try {
@@ -199,10 +217,15 @@ export function createGitHubWebhookRoute(
           "X-GitHub-Delivery": input.deliveryId,
           "X-GitHub-Event": input.githubEvent,
           "X-Hub-Signature-256": input.signature,
+          ...(input.contentType === null
+            ? {}
+            : { "Content-Type": input.contentType }),
         },
         body: input.rawBody,
+        redirect: "error",
         signal: AbortSignal.timeout(relayTimeoutMs),
       });
+      await response.body?.cancel();
       return response.ok;
     } catch {
       return false;
