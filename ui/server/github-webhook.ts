@@ -115,16 +115,38 @@ export function validateGitHubCheckSuiteRelayPayload(
   if (!isRecord(payload) || !ACTION_PATTERN.test(stringValue(payload.action))) {
     return { kind: "invalid" };
   }
-  const repository = isRecord(payload.repository)
-    ? stringValue(payload.repository.full_name).toLowerCase()
-    : "";
-  if (!REPOSITORY_PATTERN.test(repository)) return { kind: "invalid" };
+  const repository = parseGitHubWebhookRepository(payload);
+  if (repository === undefined) return { kind: "invalid" };
   if (!isRepositoryAllowed(scope, repository)) return { kind: "disallowed" };
   const checkSuite = payload.check_suite;
   if (!isRecord(checkSuite) || !isPositiveSafeInteger(checkSuite.id)) {
     return { kind: "invalid" };
   }
   return { kind: "valid" };
+}
+
+export function isGitHubWebhookRepositoryAllowed(
+  rawBody: string,
+  scope: RepositoryScope,
+): boolean {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return false;
+  }
+  if (!isRecord(payload)) return false;
+  const repository = parseGitHubWebhookRepository(payload);
+  return repository !== undefined && isRepositoryAllowed(scope, repository);
+}
+
+function parseGitHubWebhookRepository(
+  payload: Record<string, unknown>,
+): string | undefined {
+  const repository = isRecord(payload.repository)
+    ? stringValue(payload.repository.full_name).toLowerCase()
+    : "";
+  return REPOSITORY_PATTERN.test(repository) ? repository : undefined;
 }
 
 /**

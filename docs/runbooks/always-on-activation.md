@@ -80,7 +80,7 @@ Advance **one stage at a time**. Do not skip to `publish_allowed` in this runboo
    - URL: `https://<SHIPWRIGHT_PUBLIC_HOST>/api/github/webhook`
    - Content type: `application/json`
    - Secret: same as `GITHUB_WEBHOOK_SECRET`
-   - Events: **Issues**, **Pull requests**, and **Pull request reviews**
+   - Events: **Issues**, **Pull requests**, **Pull request reviews**, and **Check suites**
 
    The public edge accepts only `POST /api/github/webhook`. It returns `404`
    for the console, health, metrics, and every other path or method.

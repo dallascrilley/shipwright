@@ -16,6 +16,7 @@ import { getAgentManagementService } from "../../../agent-management";
 import {
   MAX_WEBHOOK_BODY_BYTES,
   hasValidGitHubWebhookSignature,
+  isGitHubWebhookRepositoryAllowed,
   isValidGitHubDeliveryId,
   validateGitHubCheckSuiteRelayPayload,
   type GitHubWebhookInput,
@@ -146,6 +147,7 @@ export function createGitHubWebhookRoute(
         if (
           githubEvent === "pull_request" &&
           relayDestination.kind === "private" &&
+          isGitHubWebhookRepositoryAllowed(input.rawBody, config) &&
           !(await relayOnce({
             destination: relayDestination,
             deliveryId,

@@ -208,6 +208,52 @@ describe("POST /api/github/webhook", () => {
     await expect(new Response(relayCall[1]?.body).text()).resolves.toBe(rawBody);
   });
 
+  test("does not relay pull requests from a disallowed repository", async () => {
+    const receive = vi.fn(async () => ({
+      status: "accepted" as const,
+      matched: 0,
+      conditionFiltered: 0,
+      decisions: [],
+      decisionsTruncated: 0,
+    }));
+    const relayFetch = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(null, { status: 204 }),
+    );
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => config,
+        loadRelayDestination: () => privateRelayUrl,
+        receive,
+        relayFetch,
+      }),
+    );
+
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRequest(
+        {
+          action: "opened",
+          repository: { full_name: "someoneelse/repository" },
+          number: 7,
+          pull_request: {
+            number: 7,
+            base: { ref: "main" },
+            draft: false,
+            labels: [],
+          },
+        },
+        "delivery-disallowed-pr",
+        "pull_request",
+      ),
+    );
+
+    expect(response.status).toBe(202);
+    expect(receive).toHaveBeenCalledTimes(1);
+    expect(relayFetch).not.toHaveBeenCalled();
+  });
+
   test.each([
     [
       "malformed",

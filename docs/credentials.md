@@ -20,6 +20,7 @@ Repository permissions, and nothing beyond them:
 | Issues | Read | Read the issue body that becomes the task |
 | Contents | Read and write | Create the branch and push the commit |
 | Pull requests | Read and write | Open the pull request and reply to review threads |
+| Checks | Read | Receive check_suite webhook deliveries for private relay |
 
 Do not grant Actions, Workflows, Administration, Secrets, Members, or any
 organization-level permission. Shipwright never needs them, and

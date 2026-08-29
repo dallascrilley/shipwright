@@ -62,7 +62,7 @@ Configure the GitHub App webhook with:
 - URL: `https://<SHIPWRIGHT_PUBLIC_HOST>/api/github/webhook`
 - Content type: `application/json`
 - Secret: the same value stored as `GITHUB_WEBHOOK_SECRET`
-- Events: Issues, Pull requests, and Pull request reviews
+- Events: Issues, Pull requests, Pull request reviews, and Check suites
 
 Pull-request review triggers additionally require `GITHUB_REVIEW_BOT_LOGIN`, the
 exact login of the reviewing App's bot user (for example `my-reviewer[bot]`).
