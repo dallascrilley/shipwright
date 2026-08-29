@@ -5,17 +5,20 @@
 # /etc/shipwright/shipwright.env. Caddy obtains and renews a Let's Encrypt
 # certificate automatically for that name.
 #
-# The Shipwright service stays bound to loopback (HOST=127.0.0.1); Caddy is the
-# only public listener. Application access control remains Better Auth.
+# The Shipwright service stays bound to loopback (HOST=127.0.0.1). Caddy is the
+# only public listener, and it forwards only the signed GitHub webhook route.
 
 %%PUBLIC_HOST%% {
-	# The observability endpoints are unauthenticated by design for loopback
-	# systemd probes and tailnet metric scrapers (see server/plugins/auth.ts
-	# publicPaths). They must never be reachable from the public internet, so
-	# the edge answers 404 and scrapers keep using the loopback/tailnet address.
-	@observability path /healthz /readyz /metrics /metrics/*
-	respond @observability 404
+	@webhook {
+		method POST
+		path /api/github/webhook
+	}
 
-	encode zstd gzip
-	reverse_proxy 127.0.0.1:4317
+	handle @webhook {
+		reverse_proxy 127.0.0.1:4317
+	}
+
+	handle {
+		respond 404
+	}
 }

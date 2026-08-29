@@ -82,6 +82,9 @@ Advance **one stage at a time**. Do not skip to `publish_allowed` in this runboo
    - Secret: same as `GITHUB_WEBHOOK_SECRET`
    - Events: **Issues**, **Pull requests**, and **Pull request reviews**
 
+   The public edge accepts only `POST /api/github/webhook`. It returns `404`
+   for the console, health, metrics, and every other path or method.
+
    To use review triggers, also pin the one reviewer identity you accept.
    Shipwright rejects every review delivery while this is unset:
 
