@@ -85,11 +85,17 @@ describe("Shipwright Docker deployment modes", () => {
   test("bootstraps and deploys rootless Docker without host daemon membership", () => {
     const bootstrap = readFileSync(resolve(repoRoot, "deploy", "bootstrap-host.sh"), "utf8");
     const deploy = readFileSync(resolve(repoRoot, "deploy", "deploy.sh"), "utf8");
+    const docs = readFileSync(resolve(repoRoot, "docs", "deployment.md"), "utf8");
     const example = readFileSync(resolve(repoRoot, "deploy", "shipwright.env.example"), "utf8");
 
     expect(bootstrap).toContain("dockerd-rootless-setuptool.sh");
     expect(bootstrap).toContain("docker-ce-rootless-extras");
     expect(bootstrap).toContain("download.docker.com/linux/ubuntu");
+    expect(bootstrap).toContain(". /etc/os-release");
+    expect(bootstrap).toContain('docker_arch="$(dpkg --print-architecture)"');
+    expect(bootstrap).toContain(
+      "Rootless Docker extras require Ubuntu Noble amd64",
+    );
     expect(bootstrap).toContain("flock 9");
     expect(bootstrap).toContain("remove_docker_group");
     expect(bootstrap).toContain("loginctl enable-linger shipwright");
@@ -108,6 +114,21 @@ describe("Shipwright Docker deployment modes", () => {
       usermod -aG docker shipwright`,
     );
     expect(deploy).toContain("loginctl disable-linger shipwright");
+    expect(docs).toContain("Ubuntu 24.04 Noble on amd64");
     expect(example).toContain("SHIPWRIGHT_DOCKER_MODE=rootful");
-});
+  });
+
+  test("rejects unsupported rootless extras platforms before repo setup", () => {
+    const bootstrap = readFileSync(resolve(repoRoot, "deploy", "bootstrap-host.sh"), "utf8");
+    const platformGate = bootstrap.indexOf(
+      'if [[ "${ID:-}" != ubuntu || "${VERSION_CODENAME:-}" != noble || "$docker_arch" != amd64 ]]; then',
+    );
+    const repoSetup = bootstrap.indexOf("install -d -m 0755 /etc/apt/keyrings");
+
+    expect(platformGate).toBeGreaterThanOrEqual(0);
+    expect(repoSetup).toBeGreaterThan(platformGate);
+    expect(bootstrap).toContain(
+      "Rootless Docker extras require Ubuntu Noble amd64",
+    );
+  });
 });

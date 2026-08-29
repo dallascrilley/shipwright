@@ -1,11 +1,13 @@
 # Shipwright Deployment
 
-Shipwright runs on Ubuntu 24.04 x86. Use rootful Docker only on a dedicated VM.
-On a shared host, use rootless Docker under the `shipwright` account so the
-sandbox runner cannot control the host daemon or another user's containers. The
-application binds to loopback, and Agent Native authentication remains enabled
-in production. Access is either Tailscale-only or a webhook-only HTTPS edge
-fronted by Caddy.
+Shipwright's supported deployment target is Ubuntu 24.04 Noble on amd64
+(x86_64). The rootless bootstrap rejects other distributions, Ubuntu releases,
+and architectures before configuring Docker's rootless-extras repository. Use
+rootful Docker only on a dedicated VM. On a shared host, use rootless Docker
+under the `shipwright` account so the sandbox runner cannot control the host
+daemon or another user's containers. The application binds to loopback, and
+Agent Native authentication remains enabled in production. Access is either
+Tailscale-only or a webhook-only HTTPS edge fronted by Caddy.
 
 ## Dedicated-host target and cost
 

@@ -52,9 +52,17 @@ else
   if ! command -v dockerd-rootless-setuptool.sh >/dev/null 2>&1; then
     # dockerd-rootless-setuptool.sh ships in docker-ce-rootless-extras, which
     # Ubuntu does not publish, so configure Docker's own repository for it.
+    . /etc/os-release
+    docker_arch="$(dpkg --print-architecture)"
+    if [[ "${ID:-}" != ubuntu || "${VERSION_CODENAME:-}" != noble || "$docker_arch" != amd64 ]]; then
+      printf 'Rootless Docker extras require Ubuntu Noble amd64 (found %s %s %s).\n' \
+        "${ID:-unknown}" "${VERSION_CODENAME:-unknown}" "$docker_arch" >&2
+      exit 1
+    fi
     install -d -m 0755 /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-    printf 'deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable\n' \
+    printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n' \
+      "$docker_arch" "$VERSION_CODENAME" \
       > /etc/apt/sources.list.d/docker.list
     apt-get update
     apt-get install -y docker-ce-rootless-extras
