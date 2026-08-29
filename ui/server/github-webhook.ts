@@ -269,7 +269,7 @@ export class GitHubWebhookIngress {
         agentId: selected.agentId,
         triggerId: selected.triggerId,
         source: "github",
-        idempotencyKey: `github:${input.deliveryId}`,
+        idempotencyKey: `github:${input.deliveryId}:${selected.agentRevision}`,
         target: webhook.target,
       });
       matched += 1;

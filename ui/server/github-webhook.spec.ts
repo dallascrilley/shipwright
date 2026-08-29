@@ -233,6 +233,61 @@ describe("GitHubWebhookIngress", () => {
     expect(fixture.dispatcher.list()).toHaveLength(1);
   });
 
+  test("keeps matching triggers on distinct revisions independent for one delivery", async () => {
+    const fixture = createEnabledIssueTrigger();
+    const updatedAgent = fixture.controlPlane.updateAgent(
+      fixture.agent.agentId,
+      fixture.agent.currentRevision,
+      {
+        name: "Issue triage v2",
+        instructions: "Triage inbound issues as a dry run with the current rules.",
+        actionPreset: "fix_issue",
+        skillId: "",
+        allowedTools: ["github", "sandbox"],
+        targetScope: {
+          repository: "dallascrilley/shipwright",
+          branch: "main",
+        },
+        verification: { presetId: "bun-test" },
+        publicationPolicy: "dry_run",
+      },
+    );
+    const second = fixture.controlPlane.createTrigger({
+      agentId: fixture.agent.agentId,
+      expectedRevision: updatedAgent.currentRevision,
+      kind: "github",
+      config: { event: "issues", actions: ["opened"], conditions: [] },
+    });
+    const input = await signedInput(
+      "issues",
+      "delivery-distinct-revisions",
+      issuePayload,
+    );
+
+    await expect(fixture.ingress.receive(input)).resolves.toMatchObject({
+      status: "accepted",
+      matched: 2,
+    });
+    expect(fixture.dispatcher.list()).toHaveLength(2);
+    expect(fixture.store.load().executions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          agentRevision: 1,
+          triggerId: fixture.trigger.triggerId,
+          idempotencyKey: "github:delivery-distinct-revisions:1",
+        }),
+        expect.objectContaining({
+          agentRevision: 2,
+          triggerId: second.triggerId,
+          idempotencyKey: "github:delivery-distinct-revisions:2",
+        }),
+      ]),
+    );
+
+    await fixture.ingress.receive(input);
+    expect(fixture.dispatcher.list()).toHaveLength(2);
+  });
+
   test("ignores disabled agents and unmatched repositories without queueing", async () => {
     const disabled = createFixture();
     const agent = disabled.controlPlane.createAgent({
@@ -335,7 +390,7 @@ describe("GitHubWebhookIngress", () => {
     expect(execution).toMatchObject({
       agentRevision: fixture.trigger.agentRevision,
       source: "github",
-      idempotencyKey: "github:delivery-review-1",
+      idempotencyKey: "github:delivery-review-1:1",
       target: {
         kind: "pull",
         owner: "dallascrilley",

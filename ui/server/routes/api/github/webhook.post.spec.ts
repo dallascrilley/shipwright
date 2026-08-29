@@ -605,7 +605,7 @@ describe("POST /api/github/webhook", () => {
     expect((await app.request("/api/github/webhook", init)).status).toBe(202);
     expect(service.getSnapshot().queueEntries).toHaveLength(1);
     expect(service.getSnapshot().executions[0]?.idempotencyKey).toBe(
-      "github:delivery-1",
+      "github:delivery-1:1",
     );
   });
 
@@ -649,7 +649,7 @@ describe("POST /api/github/webhook", () => {
     expect(service.getSnapshot().queueEntries).toHaveLength(1);
     expect(service.getSnapshot().executions[0]).toMatchObject({
       agentRevision: trigger.agentRevision,
-      idempotencyKey: "github:delivery-review-route",
+      idempotencyKey: "github:delivery-review-route:1",
       target: { kind: "pull", number: 7 },
     });
     expect(service.getSnapshot().revisions[0]?.draft.publicationPolicy).toBe(
