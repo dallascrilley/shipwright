@@ -405,13 +405,15 @@ describe("POST /api/github/webhook", () => {
         );
       },
     );
+    const receive = vi.fn((input, loadedConfig) =>
+      service.receiveGitHubWebhook(input, loadedConfig),
+    );
     const app = new H3().post(
       "/api/github/webhook",
       createGitHubWebhookRoute({
         loadConfig: () => config,
         loadRelayDestination: () => privateRelayUrl,
-        receive: (input, loadedConfig) =>
-          service.receiveGitHubWebhook(input, loadedConfig),
+        receive,
         relayFetch,
         relayTimeoutMs: 5,
       }),
@@ -441,6 +443,7 @@ describe("POST /api/github/webhook", () => {
       signedRawRequest(changedPayload, "delivery-retry-relay", "pull_request"),
     );
     expect(conflict.status).toBe(409);
+    expect(receive).toHaveBeenCalledTimes(1);
     expect(service.getSnapshot().queueEntries).toHaveLength(1);
     expect(relayFetch).toHaveBeenCalledTimes(1);
     const rejected = await app.request("/api/github/webhook", init);
