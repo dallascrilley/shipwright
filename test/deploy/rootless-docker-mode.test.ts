@@ -94,6 +94,13 @@ describe("Shipwright Docker deployment modes", () => {
     expect(bootstrap).toContain(". /etc/os-release");
     expect(bootstrap).toContain('docker_arch="$(dpkg --print-architecture)"');
     expect(bootstrap).toContain(
+      "printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\\n' \\",
+    );
+    expect(bootstrap).toContain('      "$docker_arch" "$VERSION_CODENAME" \\');
+    expect(bootstrap).not.toContain(
+      "https://download.docker.com/linux/ubuntu noble stable",
+    );
+    expect(bootstrap).toContain(
       "Rootless Docker extras require Ubuntu Noble amd64",
     );
     expect(bootstrap).toContain("flock 9");
@@ -118,15 +125,15 @@ describe("Shipwright Docker deployment modes", () => {
     expect(example).toContain("SHIPWRIGHT_DOCKER_MODE=rootful");
   });
 
-  test("rejects unsupported rootless extras platforms before repo setup", () => {
+  test("rejects unsupported rootless extras platforms before package setup", () => {
     const bootstrap = readFileSync(resolve(repoRoot, "deploy", "bootstrap-host.sh"), "utf8");
     const platformGate = bootstrap.indexOf(
       'if [[ "${ID:-}" != ubuntu || "${VERSION_CODENAME:-}" != noble || "$docker_arch" != amd64 ]]; then',
     );
-    const repoSetup = bootstrap.indexOf("install -d -m 0755 /etc/apt/keyrings");
+    const packageSetup = bootstrap.indexOf("apt-get update");
 
     expect(platformGate).toBeGreaterThanOrEqual(0);
-    expect(repoSetup).toBeGreaterThan(platformGate);
+    expect(packageSetup).toBeGreaterThan(platformGate);
     expect(bootstrap).toContain(
       "Rootless Docker extras require Ubuntu Noble amd64",
     );
