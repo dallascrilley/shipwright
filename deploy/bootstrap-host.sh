@@ -32,6 +32,16 @@ case "$docker_mode" in
     ;;
 esac
 
+if [[ "$docker_mode" == rootless ]]; then
+  . /etc/os-release
+  docker_arch="$(dpkg --print-architecture)"
+  if [[ "${ID:-}" != ubuntu || "${VERSION_CODENAME:-}" != noble || "$docker_arch" != amd64 ]]; then
+    printf 'Rootless Docker extras require Ubuntu Noble amd64 (found %s %s %s).\n' \
+      "${ID:-unknown}" "${VERSION_CODENAME:-unknown}" "$docker_arch" >&2
+    exit 1
+  fi
+fi
+
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y build-essential ca-certificates curl git python3 rsync
@@ -52,13 +62,6 @@ else
   if ! command -v dockerd-rootless-setuptool.sh >/dev/null 2>&1; then
     # dockerd-rootless-setuptool.sh ships in docker-ce-rootless-extras, which
     # Ubuntu does not publish, so configure Docker's own repository for it.
-    . /etc/os-release
-    docker_arch="$(dpkg --print-architecture)"
-    if [[ "${ID:-}" != ubuntu || "${VERSION_CODENAME:-}" != noble || "$docker_arch" != amd64 ]]; then
-      printf 'Rootless Docker extras require Ubuntu Noble amd64 (found %s %s %s).\n' \
-        "${ID:-unknown}" "${VERSION_CODENAME:-unknown}" "$docker_arch" >&2
-      exit 1
-    fi
     install -d -m 0755 /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
     printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n' \
