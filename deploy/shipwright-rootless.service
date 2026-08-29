@@ -2,7 +2,7 @@
 Description=Shipwright GitHub issue operator
 After=shipwright-docker.service network-online.target
 Wants=network-online.target
-Requires=shipwright-docker.service
+BindsTo=shipwright-docker.service
 
 [Service]
 Type=simple
@@ -11,7 +11,7 @@ Group=shipwright
 WorkingDirectory=/opt/shipwright/current/ui
 Environment=NODE_ENV=production
 EnvironmentFile=/etc/shipwright/shipwright.env
-ExecStart=/usr/local/bin/mise exec -- pnpm start
+ExecStartPre=/bin/sh -c 'socket=/run/user/%%SHIPWRIGHT_UID%%/docker.sock; docker_ping() { curl --fail --silent --show-error --connect-timeout 1 --max-time 2 --unix-socket "$socket" http://localhost/_ping >/dev/null; }; for attempt in $(seq 1 30); do test -S "$socket" && docker_ping && exit 0; sleep 1; done; exit 1'
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=40s

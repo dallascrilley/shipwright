@@ -41,12 +41,15 @@ describe("Shipwright Docker deployment modes", () => {
   test("renders a rootless unit bound only to the Shipwright socket", () => {
     const result = renderService("rootless", "1001");
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Requires=shipwright-docker.service");
+    expect(result.stdout).toContain("BindsTo=shipwright-docker.service");
     expect(result.stdout).toContain("After=shipwright-docker.service");
+    expect(result.stdout).toContain(
+      "ExecStartPre=/bin/sh -c 'socket=/run/user/1001/docker.sock; docker_ping() { curl --fail --silent --show-error --connect-timeout 1 --max-time 2 --unix-socket \"$socket\" http://localhost/_ping >/dev/null; }; for attempt in $(seq 1 30); do test -S \"$socket\" && docker_ping && exit 0; sleep 1; done; exit 1'",
+    );
     expect(result.stdout).toContain(
       "BindReadOnlyPaths=/run/user/1001/docker.sock:/var/run/docker.sock",
     );
+    expect(result.stdout).not.toContain("Requires=shipwright-docker.service");
     expect(result.stdout).not.toContain("Requires=docker.service");
     expect(result.stdout).not.toContain("SupplementaryGroups=docker");
     expect(result.stdout).not.toContain("%%SHIPWRIGHT_UID%%");
@@ -55,12 +58,19 @@ describe("Shipwright Docker deployment modes", () => {
   test("renders a root wrapper for the Shipwright user Docker service", () => {
     const result = renderService("rootless-docker", "1001");
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Requires=user@1001.service");
     expect(result.stdout).toContain(
       "systemctl --user --machine=shipwright@ start docker.service",
     );
-    expect(result.stdout).toContain("test -S /run/user/1001/docker.sock");
+    expect(result.stdout).toContain(
+      "socket=/run/user/1001/docker.sock; docker_ping()",
+    );
+    expect(result.stdout).toContain(
+      "while docker_ping; do sleep 5; done",
+    );
+    expect(result.stdout).toContain(
+      "curl --fail --silent --show-error --connect-timeout 1 --max-time 2 --unix-socket \"$socket\" http://localhost/_ping",
+    );
+    expect(result.stdout).not.toContain("Type=oneshot");
     expect(result.stdout).not.toContain("%%SHIPWRIGHT_UID%%");
   });
 
@@ -75,9 +85,17 @@ describe("Shipwright Docker deployment modes", () => {
     const example = readFileSync(resolve(repoRoot, "deploy", "shipwright.env.example"), "utf8");
 
     expect(bootstrap).toContain("dockerd-rootless-setuptool.sh");
+    expect(bootstrap).toContain("docker-ce-rootless-extras");
+    expect(bootstrap).toContain("download.docker.com/linux/ubuntu");
+    expect(bootstrap).toContain("flock 9");
+    expect(bootstrap).toContain("remove_docker_group");
     expect(bootstrap).toContain("loginctl enable-linger shipwright");
     expect(deploy).toContain("SHIPWRIGHT_DOCKER_MODE");
     expect(deploy).toContain('DOCKER_HOST="unix://$docker_socket"');
+    expect(deploy).toContain("previous_docker_unit");
+    expect(deploy).toContain("previous_used_rootless");
+    expect(deploy).toContain("systemctl disable --now shipwright-docker");
+    expect(deploy).toContain("loginctl disable-linger shipwright");
     expect(example).toContain("SHIPWRIGHT_DOCKER_MODE=rootful");
-  });
+});
 });
