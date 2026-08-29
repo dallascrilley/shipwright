@@ -1,8 +1,13 @@
 # Shipwright Deployment
 
-Shipwright runs on a dedicated Ubuntu 24.04 x86 VM. It is not placed on a shared Docker host because its sandbox runner has Docker daemon authority. The application binds to loopback and Agent Native authentication remains enabled in production. Access is either Tailscale-only (default) or a public HTTPS edge fronted by Caddy; in both cases the service itself is never bound to a public interface.
+Shipwright runs on Ubuntu 24.04 x86. Use rootful Docker only on a dedicated VM.
+On a shared host, use rootless Docker under the `shipwright` account so the
+sandbox runner cannot control the host daemon or another user's containers. The
+application binds to loopback, and Agent Native authentication remains enabled
+in production. Access is either Tailscale-only or a webhook-only HTTPS edge
+fronted by Caddy.
 
-## Target and cost
+## Dedicated-host target and cost
 
 - Provider: Hetzner Cloud
 - Location: Helsinki (`hel1`)
@@ -20,8 +25,14 @@ Shipwright runs on a dedicated Ubuntu 24.04 x86 VM. It is not placed on a shared
 | `/etc/shipwright/shipwright.env` | Root-owned, group-readable production environment |
 | `/etc/shipwright/github-app.pem` | Root-owned, group-readable GitHub App private key |
 | `/var/lib/shipwright` | Agent Native database, run registry, receipts, and service home |
+| `/run/user/<shipwright-uid>/docker.sock` | Rootless Docker socket in shared-host mode |
 
-The systemd service runs as the unprivileged `shipwright` account with Docker group membership. This membership is root-equivalent on the dedicated VM; no unrelated workloads belong on the host.
+`SHIPWRIGHT_DOCKER_MODE=rootful` adds the `shipwright` account to the Docker
+group. Docker group membership is root-equivalent, so no unrelated workloads
+belong on that host. `SHIPWRIGHT_DOCKER_MODE=rootless` creates a user Docker
+service and does not grant Docker group membership. The Shipwright systemd unit
+maps only the `shipwright` user's socket to `/var/run/docker.sock` inside the
+service mount namespace because the pinned sandbox provider uses that path.
 
 ## Agent queue status
 
@@ -120,15 +131,33 @@ HTTP 200 after the service restarts.
 
 ## Provision
 
-Create an Ubuntu 24.04 x86 server. Public HTTP/HTTPS ports are not required. The production host is intended to be Tailscale-only: the cloud firewall may intentionally have **no public SSH rule**, so `ssh root@PUBLIC_IP` can time out by design. Bootstrap and break-glass access use Tailscale SSH (or a temporary source-IP-restricted SSH rule).
+Use an Ubuntu 24.04 x86 host. Public HTTP and HTTPS ports are not required for
+private-only operation. The cloud firewall may have no public SSH rule, so
+`ssh root@PUBLIC_IP` can time out by design. Use Tailscale SSH for bootstrap and
+break-glass access.
 
-The deploy command bootstraps Docker, mise, pinned runtimes, Tailscale, the service user, and persistent directories before uploading a release:
+Before the first shared-host deploy, install Docker's
+`docker-ce-rootless-extras` package and set this host-local value:
+
+```dotenv
+SHIPWRIGHT_DOCKER_MODE=rootless
+```
+
+The default is `rootful`. The deploy command reads the mode from
+`/etc/shipwright/shipwright.env`, bootstraps the matching Docker service, and
+then uploads the release:
 
 ```sh
 deploy/deploy.sh root@TAILSCALE_HOSTNAME_OR_IP
 ```
 
-The command refuses a dirty checkout, uploads the exact current commit to a new release directory, installs locked dependencies, pulls the sandbox image by immutable SHA-256 digest, provisions Bun 1.3.14 from an immutable `oven/bun` image into the service user's tool cache, validates the full GitHub/model configuration as the service user, builds on the Linux host, atomically moves the `current` symlink, starts the service, and waits for a loopback HTTP response. If startup or health verification fails, it automatically restores the previous release and systemd unit.
+The command refuses a dirty checkout, uploads the exact current commit, installs
+locked dependencies, and pulls the sandbox image by immutable SHA-256 digest.
+It provisions Bun 1.3.14, validates the configuration as the service user,
+builds on Linux, switches the `current` symlink, and waits for loopback health.
+If startup or health verification fails, it restores the previous release and
+both systemd units. In rootless mode, the bootstrap enables the user's Docker
+service and lingering so the daemon returns after a reboot.
 
 The provisioned Linux Bun binary is mounted read-only at `/usr/local/bin/bun` in each disposable sandbox. `SandboxWorkspace.initialize()` requires the exact Mise-pinned version before cloning a repository or starting a model, so a missing or stale runtime fails as `sandbox Bun preflight` instead of consuming provider capacity and later returning `sh: 1: bun: not found`. Run `bun run provision:sandbox-bun` to repair a local cache; `bun run test:docker` provisions it automatically before the Docker lifecycle tests.
 
@@ -177,10 +206,11 @@ This path gives GitHub a public HTTPS endpoint without exposing the operator
 console. Operators still administer the host through Tailscale SSH. The service
 binds only to loopback; Caddy is the sole public listener and terminates TLS.
 
-Weigh the tradeoff before enabling it. The sandbox runner holds Docker daemon
-authority, which is root-equivalent on this host. The public edge forwards only
+Weigh the tradeoff before enabling it. In rootful mode, the sandbox runner holds
+root-equivalent Docker authority. In rootless mode, it controls only containers
+and files owned by the `shipwright` account. The public edge forwards only
 `POST /api/github/webhook`; every other request receives `404`. The application
-still verifies the GitHub signature before it parses or enqueues the payload.
+verifies the GitHub signature before it parses or enqueues the payload.
 
 Operator steps:
 
@@ -233,7 +263,10 @@ curl -fsS http://127.0.0.1:4317/healthz
 curl -fsS http://127.0.0.1:4317/readyz
 curl -fsS http://127.0.0.1:4317/metrics | head -20
 tailscale serve status
-docker ps --format 'table {{.Names}}\t{{.Status}}'
+sudo systemctl is-active shipwright-docker  # rootless mode only
+sudo systemctl --user --machine=shipwright@ is-active docker.service
+sudo -u shipwright env DOCKER_HOST=unix:///run/user/$(id -u shipwright)/docker.sock \
+  docker ps --format 'table {{.Names}}\t{{.Status}}'
 df -h /
 free -h
 ```
