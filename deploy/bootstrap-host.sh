@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+next_subid_start() {
+  local database="${1:--}"
+  awk -F: '
+    BEGIN { candidate = 100000 }
+    NF >= 3 {
+      range_end = $2 + $3
+      if (range_end > candidate) candidate = range_end
+    }
+    END { print candidate }
+  ' "$database"
+}
+
+if [[ "${1:-}" == "--next-subid-start" ]]; then
+  next_subid_start "${2:--}"
+  exit 0
+fi
+
 if [[ "$(id -u)" -ne 0 ]]; then
   printf 'Run bootstrap-host.sh as root.\n' >&2
   exit 1
@@ -65,7 +82,7 @@ else
       return
     fi
     local range_start
-    range_start="$(awk -F: 'BEGIN { next = 100000 } { end = $2 + $3; if (end > next) next = end } END { print next }' "$database")"
+    range_start="$(next_subid_start "$database")"
     usermod "$flag" "$range_start-$((range_start + 65535))" shipwright
   }
 

@@ -14,6 +14,21 @@ function renderService(mode: string, uid?: string) {
 }
 
 describe("Shipwright Docker deployment modes", () => {
+  test("allocates a non-overlapping subordinate-ID range", () => {
+    const result = spawnSync(
+      "bash",
+      [resolve(repoRoot, "deploy", "bootstrap-host.sh"), "--next-subid-start"],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        input: "existing:100000:65536\nnewer:200000:1000\n",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("201000");
+  });
+
   test("keeps the dedicated-host rootful unit", () => {
     const result = renderService("rootful");
 
