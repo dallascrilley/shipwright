@@ -1,11 +1,13 @@
 # Shipwright Deployment
 
-Shipwright runs on Ubuntu 24.04 x86. Use rootful Docker only on a dedicated VM.
-On a shared host, use rootless Docker under the `shipwright` account so the
-sandbox runner cannot control the host daemon or another user's containers. The
-application binds to loopback, and Agent Native authentication remains enabled
-in production. Access is either Tailscale-only or a webhook-only HTTPS edge
-fronted by Caddy.
+Shipwright's supported deployment target is Ubuntu 24.04 Noble on amd64
+(x86_64). The rootless bootstrap rejects other distributions, Ubuntu releases,
+and architectures before configuring Docker's rootless-extras repository. Use
+rootful Docker only on a dedicated VM. On a shared host, use rootless Docker
+under the `shipwright` account so the sandbox runner cannot control the host
+daemon or another user's containers. The application binds to loopback, and
+Agent Native authentication remains enabled in production. Access is either
+Tailscale-only or a webhook-only HTTPS edge fronted by Caddy.
 
 ## Dedicated-host target and cost
 
@@ -136,12 +138,18 @@ private-only operation. The cloud firewall may have no public SSH rule, so
 `ssh root@PUBLIC_IP` can time out by design. Use Tailscale SSH for bootstrap and
 break-glass access.
 
-Before the first shared-host deploy, install Docker's
-`docker-ce-rootless-extras` package and set this host-local value:
+Before the first shared-host deploy, set this host-local value:
 
 ```dotenv
 SHIPWRIGHT_DOCKER_MODE=rootless
 ```
+
+The bootstrap needs no manual Docker preparation: it installs the engine and
+CLI from Ubuntu's `docker.io`, configures Docker's apt repository for
+`docker-ce-rootless-extras` (the only publisher of
+`dockerd-rootless-setuptool.sh`), and disables the system daemon it just
+installed. A system Docker daemon that was already running for other tenants
+is left untouched; Shipwright never depends on it in rootless mode.
 
 The default is `rootful`. The deploy command reads the mode from
 `/etc/shipwright/shipwright.env`, bootstraps the matching Docker service, and
@@ -157,7 +165,11 @@ It provisions Bun 1.3.14, validates the configuration as the service user,
 builds on Linux, switches the `current` symlink, and waits for loopback health.
 If startup or health verification fails, it restores the previous release and
 both systemd units. In rootless mode, the bootstrap enables the user's Docker
-service and lingering so the daemon returns after a reboot.
+service and lingering so the daemon returns after a reboot, a system
+supervisor unit watches the daemon's socket, and Shipwright is bound to that
+supervisor with `BindsTo=` so a dead daemon stops the application instead of
+leaving it attached to a dead socket. Switching back to rootful disables the
+per-user Docker unit and lingering so no second daemon survives the switch.
 
 The provisioned Linux Bun binary is mounted read-only at `/usr/local/bin/bun` in each disposable sandbox. `SandboxWorkspace.initialize()` requires the exact Mise-pinned version before cloning a repository or starting a model, so a missing or stale runtime fails as `sandbox Bun preflight` instead of consuming provider capacity and later returning `sh: 1: bun: not found`. Run `bun run provision:sandbox-bun` to repair a local cache; `bun run test:docker` provisions it automatically before the Docker lifecycle tests.
 

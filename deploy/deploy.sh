@@ -18,7 +18,22 @@ fi
 release_id="$(git rev-parse HEAD)"
 release_path="/opt/shipwright/releases/$release_id"
 
-docker_mode="$(ssh "$target" 'if [[ -r /etc/shipwright/shipwright.env ]]; then sed -n "s/^SHIPWRIGHT_DOCKER_MODE=//p" /etc/shipwright/shipwright.env | tail -1; fi')"
+# Read the configured Docker mode and bootstrap the host for it in a single
+# remote transaction, so SHIPWRIGHT_DOCKER_MODE cannot change between
+# discovery and provisioning. The wrapper prints only the provisioned mode to
+# stdout and sends bootstrap output to stderr; the release phase below
+# re-reads the configuration and aborts before any mutation if the mode has
+# drifted since this transaction. The wrapper is assembled into a temporary
+# script because heredocs inside a command substitution do not parse on the
+# bash 3.2 that macOS operators run by default.
+bootstrap_transaction="$(mktemp "${TMPDIR:-/tmp}/shipwright-bootstrap.XXXXXX")"
+trap 'rm -f "$bootstrap_transaction"' EXIT
+cat > "$bootstrap_transaction" <<'REMOTE'
+set -euo pipefail
+docker_mode=""
+if [[ -r /etc/shipwright/shipwright.env ]]; then
+  docker_mode="$(sed -n "s/^SHIPWRIGHT_DOCKER_MODE=//p" /etc/shipwright/shipwright.env | tail -1)"
+fi
 docker_mode="${docker_mode:-rootful}"
 case "$docker_mode" in
   rootful|rootless) ;;
@@ -27,8 +42,22 @@ case "$docker_mode" in
     exit 1
     ;;
 esac
-
-ssh "$target" bash -s -- "$docker_mode" < deploy/bootstrap-host.sh
+bootstrap() {
+REMOTE
+cat deploy/bootstrap-host.sh >> "$bootstrap_transaction"
+cat >> "$bootstrap_transaction" <<'REMOTE'
+}
+printf '%s\n' "$docker_mode"
+bootstrap "$docker_mode" >&2
+REMOTE
+docker_mode="$(ssh "$target" bash -s < "$bootstrap_transaction")"
+case "$docker_mode" in
+  rootful|rootless) ;;
+  *)
+    printf 'Remote SHIPWRIGHT_DOCKER_MODE must be rootful or rootless.\n' >&2
+    exit 1
+    ;;
+esac
 ssh "$target" bash -s -- "$release_path" <<'REMOTE'
 set -euo pipefail
 release_path="$1"
@@ -123,8 +152,11 @@ ssh "$target" bash -s -- "$release_path" "$docker_mode" <<'REMOTE'
   else
     rm -f "$previous_docker_unit"
   fi
+  # The Docker unit is the authoritative record of the previous mode. Do not
+  # infer it from the application unit: the two files must be restored as a
+  # pair even when the application unit is absent or malformed.
   previous_used_rootless=0
-  if [[ -f "$previous_unit" ]] && grep -q '^Requires=shipwright-docker.service$' "$previous_unit"; then
+  if [[ -f "$previous_docker_unit" ]]; then
     previous_used_rootless=1
   fi
 
@@ -145,20 +177,23 @@ ssh "$target" bash -s -- "$release_path" "$docker_mode" <<'REMOTE'
     else
       rm -f /etc/systemd/system/shipwright-docker.service
     fi
+    # Restore both unit files before reloading systemd, so it never observes
+    # a partially restored application/Docker pair.
+    systemctl daemon-reload
+    if [[ "$previous_used_rootless" -eq 1 ]]; then
+      systemctl enable --now shipwright-docker || true
+      gpasswd -d shipwright docker >/dev/null 2>&1 || true
+    else
+      systemctl --user --machine=shipwright@ disable --now docker.service 2>/dev/null || true
+      loginctl disable-linger shipwright 2>/dev/null || true
+      usermod -aG docker shipwright
+    fi
     if [[ -n "$previous_release" ]]; then
       ln -sfn "$previous_release" /opt/shipwright/current.rollback
       mv -Tf /opt/shipwright/current.rollback /opt/shipwright/current
-      systemctl daemon-reload
-      if [[ "$previous_used_rootless" -eq 1 ]]; then
-        systemctl enable --now shipwright-docker || true
-        gpasswd -d shipwright docker >/dev/null 2>&1 || true
-      else
-        usermod -aG docker shipwright
-      fi
       systemctl restart shipwright || true
     elif [[ "$switched" -eq 1 ]]; then
       unlink /opt/shipwright/current 2>/dev/null || true
-      systemctl daemon-reload
     fi
   }
   trap rollback ERR
@@ -179,9 +214,18 @@ ssh "$target" bash -s -- "$release_path" "$docker_mode" <<'REMOTE'
   mv -Tf /opt/shipwright/current.next /opt/shipwright/current
   switched=1
   systemctl daemon-reload
+  if [[ "$docker_mode" == rootful ]] && [[ "$previous_used_rootless" -eq 1 ]]; then
+    # Stop the old per-user daemon before starting the rootful application;
+    # otherwise both Docker daemons run through the health-check window.
+    systemctl disable --now shipwright-docker
+  fi
   if [[ "$docker_mode" == rootless ]]; then
     systemctl enable --now shipwright-docker
     gpasswd -d shipwright docker >/dev/null 2>&1 || true
+    if id -nG shipwright | tr ' ' '\n' | grep -qx docker; then
+      printf 'Rootless mode requires shipwright to be removed from the docker group.\n' >&2
+      false
+    fi
   fi
   systemctl enable --now shipwright
   systemctl restart shipwright
@@ -206,6 +250,11 @@ ssh "$target" bash -s -- "$release_path" "$docker_mode" <<'REMOTE'
     /run/shipwright.service.next /run/shipwright-docker.service.next
   if [[ "$docker_mode" == rootful ]] && [[ -f /etc/systemd/system/shipwright-docker.service ]]; then
     systemctl disable --now shipwright-docker 2>/dev/null || true
+    # The rootless bootstrap also enabled the per-user Docker unit and user
+    # lingering; retire both or a second Docker daemon survives the switch
+    # and returns after reboot.
+    systemctl --user --machine=shipwright@ disable --now docker.service 2>/dev/null || true
+    loginctl disable-linger shipwright 2>/dev/null || true
     rm -f /etc/systemd/system/shipwright-docker.service
     systemctl daemon-reload
   fi

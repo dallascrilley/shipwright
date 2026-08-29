@@ -40,8 +40,31 @@ if [[ "$docker_mode" == rootful ]]; then
   apt-get install -y docker.io
   systemctl enable --now docker
 else
-  apt-get install -y dbus-user-session uidmap
+  apt-get install -y dbus-user-session slirp4netns uidmap
+  if ! command -v dockerd >/dev/null 2>&1; then
+    # The rootless daemon reuses the packaged engine and CLI binaries. The
+    # freshly installed system daemon is stopped because rootless mode never
+    # depends on it; a daemon that was already running for other tenants is
+    # left untouched.
+    apt-get install -y docker.io
+    systemctl disable --now docker.service docker.socket 2>/dev/null || true
+  fi
   if ! command -v dockerd-rootless-setuptool.sh >/dev/null 2>&1; then
+    # dockerd-rootless-setuptool.sh ships in docker-ce-rootless-extras, which
+    # Ubuntu does not publish, so configure Docker's own repository for it.
+    . /etc/os-release
+    docker_arch="$(dpkg --print-architecture)"
+    if [[ "${ID:-}" != ubuntu || "${VERSION_CODENAME:-}" != noble || "$docker_arch" != amd64 ]]; then
+      printf 'Rootless Docker extras require Ubuntu Noble amd64 (found %s %s %s).\n' \
+        "${ID:-unknown}" "${VERSION_CODENAME:-unknown}" "$docker_arch" >&2
+      exit 1
+    fi
+    install -d -m 0755 /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+    printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n' \
+      "$docker_arch" "$VERSION_CODENAME" \
+      > /etc/apt/sources.list.d/docker.list
+    apt-get update
     apt-get install -y docker-ce-rootless-extras
   fi
   if ! command -v dockerd-rootless-setuptool.sh >/dev/null 2>&1; then
@@ -75,6 +98,20 @@ fi
 if [[ "$docker_mode" == rootful ]]; then
   usermod -aG docker shipwright
 else
+  remove_docker_group() {
+    if id -nG shipwright | tr ' ' '\n' | grep -qx docker; then
+      gpasswd -d shipwright docker >/dev/null
+    fi
+    if id -nG shipwright | tr ' ' '\n' | grep -qx docker; then
+      printf 'Rootless mode requires shipwright to be removed from the docker group.\n' >&2
+      exit 1
+    fi
+  }
+
+  # Remove root-equivalent host Docker access before provisioning the
+  # per-user daemon so a partial bootstrap cannot leave the account exposed.
+  remove_docker_group
+
   ensure_subid() {
     local database="$1"
     local flag="$2"
@@ -86,8 +123,14 @@ else
     usermod "$flag" "$range_start-$((range_start + 65535))" shipwright
   }
 
-  ensure_subid /etc/subuid --add-subuids
-  ensure_subid /etc/subgid --add-subgids
+  # Hold an exclusive lock across the check-and-allocate sequence so two
+  # concurrent bootstraps cannot compute the same free range and overlap; the
+  # databases are re-read inside the lock.
+  (
+    flock 9
+    ensure_subid /etc/subuid --add-subuids
+    ensure_subid /etc/subgid --add-subgids
+  ) 9>/run/shipwright-subid.lock
   loginctl enable-linger shipwright
   shipwright_uid="$(id -u shipwright)"
   systemctl start "user@$shipwright_uid.service"

@@ -41,12 +41,16 @@ describe("Shipwright Docker deployment modes", () => {
   test("renders a rootless unit bound only to the Shipwright socket", () => {
     const result = renderService("rootless", "1001");
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Requires=shipwright-docker.service");
+    expect(result.stdout).toContain("BindsTo=shipwright-docker.service");
+    expect(result.stdout).toContain("Wants=shipwright-docker.service");
     expect(result.stdout).toContain("After=shipwright-docker.service");
+    expect(result.stdout).toContain(
+      "ExecStartPre=/bin/sh -c 'socket=/run/user/1001/docker.sock; docker_ping() { curl --fail --silent --show-error --connect-timeout 1 --max-time 2 --unix-socket \"$socket\" http://localhost/_ping >/dev/null; }; for attempt in $(seq 1 30); do test -S \"$socket\" && docker_ping && exit 0; sleep 1; done; exit 1'",
+    );
     expect(result.stdout).toContain(
       "BindReadOnlyPaths=/run/user/1001/docker.sock:/var/run/docker.sock",
     );
+    expect(result.stdout).not.toContain("Requires=shipwright-docker.service");
     expect(result.stdout).not.toContain("Requires=docker.service");
     expect(result.stdout).not.toContain("SupplementaryGroups=docker");
     expect(result.stdout).not.toContain("%%SHIPWRIGHT_UID%%");
@@ -55,12 +59,21 @@ describe("Shipwright Docker deployment modes", () => {
   test("renders a root wrapper for the Shipwright user Docker service", () => {
     const result = renderService("rootless-docker", "1001");
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Requires=user@1001.service");
     expect(result.stdout).toContain(
       "systemctl --user --machine=shipwright@ start docker.service",
     );
-    expect(result.stdout).toContain("test -S /run/user/1001/docker.sock");
+    expect(result.stdout).toContain(
+      "socket=/run/user/1001/docker.sock; docker_ping()",
+    );
+    expect(result.stdout).toContain(
+      "while docker_ping; do sleep 5; done",
+    );
+    expect(result.stdout).toContain("Restart=on-failure");
+    expect(result.stdout).toContain("RestartSec=5s");
+    expect(result.stdout).toContain(
+      "curl --fail --silent --show-error --connect-timeout 1 --max-time 2 --unix-socket \"$socket\" http://localhost/_ping",
+    );
+    expect(result.stdout).not.toContain("Type=oneshot");
     expect(result.stdout).not.toContain("%%SHIPWRIGHT_UID%%");
   });
 
@@ -72,12 +85,50 @@ describe("Shipwright Docker deployment modes", () => {
   test("bootstraps and deploys rootless Docker without host daemon membership", () => {
     const bootstrap = readFileSync(resolve(repoRoot, "deploy", "bootstrap-host.sh"), "utf8");
     const deploy = readFileSync(resolve(repoRoot, "deploy", "deploy.sh"), "utf8");
+    const docs = readFileSync(resolve(repoRoot, "docs", "deployment.md"), "utf8");
     const example = readFileSync(resolve(repoRoot, "deploy", "shipwright.env.example"), "utf8");
 
     expect(bootstrap).toContain("dockerd-rootless-setuptool.sh");
+    expect(bootstrap).toContain("docker-ce-rootless-extras");
+    expect(bootstrap).toContain("download.docker.com/linux/ubuntu");
+    expect(bootstrap).toContain(". /etc/os-release");
+    expect(bootstrap).toContain('docker_arch="$(dpkg --print-architecture)"');
+    expect(bootstrap).toContain(
+      "Rootless Docker extras require Ubuntu Noble amd64",
+    );
+    expect(bootstrap).toContain("flock 9");
+    expect(bootstrap).toContain("remove_docker_group");
     expect(bootstrap).toContain("loginctl enable-linger shipwright");
     expect(deploy).toContain("SHIPWRIGHT_DOCKER_MODE");
     expect(deploy).toContain('DOCKER_HOST="unix://$docker_socket"');
+    expect(deploy).toContain("previous_docker_unit");
+    expect(deploy).toContain("previous_used_rootless");
+    expect(deploy).toContain("systemctl disable --now shipwright-docker");
+    expect(deploy).toContain(
+      "systemctl --user --machine=shipwright@ disable --now docker.service",
+    );
+    expect(deploy).toContain(
+      `else
+      systemctl --user --machine=shipwright@ disable --now docker.service 2>/dev/null || true
+      loginctl disable-linger shipwright 2>/dev/null || true
+      usermod -aG docker shipwright`,
+    );
+    expect(deploy).toContain("loginctl disable-linger shipwright");
+    expect(docs).toContain("Ubuntu 24.04 Noble on amd64");
     expect(example).toContain("SHIPWRIGHT_DOCKER_MODE=rootful");
+  });
+
+  test("rejects unsupported rootless extras platforms before repo setup", () => {
+    const bootstrap = readFileSync(resolve(repoRoot, "deploy", "bootstrap-host.sh"), "utf8");
+    const platformGate = bootstrap.indexOf(
+      'if [[ "${ID:-}" != ubuntu || "${VERSION_CODENAME:-}" != noble || "$docker_arch" != amd64 ]]; then',
+    );
+    const repoSetup = bootstrap.indexOf("install -d -m 0755 /etc/apt/keyrings");
+
+    expect(platformGate).toBeGreaterThanOrEqual(0);
+    expect(repoSetup).toBeGreaterThan(platformGate);
+    expect(bootstrap).toContain(
+      "Rootless Docker extras require Ubuntu Noble amd64",
+    );
   });
 });
