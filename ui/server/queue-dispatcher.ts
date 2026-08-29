@@ -138,8 +138,9 @@ export class QueueDispatcher {
     const existing = snapshot.executions.find(
       (execution) =>
         execution.agentId === agent.agentId &&
-        execution.agentRevision === agentRevision &&
-        execution.idempotencyKey === input.idempotencyKey,
+        execution.source === input.source &&
+        execution.idempotencyKey === input.idempotencyKey &&
+        (input.source === "github" || execution.agentRevision === agentRevision),
     );
     if (existing) {
       return {

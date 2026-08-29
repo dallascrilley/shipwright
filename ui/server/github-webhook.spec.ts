@@ -335,7 +335,7 @@ describe("GitHubWebhookIngress", () => {
     expect(execution).toMatchObject({
       agentRevision: fixture.trigger.agentRevision,
       source: "github",
-      idempotencyKey: `github:delivery-review-1:${fixture.trigger.agentRevision}`,
+      idempotencyKey: "github:delivery-review-1",
       target: {
         kind: "pull",
         owner: "dallascrilley",

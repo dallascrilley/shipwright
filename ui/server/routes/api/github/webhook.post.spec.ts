@@ -369,7 +369,12 @@ describe("POST /api/github/webhook", () => {
 
   test("returns retryable failures for a timeout and non-2xx before later success", async () => {
     const service = createService();
-    await createEnabledAgent(service, [], "pull_request", "opened");
+    const { agent, trigger } = await createEnabledAgent(
+      service,
+      [],
+      "pull_request",
+      "opened",
+    );
     let attempt = 0;
     const relayFetch = vi.fn(
       (_input: string | URL | Request, init?: RequestInit) => {
@@ -420,6 +425,24 @@ describe("POST /api/github/webhook", () => {
     const timedOut = await app.request("/api/github/webhook", init);
     expect(timedOut.status).toBe(503);
     expect(timedOut.headers.get("retry-after")).toBe("10");
+
+    const definition = service.exportAgentDefinition(agent.agentId);
+    const updatedAgent = await service.saveAgent({
+      agentId: agent.agentId,
+      expectedRevision: agent.currentRevision,
+      draft: {
+        ...definition.configuration,
+        instructions: `${definition.configuration.instructions} Updated.`,
+      },
+    });
+    service.replaceTrigger({
+      agentId: agent.agentId,
+      expectedRevision: updatedAgent.currentRevision,
+      triggerId: trigger.triggerId,
+      kind: "github",
+      config: { event: "pull_request", actions: ["opened"], conditions: [] },
+    });
+
     const rejected = await app.request("/api/github/webhook", init);
     expect(rejected.status).toBe(503);
     expect(rejected.headers.get("retry-after")).toBe("10");
@@ -427,6 +450,7 @@ describe("POST /api/github/webhook", () => {
 
     expect(relayFetch).toHaveBeenCalledTimes(3);
     expect(service.getSnapshot().queueEntries).toHaveLength(1);
+    expect(service.getSnapshot().executions).toHaveLength(1);
   });
 
   test("cancels a successful relay response body", async () => {
@@ -568,7 +592,7 @@ describe("POST /api/github/webhook", () => {
 
   test("a signed delivery queues once and its replay leaves the durable queue unchanged", async () => {
     const service = createService();
-    const { agent } = await createEnabledAgent(service);
+    await createEnabledAgent(service);
     const app = createApp(service);
     const payload = {
       action: "opened",
@@ -581,7 +605,7 @@ describe("POST /api/github/webhook", () => {
     expect((await app.request("/api/github/webhook", init)).status).toBe(202);
     expect(service.getSnapshot().queueEntries).toHaveLength(1);
     expect(service.getSnapshot().executions[0]?.idempotencyKey).toBe(
-      `github:delivery-1:${agent.currentRevision}`,
+      "github:delivery-1",
     );
   });
 
@@ -625,7 +649,7 @@ describe("POST /api/github/webhook", () => {
     expect(service.getSnapshot().queueEntries).toHaveLength(1);
     expect(service.getSnapshot().executions[0]).toMatchObject({
       agentRevision: trigger.agentRevision,
-      idempotencyKey: `github:delivery-review-route:${trigger.agentRevision}`,
+      idempotencyKey: "github:delivery-review-route",
       target: { kind: "pull", number: 7 },
     });
     expect(service.getSnapshot().revisions[0]?.draft.publicationPolicy).toBe(
