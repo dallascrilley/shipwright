@@ -18,7 +18,17 @@ fi
 release_id="$(git rev-parse HEAD)"
 release_path="/opt/shipwright/releases/$release_id"
 
-ssh "$target" 'bash -s' < deploy/bootstrap-host.sh
+docker_mode="$(ssh "$target" 'if [[ -r /etc/shipwright/shipwright.env ]]; then sed -n "s/^SHIPWRIGHT_DOCKER_MODE=//p" /etc/shipwright/shipwright.env | tail -1; fi')"
+docker_mode="${docker_mode:-rootful}"
+case "$docker_mode" in
+  rootful|rootless) ;;
+  *)
+    printf 'Remote SHIPWRIGHT_DOCKER_MODE must be rootful or rootless.\n' >&2
+    exit 1
+    ;;
+esac
+
+ssh "$target" bash -s -- "$docker_mode" < deploy/bootstrap-host.sh
 ssh "$target" bash -s -- "$release_path" <<'REMOTE'
 set -euo pipefail
 release_path="$1"
@@ -34,15 +44,28 @@ rsync -a --delete \
   --exclude 'ui/.output/' \
   ./ "$target:$release_path/"
 
-ssh "$target" bash -s -- "$release_path" <<'REMOTE'
+ssh "$target" bash -s -- "$release_path" "$docker_mode" <<'REMOTE'
   set -euo pipefail
   release_path="$1"
+  requested_docker_mode="$2"
   chown -R shipwright:shipwright "$release_path"
   test -s /etc/shipwright/shipwright.env
   set -a
   # shellcheck disable=SC1091 -- production configuration is intentionally host-local.
   . /etc/shipwright/shipwright.env
   set +a
+  docker_mode="${SHIPWRIGHT_DOCKER_MODE:-rootful}"
+  case "$docker_mode" in
+    rootful|rootless) ;;
+    *)
+      printf 'SHIPWRIGHT_DOCKER_MODE must be rootful or rootless.\n' >&2
+      false
+      ;;
+  esac
+  if [[ "$docker_mode" != "$requested_docker_mode" ]]; then
+    printf 'SHIPWRIGHT_DOCKER_MODE changed during deployment.\n' >&2
+    false
+  fi
   test -n "${BETTER_AUTH_SECRET:-}"
   test -n "${GITHUB_APP_PRIVATE_KEY_PATH:-}"
   test -n "${SHIPWRIGHT_SANDBOX_IMAGE:-}"
@@ -59,7 +82,18 @@ ssh "$target" bash -s -- "$release_path" <<'REMOTE'
       ;;
   esac
   runuser -u shipwright -- test -r "$GITHUB_APP_PRIVATE_KEY_PATH"
-  docker pull "$SHIPWRIGHT_SANDBOX_IMAGE" >/dev/null
+  shipwright_uid="$(id -u shipwright)"
+  docker_socket=""
+  if [[ "$docker_mode" == rootless ]]; then
+    docker_socket="/run/user/$shipwright_uid/docker.sock"
+    test -S "$docker_socket"
+    export DOCKER_HOST="unix://$docker_socket"
+    runuser -u shipwright -- \
+      env HOME=/var/lib/shipwright DOCKER_HOST="unix://$docker_socket" \
+      docker pull "$SHIPWRIGHT_SANDBOX_IMAGE" >/dev/null
+  else
+    docker pull "$SHIPWRIGHT_SANDBOX_IMAGE" >/dev/null
+  fi
   runuser -u shipwright -- /usr/local/bin/mise trust "$release_path/mise.toml" >/dev/null
   runuser -u shipwright -- /usr/local/bin/mise install -C "$release_path"
   runuser -u shipwright -- /usr/local/bin/mise exec -C "$release_path" -- corepack enable
@@ -83,30 +117,72 @@ ssh "$target" bash -s -- "$release_path" <<'REMOTE'
   else
     rm -f "$previous_unit"
   fi
+  previous_docker_unit=/run/shipwright-docker.service.previous
+  if [[ -f /etc/systemd/system/shipwright-docker.service ]]; then
+    cp -p /etc/systemd/system/shipwright-docker.service "$previous_docker_unit"
+  else
+    rm -f "$previous_docker_unit"
+  fi
+  previous_used_rootless=0
+  if [[ -f "$previous_unit" ]] && grep -q '^Requires=shipwright-docker.service$' "$previous_unit"; then
+    previous_used_rootless=1
+  fi
 
   switched=0
   rollback() {
     trap - ERR
+    systemctl stop shipwright 2>/dev/null || true
+    if [[ "$docker_mode" == rootless ]]; then
+      systemctl disable --now shipwright-docker 2>/dev/null || true
+    fi
     if [[ -f "$previous_unit" ]]; then
       cp -p "$previous_unit" /etc/systemd/system/shipwright.service
+    else
+      rm -f /etc/systemd/system/shipwright.service
+    fi
+    if [[ -f "$previous_docker_unit" ]]; then
+      cp -p "$previous_docker_unit" /etc/systemd/system/shipwright-docker.service
+    else
+      rm -f /etc/systemd/system/shipwright-docker.service
     fi
     if [[ -n "$previous_release" ]]; then
       ln -sfn "$previous_release" /opt/shipwright/current.rollback
       mv -Tf /opt/shipwright/current.rollback /opt/shipwright/current
       systemctl daemon-reload
+      if [[ "$previous_used_rootless" -eq 1 ]]; then
+        systemctl enable --now shipwright-docker || true
+        gpasswd -d shipwright docker >/dev/null 2>&1 || true
+      else
+        usermod -aG docker shipwright
+      fi
       systemctl restart shipwright || true
     elif [[ "$switched" -eq 1 ]]; then
       unlink /opt/shipwright/current 2>/dev/null || true
-      systemctl stop shipwright || true
+      systemctl daemon-reload
     fi
   }
   trap rollback ERR
 
-  install -o root -g root -m 644 "$release_path/deploy/shipwright.service" /etc/systemd/system/shipwright.service
+  if [[ "$docker_mode" == rootless ]]; then
+    bash "$release_path/deploy/render-service.sh" rootless "$shipwright_uid" \
+      > /run/shipwright.service.next
+    bash "$release_path/deploy/render-service.sh" rootless-docker "$shipwright_uid" \
+      > /run/shipwright-docker.service.next
+    install -o root -g root -m 644 /run/shipwright.service.next /etc/systemd/system/shipwright.service
+    install -o root -g root -m 644 /run/shipwright-docker.service.next /etc/systemd/system/shipwright-docker.service
+  else
+    bash "$release_path/deploy/render-service.sh" rootful \
+      > /run/shipwright.service.next
+    install -o root -g root -m 644 /run/shipwright.service.next /etc/systemd/system/shipwright.service
+  fi
   ln -sfn "$release_path" /opt/shipwright/current.next
   mv -Tf /opt/shipwright/current.next /opt/shipwright/current
   switched=1
   systemctl daemon-reload
+  if [[ "$docker_mode" == rootless ]]; then
+    systemctl enable --now shipwright-docker
+    gpasswd -d shipwright docker >/dev/null 2>&1 || true
+  fi
   systemctl enable --now shipwright
   systemctl restart shipwright
 
@@ -126,7 +202,13 @@ ssh "$target" bash -s -- "$release_path" <<'REMOTE'
   fi
 
   trap - ERR
-  rm -f "$previous_unit"
+  rm -f "$previous_unit" "$previous_docker_unit" \
+    /run/shipwright.service.next /run/shipwright-docker.service.next
+  if [[ "$docker_mode" == rootful ]] && [[ -f /etc/systemd/system/shipwright-docker.service ]]; then
+    systemctl disable --now shipwright-docker 2>/dev/null || true
+    rm -f /etc/systemd/system/shipwright-docker.service
+    systemctl daemon-reload
+  fi
 
   # Optional public HTTPS edge. The release is already healthy on loopback, so
   # the app-rollback trap is intentionally cleared above; a Caddy failure fails

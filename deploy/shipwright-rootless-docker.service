@@ -1,0 +1,16 @@
+[Unit]
+Description=Shipwright rootless Docker daemon
+After=user@%%SHIPWRIGHT_UID%%.service network-online.target
+Wants=network-online.target
+Requires=user@%%SHIPWRIGHT_UID%%.service
+Before=shipwright.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/systemctl --user --machine=shipwright@ start docker.service
+ExecStart=/bin/sh -c 'for attempt in $(seq 1 30); do test -S /run/user/%%SHIPWRIGHT_UID%%/docker.sock && exit 0; sleep 1; done; exit 1'
+ExecStop=/usr/bin/systemctl --user --machine=shipwright@ stop docker.service
+
+[Install]
+WantedBy=multi-user.target
