@@ -3,16 +3,21 @@
 # Signing matches ui/server/routes/api/github/webhook.post.spec.ts (HMAC-SHA256, sha256= prefix).
 set -euo pipefail
 
-WEBHOOK_SECRET="${GITHUB_WEBHOOK_SECRET:-}"
+SHIPWRIGHT_WEBHOOK_SECRET="${GITHUB_WEBHOOK_SECRET:-}"
+REVIEWER_WEBHOOK_SECRET="${SYMPHONY_REVIEWER_GITHUB_WEBHOOK_SECRET:-}"
 unset GITHUB_WEBHOOK_SECRET
-export -n WEBHOOK_SECRET
+unset SYMPHONY_REVIEWER_GITHUB_WEBHOOK_SECRET
+export -n SHIPWRIGHT_WEBHOOK_SECRET REVIEWER_WEBHOOK_SECRET
 
 usage() {
   cat <<'EOF'
 Usage: replay-github-webhook.sh [options]
 
 Required:
-  GITHUB_WEBHOOK_SECRET   Same value as on the pin and in the GitHub App webhook settings.
+  GITHUB_WEBHOOK_SECRET   Shipwright App secret for issues-family events.
+  SYMPHONY_REVIEWER_GITHUB_WEBHOOK_SECRET
+                          Reviewer App secret for pull_request events.
+                          Only the secret selected by -e is required.
 
 Options (env or flags):
   -u URL                  Webhook URL (default: http://127.0.0.1:8787/api/github/webhook)
@@ -50,11 +55,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$WEBHOOK_SECRET" ]]; then
-  echo "GITHUB_WEBHOOK_SECRET is required" >&2
-  exit 2
-fi
-
 if [[ ! -f "$PAYLOAD_FILE" ]]; then
   echo "Payload file not found: $PAYLOAD_FILE" >&2
   exit 2
@@ -67,6 +67,20 @@ fi
 
 if [[ "$EVENT" == "pull_request" && "$PAYLOAD_FILE" == *issues-opened-minimal* ]]; then
   PAYLOAD_FILE="$ROOT/test/fixtures/github-webhook/pull-request-opened-minimal.json"
+fi
+
+if [[ "$EVENT" == "pull_request" ]]; then
+  WEBHOOK_SECRET="$REVIEWER_WEBHOOK_SECRET"
+  SECRET_NAME="SYMPHONY_REVIEWER_GITHUB_WEBHOOK_SECRET"
+else
+  WEBHOOK_SECRET="$SHIPWRIGHT_WEBHOOK_SECRET"
+  SECRET_NAME="GITHUB_WEBHOOK_SECRET"
+fi
+unset SHIPWRIGHT_WEBHOOK_SECRET REVIEWER_WEBHOOK_SECRET
+
+if [[ -z "$WEBHOOK_SECRET" ]]; then
+  echo "$SECRET_NAME is required for event $EVENT" >&2
+  exit 2
 fi
 
 if [[ -z "$DELIVERY_ID" ]]; then

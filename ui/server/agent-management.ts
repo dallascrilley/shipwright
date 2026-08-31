@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
-import type { GitHubWebhookConfig } from "../../src/config/github.js";
+import type { GitHubWebhookIngressConfig } from "../../src/config/github.js";
 import { resolveShipwrightStateDirectory } from "../../src/config/state.js";
 import {
   agentDraftSchema,
@@ -282,7 +282,7 @@ export class AgentManagementService {
   /** Route authenticated GitHub deliveries through the shared durable queue. */
   receiveGitHubWebhook(
     input: GitHubWebhookInput,
-    config: GitHubWebhookConfig,
+    config: GitHubWebhookIngressConfig,
   ): Promise<GitHubWebhookResult> {
     return new GitHubWebhookIngress({
       ...config,
