@@ -17,7 +17,7 @@ import {
   type GitHubWebhookRelayDestination,
 } from "../../../../../src/config/github.js";
 import {
-  authorizePullRequest,
+  authorizePullRequestMetadata,
   createOctokitTransport,
   PullRequestAuthorizationError,
 } from "../../../../../src/github/app-client.js";
@@ -374,7 +374,7 @@ async function defaultAuthorizeReviewCommand(
   const pullRequest = parsePullRequestUrl(
     `https://github.com/${repository}/pull/${pullNumber}`,
   );
-  const authorized = await authorizePullRequest(
+  const authorized = await authorizePullRequestMetadata(
     pullRequest,
     config,
     createOctokitTransport(config),
