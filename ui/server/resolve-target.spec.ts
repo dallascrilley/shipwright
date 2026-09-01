@@ -116,6 +116,7 @@ describe("resolveTarget", () => {
         url: pullUrl,
         title: "Review me",
         body: "",
+        draft: false,
         baseBranch: "main",
         baseSha: "base",
         headBranch: "feat",

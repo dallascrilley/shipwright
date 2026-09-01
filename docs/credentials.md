@@ -31,6 +31,14 @@ Webhooks stay disabled unless you are running the always-on console
 ([docs/runbooks/always-on-activation.md](runbooks/always-on-activation.md)), in
 which case you also generate a high-entropy `GITHUB_WEBHOOK_SECRET`.
 
+The typed `@shipwright review` protocol needs a third, independent secret:
+`SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_SECRET`. Generate it at the same entropy as
+a webhook secret, keep it in the secret manager, and inject the identical value
+only into Shipwright's review-command sender and Symphony's typed request
+receiver. Never reuse the Shipwright or Symphony reviewer GitHub App webhook
+secret. The protocol secret authenticates only the private
+`/api/v1/review-requests` hop; it grants no GitHub authority.
+
 Environment variables:
 
 ```sh

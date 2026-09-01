@@ -7,6 +7,7 @@ import {
 } from "h3";
 
 import {
+  parseGitHubConfig,
   parseGitHubWebhookRelayDestination,
   parseGitHubWebhookConfig,
   selectGitHubWebhookEventFamily,
@@ -15,6 +16,19 @@ import {
   type GitHubWebhookIngressConfig,
   type GitHubWebhookRelayDestination,
 } from "../../../../../src/config/github.js";
+import {
+  authorizePullRequest,
+  createOctokitTransport,
+  PullRequestAuthorizationError,
+} from "../../../../../src/github/app-client.js";
+import { parsePullRequestUrl } from "../../../../../src/github/pull-request-ref.js";
+import {
+  buildReviewRequest,
+  parseReviewCommand,
+  ReviewRequestConflictError,
+  signReviewRequest,
+} from "../../../../../src/github/review-request.js";
+import type { PullRequestContext } from "../../../../../src/github/types.js";
 import { getAgentManagementService } from "../../../agent-management";
 import {
   MAX_WEBHOOK_BODY_BYTES,
@@ -44,6 +58,12 @@ export interface GitHubWebhookRouteDependencies {
   ) => Promise<GitHubWebhookResult>;
   loadRelayDestination?: (event: H3Event) => unknown;
   relayFetch?: RelayFetch;
+  reviewRequestFetch?: RelayFetch;
+  authorizeReviewCommand?: (
+    repository: string,
+    pullNumber: number,
+  ) => Promise<PullRequestContext>;
+  now?: () => number;
   relayTimeoutMs?: number;
 }
 
@@ -58,6 +78,10 @@ export function createGitHubWebhookRoute(
     ((input, config) =>
       getAgentManagementService().receiveGitHubWebhook(input, config));
   const relayFetch = dependencies.relayFetch ?? fetch;
+  const reviewRequestFetch = dependencies.reviewRequestFetch ?? fetch;
+  const authorizeReviewCommand =
+    dependencies.authorizeReviewCommand ?? defaultAuthorizeReviewCommand;
+  const now = dependencies.now ?? Date.now;
   const relayTimeoutMs =
     dependencies.relayTimeoutMs ?? DEFAULT_RELAY_TIMEOUT_MS;
   if (
@@ -114,9 +138,84 @@ export function createGitHubWebhookRoute(
         setResponseStatus(event, 400);
         return { status: "rejected", reason: "invalid_payload" };
       }
+      if (trustValidation.kind === "wrong_installation") {
+        if (githubEvent === "issue_comment") {
+          setResponseStatus(event, 202);
+          return acceptedWithoutLocalIntake();
+        }
+        setResponseStatus(event, 400);
+        return { status: "rejected", reason: "invalid_payload" };
+      }
       if (trustValidation.kind === "disallowed") {
         setResponseStatus(event, 202);
         return acceptedWithoutLocalIntake();
+      }
+
+      if (githubEvent === "issue_comment") {
+        const commandConfig = config.reviewCommand;
+        if (commandConfig === undefined) {
+          setResponseStatus(event, 202);
+          return acceptedWithoutLocalIntake();
+        }
+        const parsed = parseReviewCommand(rawText, deliveryId, commandConfig);
+        if (parsed.kind === "ignored") {
+          setResponseStatus(event, 202);
+          return acceptedWithoutLocalIntake();
+        }
+        try {
+          const authorized = await authorizeReviewCommand(
+            parsed.candidate.repository,
+            parsed.candidate.pullNumber,
+          );
+          if (authorized.draft) {
+            setResponseStatus(event, 202);
+            return acceptedWithoutLocalIntake();
+          }
+          const request = buildReviewRequest(
+            parsed.candidate,
+            authorized,
+            ingressConfig.installationId,
+          );
+          const signed = signReviewRequest(
+            request,
+            commandConfig.protocolSecret,
+            Math.floor(now() / 1000).toString(),
+          );
+          const response = await reviewRequestFetch(commandConfig.requestUrl, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-shipwright-request-id": signed.requestId,
+              "x-shipwright-timestamp": signed.timestamp,
+              "x-shipwright-signature-256": signed.signature,
+            },
+            body: signed.rawBody,
+            redirect: "error",
+            signal: AbortSignal.timeout(relayTimeoutMs),
+          });
+          await response.body?.cancel();
+          if (response.status === 202) {
+            setResponseStatus(event, 202);
+            return acceptedWithoutLocalIntake();
+          }
+          if (response.status === 409) {
+            setResponseStatus(event, 409);
+            return { status: "rejected", reason: "review_request_conflict" };
+          }
+          console.error("Symphony review request unavailable");
+          return unavailable(event, true);
+        } catch (error) {
+          if (error instanceof PullRequestAuthorizationError) {
+            setResponseStatus(event, 202);
+            return acceptedWithoutLocalIntake();
+          }
+          if (error instanceof ReviewRequestConflictError) {
+            setResponseStatus(event, 409);
+            return { status: "rejected", reason: "review_request_conflict" };
+          }
+          console.error("Shipwright review command unavailable");
+          return unavailable(event, true);
+        }
       }
 
       const relayDestination = parseGitHubWebhookRelayDestination(
@@ -157,11 +256,6 @@ export function createGitHubWebhookRoute(
           console.error("GitHub webhook relay unavailable");
           return unavailable(event, true);
         }
-        setResponseStatus(event, 202);
-        return acceptedWithoutLocalIntake();
-      }
-
-      if (githubEvent === "issue_comment") {
         setResponseStatus(event, 202);
         return acceptedWithoutLocalIntake();
       }
@@ -270,6 +364,22 @@ export function createGitHubWebhookRoute(
     const oldestRelayKey = completedRelays.values().next().value;
     if (oldestRelayKey !== undefined) completedRelays.delete(oldestRelayKey);
   }
+}
+
+async function defaultAuthorizeReviewCommand(
+  repository: string,
+  pullNumber: number,
+): Promise<PullRequestContext> {
+  const config = parseGitHubConfig();
+  const pullRequest = parsePullRequestUrl(
+    `https://github.com/${repository}/pull/${pullNumber}`,
+  );
+  const authorized = await authorizePullRequest(
+    pullRequest,
+    config,
+    createOctokitTransport(config),
+  );
+  return authorized.pullRequest;
 }
 
 function acceptedWithoutLocalIntake(): GitHubWebhookResult {

@@ -5,7 +5,7 @@ test("review prompt requires the skill and delimits hostile review content", () 
   const prompt = buildReviewPrompt({
     pullRequest: {
       owner: "acme", repo: "widget", number: 4, url: "https://github.com/acme/widget/pull/4",
-      title: "Change", body: "body", baseBranch: "main", baseSha: "base", headBranch: "feature", headSha: "head", installationId: 1,
+      title: "Change", body: "body", draft: false, baseBranch: "main", baseSha: "base", headBranch: "feature", headSha: "head", installationId: 1,
     },
     threads: [{
       id: "thread-1", isResolved: false, isOutdated: false, path: "src/a.ts", line: 4,

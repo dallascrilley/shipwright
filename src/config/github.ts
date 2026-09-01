@@ -30,6 +30,15 @@ export interface GitHubWebhookConfig {
    */
   expectedReviewerLogin?: string;
   expectedReviewerUserId?: number;
+  reviewCommand?: ReviewCommandConfig;
+}
+
+export interface ReviewCommandConfig {
+  repository: string;
+  operatorLogin: string;
+  operatorUserId: number;
+  requestUrl: URL;
+  protocolSecret: string;
 }
 
 export interface GitHubWebhookIngressConfig extends RepositoryScope {
@@ -191,6 +200,8 @@ export function parseGitHubWebhookConfig(
       "SHIPWRIGHT_SYMPHONY_WEBHOOK_URL must be a private /webhooks/github URL",
     );
   }
+  const reviewCommand = parseReviewCommandConfig(env);
+  assertDistinctWebhookSecrets(shipwrightApp, symphonyReviewerApp, reviewCommand);
   return {
     shipwrightApp,
     symphonyReviewerApp,
@@ -204,7 +215,99 @@ export function parseGitHubWebhookConfig(
           "GITHUB_REVIEW_BOT_USER_ID",
         )
       : undefined,
+    reviewCommand,
   };
+}
+
+function assertDistinctWebhookSecrets(
+  shipwrightApp: GitHubWebhookTrust,
+  symphonyReviewerApp: GitHubWebhookTrust,
+  reviewCommand: ReviewCommandConfig | undefined,
+): void {
+  const secrets = [
+    shipwrightApp.webhookSecret,
+    symphonyReviewerApp.webhookSecret,
+    ...(reviewCommand === undefined ? [] : [reviewCommand.protocolSecret]),
+  ];
+  if (new Set(secrets).size !== secrets.length) {
+    throw new Error(
+      "Shipwright App, Symphony reviewer App, and review request secrets must be distinct",
+    );
+  }
+}
+
+function parseReviewCommandConfig(
+  env: Environment,
+): ReviewCommandConfig | undefined {
+  const values = {
+    repository: env.SHIPWRIGHT_REVIEW_COMMAND_REPOSITORY?.trim(),
+    operatorLogin: env.SHIPWRIGHT_REVIEW_OPERATOR_LOGIN?.trim(),
+    operatorUserId: env.SHIPWRIGHT_REVIEW_OPERATOR_USER_ID?.trim(),
+    requestUrl: env.SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_URL?.trim(),
+    protocolSecret: env.SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_SECRET?.trim(),
+  };
+  const configured = Object.values(values).filter(Boolean).length;
+  if (configured === 0) return undefined;
+  if (configured !== Object.keys(values).length) {
+    throw new Error("configure every Shipwright review command field or none of them");
+  }
+  const repository = parseExactRepository(
+    values.repository!,
+    "SHIPWRIGHT_REVIEW_COMMAND_REPOSITORY",
+  );
+  const operatorLogin = values.operatorLogin!.toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(operatorLogin)) {
+    throw new Error("SHIPWRIGHT_REVIEW_OPERATOR_LOGIN must be a GitHub login");
+  }
+  const protocolSecret = values.protocolSecret!;
+  if (protocolSecret.length < 32) {
+    throw new Error(
+      "SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_SECRET must be at least 32 characters",
+    );
+  }
+  return {
+    repository,
+    operatorLogin,
+    operatorUserId: parsePositiveInteger(
+      values.operatorUserId,
+      "SHIPWRIGHT_REVIEW_OPERATOR_USER_ID",
+    ),
+    requestUrl: parsePrivateReviewRequestUrl(values.requestUrl!),
+    protocolSecret,
+  };
+}
+
+function parseExactRepository(value: string, name: string): string {
+  const canonical = value.toLowerCase();
+  if (!/^[^/*\s]+\/[^/*\s]+$/.test(canonical)) {
+    throw new Error(`${name} must be one exact owner/repo`);
+  }
+  return canonical;
+}
+
+function parsePrivateReviewRequestUrl(value: string): URL {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(
+      "SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_URL must be a private /api/v1/review-requests URL",
+    );
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.pathname !== "/api/v1/review-requests" ||
+    url.search !== "" ||
+    url.hash !== "" ||
+    !isPrivateHostname(url)
+  ) {
+    throw new Error(
+      "SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_URL must be a private /api/v1/review-requests URL",
+    );
+  }
+  return url;
 }
 
 function parseWebhookTrust(
