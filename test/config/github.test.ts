@@ -4,6 +4,7 @@ import {
   parseGitHubConfig,
   parseGitHubWebhookRelayDestination,
   parseGitHubWebhookConfig,
+  selectGitHubWebhookEventFamily,
 } from "../../src/config/github.js";
 
 const base = {
@@ -54,8 +55,50 @@ describe("parseGitHubConfig", () => {
 describe("parseGitHubWebhookConfig", () => {
   const webhookBase = {
     GITHUB_WEBHOOK_SECRET: "w".repeat(32),
+    GITHUB_APP_INSTALLATION_ID: "42",
+    SYMPHONY_REVIEWER_GITHUB_WEBHOOK_SECRET: "r".repeat(32),
+    SYMPHONY_REVIEWER_GITHUB_APP_INSTALLATION_ID: "84",
     GITHUB_REPOSITORY_ALLOWLIST: "dallascrilley/shipwright",
   };
+
+  test("binds each App secret to its exact installation and event family", () => {
+    const parsed = parseGitHubWebhookConfig(webhookBase);
+    expect(parsed.shipwrightApp).toEqual({
+      webhookSecret: "w".repeat(32),
+      installationId: 42,
+    });
+    expect(parsed.symphonyReviewerApp).toEqual({
+      webhookSecret: "r".repeat(32),
+      installationId: 84,
+    });
+    expect(selectGitHubWebhookEventFamily("pull_request", parsed)?.kind).toBe(
+      "symphony_reviewer",
+    );
+    expect(selectGitHubWebhookEventFamily("check_suite", parsed)?.kind).toBe(
+      "symphony_reviewer",
+    );
+    expect(
+      selectGitHubWebhookEventFamily("pull_request_review", parsed)?.kind,
+    ).toBe("shipwright");
+    expect(selectGitHubWebhookEventFamily("issue_comment", parsed)?.kind).toBe(
+      "shipwright",
+    );
+  });
+
+  test("fails closed when either App trust tuple is incomplete", () => {
+    expect(() =>
+      parseGitHubWebhookConfig({
+        ...webhookBase,
+        SYMPHONY_REVIEWER_GITHUB_WEBHOOK_SECRET: undefined,
+      }),
+    ).toThrow("Symphony reviewer GitHub App webhook secret");
+    expect(() =>
+      parseGitHubWebhookConfig({
+        ...webhookBase,
+        GITHUB_APP_INSTALLATION_ID: undefined,
+      }),
+    ).toThrow("GitHub App installation id");
+  });
 
   test("leaves the Symphony relay disabled when its URL is unset", () => {
     expect(parseGitHubWebhookConfig(webhookBase).symphonyWebhookUrl).toBeUndefined();

@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 import {
   isRepositoryAllowed,
+  type GitHubWebhookIngressConfig,
   type RepositoryScope,
 } from "../../src/config/github.js";
 import {
@@ -70,12 +71,9 @@ export type GitHubWebhookResult =
   | { status: "rejected"; reason: "invalid_signature" | "invalid_payload" };
 
 export type GitHubWebhookIngressOptions = {
-  webhookSecret: string;
-  allowedRepositories: ReadonlySet<string>;
-  allowedOwners: ReadonlySet<string>;
   store: AgentControlPlaneStore;
   dispatcher: QueueDispatcher;
-} & ReviewAuthorization;
+} & GitHubWebhookIngressConfig;
 
 export function hasValidGitHubWebhookSignature(
   rawBody: string | Uint8Array,
@@ -101,6 +99,39 @@ export type GitHubCheckSuiteRelayValidation =
   | { kind: "valid" }
   | { kind: "disallowed" }
   | { kind: "invalid" };
+
+export type GitHubWebhookTrustPayloadValidation =
+  | { kind: "valid" }
+  | { kind: "disallowed" }
+  | { kind: "invalid" };
+
+export function validateGitHubWebhookTrustPayload(
+  rawBody: string,
+  scope: RepositoryScope,
+  installationId: number,
+): GitHubWebhookTrustPayloadValidation {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return { kind: "invalid" };
+  }
+  if (!isRecord(payload) || !ACTION_PATTERN.test(stringValue(payload.action))) {
+    return { kind: "invalid" };
+  }
+  const repository = parseGitHubWebhookRepository(payload);
+  if (repository === undefined) return { kind: "invalid" };
+  if (!isRepositoryAllowed(scope, repository)) return { kind: "disallowed" };
+  const installation = payload.installation;
+  if (
+    !isRecord(installation) ||
+    !isPositiveSafeInteger(installation.id) ||
+    installation.id !== installationId
+  ) {
+    return { kind: "invalid" };
+  }
+  return { kind: "valid" };
+}
 
 export function validateGitHubCheckSuiteRelayPayload(
   rawBody: string,

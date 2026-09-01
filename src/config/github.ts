@@ -9,8 +9,14 @@ export interface GitHubConfig {
   allowedOwners: Set<string>;
 }
 
-export interface GitHubWebhookConfig {
+export type GitHubWebhookTrust = {
   webhookSecret: string;
+  installationId: number;
+};
+
+export interface GitHubWebhookConfig {
+  shipwrightApp: GitHubWebhookTrust;
+  symphonyReviewerApp: GitHubWebhookTrust;
   allowedRepositories: Set<string>;
   allowedOwners: Set<string>;
   /** Optional private Symphony receiver. The HTTP adapter validates it before use. */
@@ -24,8 +30,49 @@ export interface GitHubWebhookConfig {
    */
   expectedReviewerLogin?: string;
   expectedReviewerUserId?: number;
-  /** When set, review deliveries must carry exactly this installation id. */
-  installationId?: number;
+}
+
+export interface GitHubWebhookIngressConfig extends RepositoryScope {
+  webhookSecret: string;
+  installationId: number;
+  symphonyWebhookUrl?: string;
+  expectedReviewerLogin?: string;
+  expectedReviewerUserId?: number;
+}
+
+export type GitHubWebhookEventFamily =
+  | { kind: "shipwright"; trust: GitHubWebhookTrust }
+  | { kind: "symphony_reviewer"; trust: GitHubWebhookTrust };
+
+export function selectGitHubWebhookEventFamily(
+  event: string,
+  config: GitHubWebhookConfig,
+): GitHubWebhookEventFamily | undefined {
+  if (event === "pull_request" || event === "check_suite") {
+    return { kind: "symphony_reviewer", trust: config.symphonyReviewerApp };
+  }
+  if (
+    event === "issues" ||
+    event === "pull_request_review" ||
+    event === "issue_comment"
+  ) {
+    return { kind: "shipwright", trust: config.shipwrightApp };
+  }
+  return undefined;
+}
+
+export function selectGitHubWebhookIngressConfig(
+  config: GitHubWebhookConfig,
+  family: GitHubWebhookEventFamily,
+): GitHubWebhookIngressConfig {
+  return {
+    ...family.trust,
+    allowedRepositories: config.allowedRepositories,
+    allowedOwners: config.allowedOwners,
+    symphonyWebhookUrl: config.symphonyWebhookUrl,
+    expectedReviewerLogin: config.expectedReviewerLogin,
+    expectedReviewerUserId: config.expectedReviewerUserId,
+  };
 }
 
 export type GitHubWebhookRelayDestination =
@@ -121,10 +168,16 @@ export function parseGitHubConfig(env: Environment = process.env): GitHubConfig 
 export function parseGitHubWebhookConfig(
   env: Environment = process.env,
 ): GitHubWebhookConfig {
-  const webhookSecret = env.GITHUB_WEBHOOK_SECRET?.trim();
-  if (!webhookSecret || webhookSecret.length < 32) {
-    throw new Error("GitHub webhook secret must be at least 32 characters");
-  }
+  const shipwrightApp = parseWebhookTrust(
+    env.GITHUB_WEBHOOK_SECRET,
+    env.GITHUB_APP_INSTALLATION_ID,
+    "GitHub App",
+  );
+  const symphonyReviewerApp = parseWebhookTrust(
+    env.SYMPHONY_REVIEWER_GITHUB_WEBHOOK_SECRET,
+    env.SYMPHONY_REVIEWER_GITHUB_APP_INSTALLATION_ID,
+    "Symphony reviewer GitHub App",
+  );
   const { repositories, owners } = parseAllowedRepositories(env);
   const expectedReviewerLogin =
     env.GITHUB_REVIEW_BOT_LOGIN?.trim().toLowerCase() || undefined;
@@ -139,7 +192,8 @@ export function parseGitHubWebhookConfig(
     );
   }
   return {
-    webhookSecret,
+    shipwrightApp,
+    symphonyReviewerApp,
     allowedRepositories: repositories,
     allowedOwners: owners,
     symphonyWebhookUrl,
@@ -150,12 +204,24 @@ export function parseGitHubWebhookConfig(
           "GITHUB_REVIEW_BOT_USER_ID",
         )
       : undefined,
-    installationId: env.GITHUB_APP_INSTALLATION_ID
-      ? parsePositiveInteger(
-          env.GITHUB_APP_INSTALLATION_ID,
-          "GITHUB_APP_INSTALLATION_ID",
-        )
-      : undefined,
+  };
+}
+
+function parseWebhookTrust(
+  secretValue: string | undefined,
+  installationValue: string | undefined,
+  label: string,
+): GitHubWebhookTrust {
+  const webhookSecret = secretValue?.trim();
+  if (!webhookSecret || webhookSecret.length < 32) {
+    throw new Error(`${label} webhook secret must be at least 32 characters`);
+  }
+  return {
+    webhookSecret,
+    installationId: parsePositiveInteger(
+      installationValue,
+      `${label} installation id`,
+    ),
   };
 }
 

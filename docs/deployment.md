@@ -54,23 +54,34 @@ Advance one stage at a time and verify each before moving on. For the dry-run-fi
 refuses unknown stage values, and `bun run doctor` is run as the service user
 on every deploy.
 
-GitHub webhook processing stays inactive until the operator configures a
-callback; `GITHUB_WEBHOOK_SECRET` lives only in the host environment.
+GitHub webhook processing stays inactive until the operator configures both
+App trust tuples. Their secrets live only in the host environment:
+`GITHUB_WEBHOOK_SECRET` plus `GITHUB_APP_INSTALLATION_ID` identify the
+Shipwright App, while `SYMPHONY_REVIEWER_GITHUB_WEBHOOK_SECRET` plus
+`SYMPHONY_REVIEWER_GITHUB_APP_INSTALLATION_ID` identify the Symphony reviewer
+App. Startup fails closed when either tuple is incomplete.
 
-Configure the GitHub App webhook with:
+Configure both GitHub App webhooks with the same URL and content type:
 
 - URL: `https://<SHIPWRIGHT_PUBLIC_HOST>/api/github/webhook`
 - Content type: `application/json`
-- Secret: the same value stored as `GITHUB_WEBHOOK_SECRET`
-- Events: Issues, Pull requests, and Pull request reviews
-- Add Check suites only when `SHIPWRIGHT_SYMPHONY_WEBHOOK_URL` is configured
+- Shipwright App secret: `GITHUB_WEBHOOK_SECRET`; events: Issues, Pull request
+  reviews, and Issue comments
+- Symphony reviewer App secret: `SYMPHONY_REVIEWER_GITHUB_WEBHOOK_SECRET`;
+  events: Pull requests and Check suites
+
+Each signature is accepted only for its listed event family and exact
+installation id. A valid signature from the other App is still unauthorized.
+Authenticated issue comments are acknowledged without queueing or relay until
+the typed operator-command protocol is enabled. Raw issue-comment payloads are
+never sent to Symphony.
 
 Pull-request review triggers additionally require `GITHUB_REVIEW_BOT_LOGIN`, the
 exact login of the reviewing App's bot user (for example `my-reviewer[bot]`).
 Review deliveries are rejected while it is unset, so no bot reviewer is trusted
 by default. Set `GITHUB_REVIEW_BOT_USER_ID` to also pin the reviewer's numeric
-user id, and `GITHUB_APP_INSTALLATION_ID` to require review deliveries to arrive
-on exactly that installation. The webhook payload identifies a reviewer as a bot
+user id. `GITHUB_APP_INSTALLATION_ID` requires review deliveries to arrive on
+exactly the Shipwright installation. The webhook payload identifies a reviewer as a bot
 user rather than by App id, which is why identity is pinned on login and user id.
 
 `POST /api/github/webhook` is intentionally outside session authentication

@@ -1,6 +1,7 @@
 import { defineEventHandler, setResponseStatus } from "h3";
 
 import { resolveShipwrightStateDirectory } from "../../../src/config/state.js";
+import { parseGitHubWebhookConfig } from "../../../src/config/github.js";
 import { getAgentManagementService } from "../agent-management";
 import { buildControlPlaneReadiness } from "../control-plane-observability";
 import { resolveRolloutStage } from "../control-plane-runtime";
@@ -12,6 +13,10 @@ import { resolveRolloutStage } from "../control-plane-runtime";
  */
 export default defineEventHandler((event) => {
   try {
+    // The public webhook is part of the always-on service contract. Report the
+    // process unready before traffic arrives when either App trust tuple is
+    // incomplete; the route uses this same parser for every delivery.
+    parseGitHubWebhookConfig();
     const status = buildControlPlaneReadiness({
       snapshot: getAgentManagementService().getSnapshot(),
       stage: resolveRolloutStage(),

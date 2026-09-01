@@ -9,7 +9,10 @@ import {
 import {
   parseGitHubWebhookRelayDestination,
   parseGitHubWebhookConfig,
+  selectGitHubWebhookEventFamily,
+  selectGitHubWebhookIngressConfig,
   type GitHubWebhookConfig,
+  type GitHubWebhookIngressConfig,
   type GitHubWebhookRelayDestination,
 } from "../../../../../src/config/github.js";
 import { getAgentManagementService } from "../../../agent-management";
@@ -19,6 +22,7 @@ import {
   isGitHubWebhookRepositoryAllowed,
   isValidGitHubDeliveryId,
   validateGitHubCheckSuiteRelayPayload,
+  validateGitHubWebhookTrustPayload,
   type GitHubWebhookInput,
   type GitHubWebhookResult,
 } from "../../../github-webhook";
@@ -36,7 +40,7 @@ export interface GitHubWebhookRouteDependencies {
   loadConfig?: () => GitHubWebhookConfig;
   receive?: (
     input: GitHubWebhookInput,
-    config: GitHubWebhookConfig,
+    config: GitHubWebhookIngressConfig,
   ) => Promise<GitHubWebhookResult>;
   loadRelayDestination?: (event: H3Event) => unknown;
   relayFetch?: RelayFetch;
@@ -76,14 +80,21 @@ export function createGitHubWebhookRoute(
     const deliveryId = event.req.headers.get("x-github-delivery") ?? "";
     const signature = event.req.headers.get("x-hub-signature-256") ?? "";
     const contentType = event.req.headers.get("content-type");
+    const rawText = Buffer.from(rawBody).toString("utf8");
 
     try {
       const config = loadConfig();
+      const family = selectGitHubWebhookEventFamily(githubEvent, config);
+      if (family === undefined) {
+        setResponseStatus(event, 400);
+        return { status: "rejected", reason: "invalid_payload" };
+      }
+      const ingressConfig = selectGitHubWebhookIngressConfig(config, family);
       if (
         !hasValidGitHubWebhookSignature(
           rawBytes,
           signature,
-          config.webhookSecret,
+          ingressConfig.webhookSecret,
         )
       ) {
         setResponseStatus(event, 401);
@@ -94,9 +105,23 @@ export function createGitHubWebhookRoute(
         return { status: "rejected", reason: "invalid_payload" };
       }
 
+      const trustValidation = validateGitHubWebhookTrustPayload(
+        rawText,
+        ingressConfig,
+        ingressConfig.installationId,
+      );
+      if (trustValidation.kind === "invalid") {
+        setResponseStatus(event, 400);
+        return { status: "rejected", reason: "invalid_payload" };
+      }
+      if (trustValidation.kind === "disallowed") {
+        setResponseStatus(event, 202);
+        return acceptedWithoutLocalIntake();
+      }
+
       const relayDestination = parseGitHubWebhookRelayDestination(
         dependencies.loadRelayDestination?.(event) ??
-          config.symphonyWebhookUrl,
+          ingressConfig.symphonyWebhookUrl,
       );
       if (relayDestination.kind === "invalid") {
         console.error("GitHub webhook relay destination rejected");
@@ -108,8 +133,8 @@ export function createGitHubWebhookRoute(
         relayDestination.kind === "private"
       ) {
         const validation = validateGitHubCheckSuiteRelayPayload(
-          Buffer.from(rawBody).toString("utf8"),
-          config,
+          rawText,
+          ingressConfig,
         );
         if (validation.kind === "invalid") {
           setResponseStatus(event, 400);
@@ -136,18 +161,23 @@ export function createGitHubWebhookRoute(
         return acceptedWithoutLocalIntake();
       }
 
+      if (githubEvent === "issue_comment") {
+        setResponseStatus(event, 202);
+        return acceptedWithoutLocalIntake();
+      }
+
       const input: GitHubWebhookInput = {
         event: githubEvent,
         deliveryId,
         signature,
-        rawBody: Buffer.from(rawBody).toString("utf8"),
+        rawBody: rawText,
       };
-      const result = await receive(input, config);
+      const result = await receive(input, ingressConfig);
       if (result.status === "accepted") {
         if (
           githubEvent === "pull_request" &&
           relayDestination.kind === "private" &&
-          isGitHubWebhookRepositoryAllowed(input.rawBody, config) &&
+          isGitHubWebhookRepositoryAllowed(input.rawBody, ingressConfig) &&
           !(await relayOnce({
             destination: relayDestination,
             deliveryId,

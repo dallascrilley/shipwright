@@ -45,11 +45,14 @@ function createFixture(
   });
   const ingress = new GitHubWebhookIngress({
     webhookSecret: WEBHOOK_SECRET,
+    installationId:
+      authorization.installationId ?? EXPECTED_INSTALLATION_ID,
     allowedRepositories: new Set(["dallascrilley/shipwright"]),
     allowedOwners: new Set(),
     store,
     dispatcher,
-    ...authorization,
+    expectedReviewerLogin: authorization.expectedReviewerLogin,
+    expectedReviewerUserId: authorization.expectedReviewerUserId,
   });
   return { controlPlane, dispatcher, ingress, store };
 }

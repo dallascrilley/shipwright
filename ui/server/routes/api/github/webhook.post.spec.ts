@@ -11,12 +11,22 @@ import { MemoryAgentControlPlaneStore } from "../../../agent-control-plane";
 import { AgentManagementService } from "../../../agent-management";
 import { createGitHubWebhookRoute } from "./webhook.post";
 
+const SHIPWRIGHT_WEBHOOK_SECRET = "w".repeat(32);
+const REVIEWER_WEBHOOK_SECRET = "r".repeat(32);
+const SHIPWRIGHT_INSTALLATION_ID = 42;
+const REVIEWER_INSTALLATION_ID = 84;
 const config = {
-  webhookSecret: "w".repeat(32),
+  shipwrightApp: {
+    webhookSecret: SHIPWRIGHT_WEBHOOK_SECRET,
+    installationId: SHIPWRIGHT_INSTALLATION_ID,
+  },
+  symphonyReviewerApp: {
+    webhookSecret: REVIEWER_WEBHOOK_SECRET,
+    installationId: REVIEWER_INSTALLATION_ID,
+  },
   allowedRepositories: new Set(["dallascrilley/shipwright"]),
   allowedOwners: new Set(["dallascrilley"]),
   expectedReviewerLogin: "review-app[bot]",
-  installationId: 42,
 };
 const privateRelayUrl = "http://127.0.0.1:4187/webhooks/github";
 
@@ -96,8 +106,16 @@ function createApp(service: AgentManagementService) {
   );
 }
 
-function signatureFor(rawBody: string): string {
-  return `sha256=${createHmac("sha256", config.webhookSecret)
+function signatureFor(rawBody: string, event: string): string {
+  const secret =
+    event === "pull_request" || event === "check_suite"
+      ? REVIEWER_WEBHOOK_SECRET
+      : SHIPWRIGHT_WEBHOOK_SECRET;
+  return signatureWithSecret(rawBody, secret);
+}
+
+function signatureWithSecret(rawBody: string, secret: string): string {
+  return `sha256=${createHmac("sha256", secret)
     .update(rawBody)
     .digest("hex")}`;
 }
@@ -113,7 +131,7 @@ function signedRawRequest(
       ...requestHeaders(),
       "x-github-event": event,
       "x-github-delivery": deliveryId,
-      "x-hub-signature-256": signatureFor(rawBody),
+      "x-hub-signature-256": signatureFor(rawBody, event),
     },
     body: rawBody,
   };
@@ -124,11 +142,133 @@ function signedRequest(
   deliveryId: string,
   event: GithubTriggerEvent = "issues",
 ) {
-  const rawBody = JSON.stringify(payload);
+  const installationId =
+    event === "pull_request"
+      ? REVIEWER_INSTALLATION_ID
+      : SHIPWRIGHT_INSTALLATION_ID;
+  const rawBody = JSON.stringify({
+    ...payload,
+    installation: { id: installationId },
+  });
   return signedRawRequest(rawBody, deliveryId, event);
 }
 
 describe("POST /api/github/webhook", () => {
+  test.each([
+    ["pull_request", SHIPWRIGHT_WEBHOOK_SECRET, REVIEWER_INSTALLATION_ID],
+    ["check_suite", SHIPWRIGHT_WEBHOOK_SECRET, REVIEWER_INSTALLATION_ID],
+    ["pull_request_review", REVIEWER_WEBHOOK_SECRET, SHIPWRIGHT_INSTALLATION_ID],
+    ["issue_comment", REVIEWER_WEBHOOK_SECRET, SHIPWRIGHT_INSTALLATION_ID],
+  ] as const)(
+    "rejects the other App secret for %s before any effect",
+    async (githubEvent, wrongSecret, installationId) => {
+      const receive = vi.fn();
+      const relayFetch = vi.fn();
+      const rawBody = JSON.stringify({
+        action: githubEvent === "issue_comment" ? "created" : "opened",
+        repository: { full_name: "dallascrilley/shipwright" },
+        installation: { id: installationId },
+      });
+      const app = new H3().post(
+        "/api/github/webhook",
+        createGitHubWebhookRoute({
+          loadConfig: () => config,
+          loadRelayDestination: () => privateRelayUrl,
+          receive,
+          relayFetch,
+        }),
+      );
+
+      const response = await app.request("/api/github/webhook", {
+        method: "POST",
+        headers: {
+          ...requestHeaders(),
+          "x-github-event": githubEvent,
+          "x-github-delivery": `wrong-secret-${githubEvent}`,
+          "x-hub-signature-256": signatureWithSecret(rawBody, wrongSecret),
+        },
+        body: rawBody,
+      });
+
+      expect(response.status).toBe(401);
+      expect(receive).not.toHaveBeenCalled();
+      expect(relayFetch).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each([
+    ["pull_request", SHIPWRIGHT_INSTALLATION_ID],
+    ["check_suite", SHIPWRIGHT_INSTALLATION_ID],
+    ["pull_request_review", REVIEWER_INSTALLATION_ID],
+    ["issue_comment", REVIEWER_INSTALLATION_ID],
+  ] as const)(
+    "rejects the other App installation for %s before any effect",
+    async (githubEvent, wrongInstallationId) => {
+      const receive = vi.fn();
+      const relayFetch = vi.fn();
+      const rawBody = JSON.stringify({
+        action: githubEvent === "issue_comment" ? "created" : "opened",
+        repository: { full_name: "dallascrilley/shipwright" },
+        installation: { id: wrongInstallationId },
+      });
+      const app = new H3().post(
+        "/api/github/webhook",
+        createGitHubWebhookRoute({
+          loadConfig: () => config,
+          loadRelayDestination: () => privateRelayUrl,
+          receive,
+          relayFetch,
+        }),
+      );
+
+      const response = await app.request(
+        "/api/github/webhook",
+        signedRawRequest(
+          rawBody,
+          `wrong-installation-${githubEvent}`,
+          githubEvent,
+        ),
+      );
+
+      expect(response.status).toBe(400);
+      expect(receive).not.toHaveBeenCalled();
+      expect(relayFetch).not.toHaveBeenCalled();
+    },
+  );
+
+  test("accepts an authenticated issue comment without local intake or Symphony relay", async () => {
+    const receive = vi.fn();
+    const relayFetch = vi.fn();
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => config,
+        loadRelayDestination: () => privateRelayUrl,
+        receive,
+        relayFetch,
+      }),
+    );
+
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRawRequest(
+        JSON.stringify({
+          action: "created",
+          repository: { full_name: "dallascrilley/shipwright" },
+          installation: { id: SHIPWRIGHT_INSTALLATION_ID },
+          issue: { number: 7, pull_request: { url: "https://example.invalid" } },
+          comment: { id: 99, body: "ordinary comment" },
+        }),
+        "ignored-issue-comment",
+        "issue_comment",
+      ),
+    );
+
+    expect(response.status).toBe(202);
+    expect(receive).not.toHaveBeenCalled();
+    expect(relayFetch).not.toHaveBeenCalled();
+  });
+
   test("relays a signed pull request byte-for-byte after local intake", async () => {
     const service = createService();
     await createEnabledAgent(service, [], "pull_request", "opened");
@@ -146,8 +286,8 @@ describe("POST /api/github/webhook", () => {
         relayFetch,
       }),
     );
-    const rawBody = ` {\n  "action": "opened",\n  "repository": { "full_name": "dallascrilley/shipwright" },\n  "number": 7,\n  "pull_request": { "number": 7, "base": { "ref": "main" }, "draft": false, "labels": [] }\n}\n`;
-    const signature = signatureFor(rawBody);
+    const rawBody = ` {\n  "action": "opened",\n  "repository": { "full_name": "dallascrilley/shipwright" },\n  "installation": { "id": 84 },\n  "number": 7,\n  "pull_request": { "number": 7, "base": { "ref": "main" }, "draft": false, "labels": [] }\n}\n`;
+    const signature = signatureFor(rawBody, "pull_request");
 
     const response = await app.request(
       "/api/github/webhook",
@@ -189,7 +329,7 @@ describe("POST /api/github/webhook", () => {
         relayFetch,
       }),
     );
-    const rawBody = `{"check_suite":{"id":91},"action":"completed","repository":{"full_name":"dallascrilley/shipwright"}}\n`;
+    const rawBody = `{"check_suite":{"id":91},"action":"completed","repository":{"full_name":"dallascrilley/shipwright"},"installation":{"id":84}}\n`;
 
     const response = await app.request(
       "/api/github/webhook",
@@ -250,7 +390,7 @@ describe("POST /api/github/webhook", () => {
     );
 
     expect(response.status).toBe(202);
-    expect(receive).toHaveBeenCalledTimes(1);
+    expect(receive).not.toHaveBeenCalled();
     expect(relayFetch).not.toHaveBeenCalled();
   });
 
@@ -316,7 +456,7 @@ describe("POST /api/github/webhook", () => {
     const response = await app.request(
       "/api/github/webhook",
       signedRawRequest(
-        '{"check_suite":{"id":91},"action":"completed"}\n',
+        '{"check_suite":{"id":91},"action":"completed","repository":{"full_name":"dallascrilley/shipwright"},"installation":{"id":84}}\n',
         "delivery-check-suite-disabled",
         "check_suite",
       ),
@@ -571,7 +711,12 @@ describe("POST /api/github/webhook", () => {
         relayFetch,
       }),
     );
-    const rawBody = "{}";
+    const rawBody = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "dallascrilley/shipwright" },
+      installation: { id: SHIPWRIGHT_INSTALLATION_ID },
+      issue: { number: 42 },
+    });
 
     const response = await app.request(
       "/api/github/webhook",
@@ -916,6 +1061,7 @@ describe("POST /api/github/webhook", () => {
     const rawBody = JSON.stringify({
       action: "opened",
       repository: { full_name: "dallascrilley/shipwright" },
+      installation: { id: SHIPWRIGHT_INSTALLATION_ID },
       issue: { number: 42 },
     });
 
@@ -937,9 +1083,15 @@ describe("POST /api/github/webhook", () => {
         event: "issues",
         deliveryId: "delivery-1",
         rawBody,
-        signature: signatureFor(rawBody),
+        signature: signatureFor(rawBody, "issues"),
       },
-      config,
+      {
+        webhookSecret: SHIPWRIGHT_WEBHOOK_SECRET,
+        installationId: SHIPWRIGHT_INSTALLATION_ID,
+        allowedRepositories: config.allowedRepositories,
+        allowedOwners: config.allowedOwners,
+        expectedReviewerLogin: config.expectedReviewerLogin,
+      },
     );
   });
 
@@ -960,7 +1112,15 @@ describe("POST /api/github/webhook", () => {
 
       const response = await app.request(
         "/api/github/webhook",
-        signedRawRequest("{}", "delivery-1", "issues"),
+        signedRequest(
+          {
+            action: "opened",
+            repository: { full_name: "dallascrilley/shipwright" },
+            issue: { number: 42 },
+          },
+          "delivery-1",
+          "issues",
+        ),
       );
 
       expect(response.status).toBe(status);

@@ -1,5 +1,6 @@
 {
   "action": "opened",
+  "installation": { "id": 147693967 },
   "repository": { "full_name": "dallascrilley/shipwright" },
   "sender": { "login": "github-actions[bot]" },
   "issue": { "number": 42, "labels": [] }

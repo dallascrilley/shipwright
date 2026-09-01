@@ -2,7 +2,10 @@ import { accessSync, constants, mkdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
-import { parseGitHubConfig } from "../src/config/github.js";
+import {
+  parseGitHubConfig,
+  parseGitHubWebhookConfig,
+} from "../src/config/github.js";
 import { resolveProvider } from "../src/config/provider.js";
 import { resolveBunExecutable, resolveSandboxImage } from "../src/sandbox/runtime.js";
 
@@ -75,6 +78,10 @@ if (!runtimeOnly) {
     configurationCheck("GitHub App", () => {
       const config = parseGitHubConfig();
       return `${config.allowedRepositories.size} allowlisted repository`;
+    }),
+    configurationCheck("GitHub webhook trust", () => {
+      const config = parseGitHubWebhookConfig();
+      return `Shipwright installation ${config.shipwrightApp.installationId}; Symphony reviewer installation ${config.symphonyReviewerApp.installationId}`;
     }),
     configurationCheck("Model provider", () => {
       const provider = resolveProvider();
