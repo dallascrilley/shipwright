@@ -32,6 +32,7 @@ export interface PullRequestContext extends PullRequestRef {
   baseSha: string;
   headBranch: string;
   headSha: string;
+  draft: boolean;
   installationId: number;
 }
 

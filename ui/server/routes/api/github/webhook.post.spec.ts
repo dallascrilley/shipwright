@@ -9,6 +9,7 @@ import type {
 } from "../../../../shared/agent-definition";
 import { MemoryAgentControlPlaneStore } from "../../../agent-control-plane";
 import { AgentManagementService } from "../../../agent-management";
+import { PullRequestAuthorizationError } from "../../../../../src/github/app-client";
 import { createGitHubWebhookRoute } from "./webhook.post";
 
 const SHIPWRIGHT_WEBHOOK_SECRET = "w".repeat(32);
@@ -29,6 +30,18 @@ const config = {
   expectedReviewerLogin: "review-app[bot]",
 };
 const privateRelayUrl = "http://127.0.0.1:4187/webhooks/github";
+const reviewRequestUrl = "http://127.0.0.1:4188/api/v1/review-requests";
+const reviewProtocolSecret = "p".repeat(32);
+const commandConfig = {
+  ...config,
+  reviewCommand: {
+    repository: "dallascrilley/shipwright",
+    operatorLogin: "operator",
+    operatorUserId: 123,
+    requestUrl: new URL(reviewRequestUrl),
+    protocolSecret: reviewProtocolSecret,
+  },
+};
 
 function requestHeaders() {
   return {
@@ -153,6 +166,41 @@ function signedRequest(
   return signedRawRequest(rawBody, deliveryId, event);
 }
 
+function reviewCommandPayload(
+  override: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    action: "created",
+    repository: { full_name: "dallascrilley/shipwright" },
+    installation: { id: SHIPWRIGHT_INSTALLATION_ID },
+    issue: { number: 7, pull_request: { url: "https://example.invalid" } },
+    comment: {
+      id: 99,
+      body: "@shipwright review",
+      user: { id: 123, login: "operator" },
+    },
+    sender: { id: 123, login: "operator" },
+    ...override,
+  };
+}
+
+function authorizedPullRequest() {
+  return {
+    owner: "dallascrilley",
+    repo: "shipwright",
+    number: 7,
+    url: "https://example.invalid/dallascrilley/shipwright/pull/7",
+    title: "Canary",
+    body: "",
+    draft: false,
+    baseBranch: "main",
+    baseSha: "b".repeat(40),
+    headBranch: "factory-ready",
+    headSha: "a".repeat(40),
+    installationId: SHIPWRIGHT_INSTALLATION_ID,
+  };
+}
+
 describe("POST /api/github/webhook", () => {
   test.each([
     ["pull_request", SHIPWRIGHT_WEBHOOK_SECRET, REVIEWER_INSTALLATION_ID],
@@ -165,7 +213,7 @@ describe("POST /api/github/webhook", () => {
       const receive = vi.fn();
       const relayFetch = vi.fn();
       const rawBody = JSON.stringify({
-        action: githubEvent === "issue_comment" ? "created" : "opened",
+        action: "opened",
         repository: { full_name: "dallascrilley/shipwright" },
         installation: { id: installationId },
       });
@@ -200,14 +248,13 @@ describe("POST /api/github/webhook", () => {
     ["pull_request", SHIPWRIGHT_INSTALLATION_ID],
     ["check_suite", SHIPWRIGHT_INSTALLATION_ID],
     ["pull_request_review", REVIEWER_INSTALLATION_ID],
-    ["issue_comment", REVIEWER_INSTALLATION_ID],
   ] as const)(
     "rejects the other App installation for %s before any effect",
     async (githubEvent, wrongInstallationId) => {
       const receive = vi.fn();
       const relayFetch = vi.fn();
       const rawBody = JSON.stringify({
-        action: githubEvent === "issue_comment" ? "created" : "opened",
+        action: "opened",
         repository: { full_name: "dallascrilley/shipwright" },
         installation: { id: wrongInstallationId },
       });
@@ -235,6 +282,37 @@ describe("POST /api/github/webhook", () => {
       expect(relayFetch).not.toHaveBeenCalled();
     },
   );
+
+  test("acknowledges a Shipwright-signed issue comment from the wrong installation without an effect", async () => {
+    const receive = vi.fn();
+    const relayFetch = vi.fn();
+    const reviewRequestFetch = vi.fn();
+    const authorizeReviewCommand = vi.fn();
+    const rawBody = JSON.stringify(reviewCommandPayload({
+      installation: { id: REVIEWER_INSTALLATION_ID },
+    }));
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => commandConfig,
+        receive,
+        relayFetch,
+        reviewRequestFetch,
+        authorizeReviewCommand,
+      }),
+    );
+
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRawRequest(rawBody, "wrong-comment-installation", "issue_comment"),
+    );
+
+    expect(response.status).toBe(202);
+    expect(receive).not.toHaveBeenCalled();
+    expect(relayFetch).not.toHaveBeenCalled();
+    expect(reviewRequestFetch).not.toHaveBeenCalled();
+    expect(authorizeReviewCommand).not.toHaveBeenCalled();
+  });
 
   test("accepts an authenticated issue comment without local intake or Symphony relay", async () => {
     const receive = vi.fn();
@@ -267,6 +345,223 @@ describe("POST /api/github/webhook", () => {
     expect(response.status).toBe(202);
     expect(receive).not.toHaveBeenCalled();
     expect(relayFetch).not.toHaveBeenCalled();
+  });
+
+  test("authorizes an exact review command and emits only a signed typed request", async () => {
+    const receive = vi.fn();
+    const relayFetch = vi.fn();
+    const authorizeReviewCommand = vi.fn(async () => authorizedPullRequest());
+    const reviewRequestFetch = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(null, { status: 202 }),
+    );
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => commandConfig,
+        loadRelayDestination: () => privateRelayUrl,
+        receive,
+        relayFetch,
+        reviewRequestFetch,
+        authorizeReviewCommand,
+        now: () => 1_234_000,
+      }),
+    );
+    const rawBody = JSON.stringify(reviewCommandPayload({
+      untrusted: "raw-payload-marker",
+    }));
+
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRawRequest(rawBody, "delivery-command", "issue_comment"),
+    );
+
+    expect(response.status).toBe(202);
+    expect(receive).not.toHaveBeenCalled();
+    expect(relayFetch).not.toHaveBeenCalled();
+    expect(authorizeReviewCommand).toHaveBeenCalledWith(
+      "dallascrilley/shipwright",
+      7,
+    );
+    expect(reviewRequestFetch).toHaveBeenCalledTimes(1);
+    const call = reviewRequestFetch.mock.calls[0];
+    if (!call) throw new Error("missing review request call");
+    expect(call[0].toString()).toBe(reviewRequestUrl);
+    const headers = new Headers(call[1]?.headers);
+    const requestId = "github:delivery-command:comment:99";
+    const body = await new Response(call[1]?.body).text();
+    expect(JSON.parse(body)).toEqual({
+      schemaVersion: 1,
+      repository: "dallascrilley/shipwright",
+      pullNumber: 7,
+      headSha: "a".repeat(40),
+      baseSha: "b".repeat(40),
+      requestedBy: { login: "operator", userId: 123 },
+      source: {
+        kind: "issue_comment",
+        deliveryId: "delivery-command",
+        commentId: 99,
+      },
+    });
+    expect(body).not.toContain("@shipwright review");
+    expect(body).not.toContain("raw-payload-marker");
+    expect(headers.get("x-shipwright-request-id")).toBe(requestId);
+    expect(headers.get("x-shipwright-timestamp")).toBe("1234");
+    expect(headers.get("x-shipwright-signature-256")).toBe(
+      `sha256=${createHmac("sha256", reviewProtocolSecret)
+        .update(`1234\n${requestId}\n${body}`)
+        .digest("hex")}`,
+    );
+  });
+
+  test.each([
+    ["wrong action", { action: "edited" }],
+    ["wrong body", { comment: { id: 99, body: "ordinary", user: { id: 123, login: "operator" } } }],
+    ["ordinary issue", { issue: { number: 7 } }],
+    ["spoofed sender", { sender: { id: 9, login: "operator" } }],
+  ])("ignores authenticated %s comments without an effect", async (_name, override) => {
+    const authorizeReviewCommand = vi.fn();
+    const reviewRequestFetch = vi.fn();
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => commandConfig,
+        receive: vi.fn(),
+        relayFetch: vi.fn(),
+        reviewRequestFetch,
+        authorizeReviewCommand,
+      }),
+    );
+    const rawBody = JSON.stringify(reviewCommandPayload(override));
+
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRawRequest(
+        rawBody,
+        `ignored-${_name.replace(/ /g, "-")}`,
+        "issue_comment",
+      ),
+    );
+
+    expect(response.status).toBe(202);
+    expect(authorizeReviewCommand).not.toHaveBeenCalled();
+    expect(reviewRequestFetch).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["draft", async () => ({ ...authorizedPullRequest(), draft: true })],
+    [
+      "unauthorized PR",
+      async () => {
+        throw new PullRequestAuthorizationError("forked pull request");
+      },
+    ],
+  ])("ignores a %s review command", async (_name, authorizeReviewCommand) => {
+    const reviewRequestFetch = vi.fn();
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => commandConfig,
+        reviewRequestFetch,
+        authorizeReviewCommand,
+      }),
+    );
+    const rawBody = JSON.stringify(reviewCommandPayload());
+
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRawRequest(
+        rawBody,
+        `conflict-${_name.replace(/ /g, "-")}`,
+        "issue_comment",
+      ),
+    );
+
+    expect(response.status).toBe(202);
+    expect(reviewRequestFetch).not.toHaveBeenCalled();
+  });
+
+  test("returns 409 when exact PR context conflicts after authorization", async () => {
+    const reviewRequestFetch = vi.fn();
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => commandConfig,
+        reviewRequestFetch,
+        authorizeReviewCommand: async () => ({
+          ...authorizedPullRequest(),
+          headSha: "stale",
+        }),
+      }),
+    );
+    const rawBody = JSON.stringify(reviewCommandPayload());
+
+    const response = await app.request(
+      "/api/github/webhook",
+      signedRawRequest(rawBody, "conflict-stale-head", "issue_comment"),
+    );
+
+    expect(response.status).toBe(409);
+    expect(reviewRequestFetch).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["conflict", 409, 409, null],
+    ["unavailable", 503, 503, "10"],
+  ] as const)(
+    "maps Symphony %s without treating it as a raw webhook relay",
+    async (_name, downstreamStatus, expectedStatus, retryAfter) => {
+      const reviewRequestFetch = vi.fn(
+        async (_input: string | URL | Request, _init?: RequestInit) =>
+          new Response(null, { status: downstreamStatus }),
+      );
+      const app = new H3().post(
+        "/api/github/webhook",
+        createGitHubWebhookRoute({
+          loadConfig: () => commandConfig,
+          reviewRequestFetch,
+          authorizeReviewCommand: async () => authorizedPullRequest(),
+        }),
+      );
+      const rawBody = JSON.stringify(reviewCommandPayload());
+
+      const response = await app.request(
+        "/api/github/webhook",
+        signedRawRequest(rawBody, `downstream-${_name}`, "issue_comment"),
+      );
+
+      expect(response.status).toBe(expectedStatus);
+      expect(response.headers.get("retry-after")).toBe(retryAfter);
+    },
+  );
+
+  test("replays the same command with identical request identity and bytes", async () => {
+    const calls: Array<{ requestId: string | null; body: string }> = [];
+    const reviewRequestFetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        calls.push({
+          requestId: new Headers(init?.headers).get("x-shipwright-request-id"),
+          body: await new Response(init?.body).text(),
+        });
+        return new Response(null, { status: 202 });
+      },
+    );
+    const app = new H3().post(
+      "/api/github/webhook",
+      createGitHubWebhookRoute({
+        loadConfig: () => commandConfig,
+        reviewRequestFetch,
+        authorizeReviewCommand: async () => authorizedPullRequest(),
+        now: () => 1_234_000,
+      }),
+    );
+    const rawBody = JSON.stringify(reviewCommandPayload());
+    const request = signedRawRequest(rawBody, "delivery-replay", "issue_comment");
+
+    expect((await app.request("/api/github/webhook", request)).status).toBe(202);
+    expect((await app.request("/api/github/webhook", request)).status).toBe(202);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toEqual(calls[1]);
   });
 
   test("relays a signed pull request byte-for-byte after local intake", async () => {

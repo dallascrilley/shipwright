@@ -76,6 +76,40 @@ Authenticated issue comments are acknowledged without queueing or relay until
 the typed operator-command protocol is enabled. Raw issue-comment payloads are
 never sent to Symphony.
 
+Enable the operator command only by setting this complete tuple; leaving every
+field unset keeps it disabled, while partial configuration fails readiness:
+
+```sh
+SHIPWRIGHT_REVIEW_COMMAND_REPOSITORY=<exact-owner>/<exact-repo>
+SHIPWRIGHT_REVIEW_OPERATOR_LOGIN=<exact-operator-login>
+SHIPWRIGHT_REVIEW_OPERATOR_USER_ID=<numeric-operator-user-id>
+SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_URL=http://127.0.0.1:11100/api/v1/review-requests
+SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_SECRET=<independent-protocol-secret>
+```
+
+For a Shipwright-App-signed `issue_comment`, the route accepts only action
+`created`, an exact trimmed body of `@shipwright review`, a pull request in the
+configured repository and installation, and matching commenter and sender
+login/user identity. Shipwright then reauthorizes the current open,
+non-draft, same-repository pull request through GitHub. Ignored and unauthorized
+comments return `202` without queueing, acknowledgement comments, or raw-body
+persistence.
+
+An authorized command becomes a `ReviewRequestV1` containing only schema
+version, exact repository and pull number, current head/base SHAs, pinned
+requester identity, and source delivery/comment IDs. Shipwright signs the exact
+JSON bytes with HMAC-SHA256 over
+`timestamp + newline + request-id + newline + body`, then sends them to the
+private `/api/v1/review-requests` endpoint with
+`X-Shipwright-Timestamp`, `X-Shipwright-Request-Id`, and
+`X-Shipwright-Signature-256`. The request ID is deterministically
+`github:<delivery-id>:comment:<comment-id>`, so replay reaches Symphony with
+the same identity and body. Store the protocol secret separately from both
+GitHub App webhook secrets. Only Symphony `202` is accepted; an exact-head
+conflict remains `409`, and timeout or dependency failure returns `503` with
+`Retry-After: 10`. Symphony remains an advisory reviewer and publishes only
+`COMMENT`, never `APPROVED`.
+
 Pull-request review triggers additionally require `GITHUB_REVIEW_BOT_LOGIN`, the
 exact login of the reviewing App's bot user (for example `my-reviewer[bot]`).
 Review deliveries are rejected while it is unset, so no bot reviewer is trusted

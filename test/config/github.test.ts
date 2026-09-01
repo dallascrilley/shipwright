@@ -100,8 +100,104 @@ describe("parseGitHubWebhookConfig", () => {
     ).toThrow("GitHub App installation id");
   });
 
+  test("requires distinct secrets for every trust boundary", () => {
+    expect(() =>
+      parseGitHubWebhookConfig({
+        ...webhookBase,
+        SYMPHONY_REVIEWER_GITHUB_WEBHOOK_SECRET:
+          webhookBase.GITHUB_WEBHOOK_SECRET,
+      }),
+    ).toThrow("must be distinct");
+
+    const reviewCommandBase = {
+      ...webhookBase,
+      SHIPWRIGHT_REVIEW_COMMAND_REPOSITORY: "acme/widget",
+      SHIPWRIGHT_REVIEW_OPERATOR_LOGIN: "operator",
+      SHIPWRIGHT_REVIEW_OPERATOR_USER_ID: "42",
+      SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_URL:
+        "http://127.0.0.1:11100/api/v1/review-requests",
+      SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_SECRET: "p".repeat(32),
+    };
+    expect(() =>
+      parseGitHubWebhookConfig({
+        ...reviewCommandBase,
+        SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_SECRET:
+          webhookBase.GITHUB_WEBHOOK_SECRET,
+      }),
+    ).toThrow("must be distinct");
+    expect(() =>
+      parseGitHubWebhookConfig({
+        ...reviewCommandBase,
+        SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_SECRET:
+          webhookBase.SYMPHONY_REVIEWER_GITHUB_WEBHOOK_SECRET,
+      }),
+    ).toThrow("must be distinct");
+  });
+
   test("leaves the Symphony relay disabled when its URL is unset", () => {
     expect(parseGitHubWebhookConfig(webhookBase).symphonyWebhookUrl).toBeUndefined();
+  });
+
+  test("leaves review commands disabled when their trust tuple is unset", () => {
+    expect(parseGitHubWebhookConfig(webhookBase).reviewCommand).toBeUndefined();
+  });
+
+  test("parses an exact private review-command trust tuple", () => {
+    expect(
+      parseGitHubWebhookConfig({
+        ...webhookBase,
+        SHIPWRIGHT_REVIEW_COMMAND_REPOSITORY: " Acme/Widget ",
+        SHIPWRIGHT_REVIEW_OPERATOR_LOGIN: " Operator ",
+        SHIPWRIGHT_REVIEW_OPERATOR_USER_ID: "42",
+        SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_URL:
+          "http://127.0.0.1:11100/api/v1/review-requests",
+        SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_SECRET: "p".repeat(32),
+      }).reviewCommand,
+    ).toEqual({
+      repository: "acme/widget",
+      operatorLogin: "operator",
+      operatorUserId: 42,
+      requestUrl: new URL(
+        "http://127.0.0.1:11100/api/v1/review-requests",
+      ),
+      protocolSecret: "p".repeat(32),
+    });
+  });
+
+  test("rejects partial or wildcard review-command configuration", () => {
+    expect(() =>
+      parseGitHubWebhookConfig({
+        ...webhookBase,
+        SHIPWRIGHT_REVIEW_COMMAND_REPOSITORY: "acme/widget",
+      }),
+    ).toThrow("every Shipwright review command field");
+    expect(() =>
+      parseGitHubWebhookConfig({
+        ...webhookBase,
+        SHIPWRIGHT_REVIEW_COMMAND_REPOSITORY: "acme/*",
+        SHIPWRIGHT_REVIEW_OPERATOR_LOGIN: "operator",
+        SHIPWRIGHT_REVIEW_OPERATOR_USER_ID: "42",
+        SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_URL:
+          "http://127.0.0.1:11100/api/v1/review-requests",
+        SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_SECRET: "p".repeat(32),
+      }),
+    ).toThrow("one exact owner/repo");
+  });
+
+  test.each([
+    "https://example.com/api/v1/review-requests",
+    "http://127.0.0.1:11100/webhooks/github",
+  ])("rejects a non-private or wrong-path review request URL: %s", (url) => {
+    expect(() =>
+      parseGitHubWebhookConfig({
+        ...webhookBase,
+        SHIPWRIGHT_REVIEW_COMMAND_REPOSITORY: "acme/widget",
+        SHIPWRIGHT_REVIEW_OPERATOR_LOGIN: "operator",
+        SHIPWRIGHT_REVIEW_OPERATOR_USER_ID: "42",
+        SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_URL: url,
+        SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_SECRET: "p".repeat(32),
+      }),
+    ).toThrow("SHIPWRIGHT_SYMPHONY_REVIEW_REQUEST_URL");
   });
 
   test("normalizes the configured private Symphony webhook URL", () => {

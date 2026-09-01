@@ -53,7 +53,7 @@ function fixture(options: {
   const authorized: AuthorizedPullRequest = {
     pullRequest: {
       owner: "acme", repo: "widget", number: 4, url: "https://github.com/acme/widget/pull/4",
-      title: "Change", body: "body", baseBranch: "main", baseSha: "base1", headBranch: "feature", headSha: "head1", installationId: 1,
+      title: "Change", body: "body", draft: false, baseBranch: "main", baseSha: "base1", headBranch: "feature", headSha: "head1", installationId: 1,
     },
     reviewThreads: [thread()],
     reviews: [{ id: "review-1", state: "CHANGES_REQUESTED", body: "review", author: "reviewer" }],

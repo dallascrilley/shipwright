@@ -163,13 +163,17 @@ export interface AuthorizedPullRequest {
   withInstallationToken<T>(action: (token: string) => Promise<T>): Promise<T>;
 }
 
+export class PullRequestAuthorizationError extends Error {}
+
 export async function authorizePullRequest(
   ref: PullRequestRef,
   config: GitHubConfig,
   transport: GitHubTransport,
 ): Promise<AuthorizedPullRequest> {
   if (!isRepositoryAllowed(config, `${ref.owner}/${ref.repo}`)) {
-    throw new Error("repository is not in the GitHub repository allowlist");
+    throw new PullRequestAuthorizationError(
+      "repository is not in the GitHub repository allowlist",
+    );
   }
   const installationId = config.installationId ?? (await transport.resolveInstallation(ref));
   const repositorySession = await transport.createRepositoryClient({
@@ -182,12 +186,18 @@ export async function authorizePullRequest(
   const repository = await repositoryClient.getRepository();
   const canonicalName = `${repository.owner}/${repository.name}`.toLowerCase();
   if (!isRepositoryAllowed(config, canonicalName)) {
-    throw new Error("canonical repository is not in the GitHub repository allowlist");
+    throw new PullRequestAuthorizationError(
+      "canonical repository is not in the GitHub repository allowlist",
+    );
   }
   const pullRequest = await repositoryClient.getPullRequest(ref.number);
-  if (pullRequest.state !== "open") throw new Error("pull request must be open");
+  if (pullRequest.state !== "open") {
+    throw new PullRequestAuthorizationError("pull request must be open");
+  }
   if (`${pullRequest.headOwner}/${pullRequest.headRepo}`.toLowerCase() !== canonicalName) {
-    throw new Error("fork pull request heads are not supported");
+    throw new PullRequestAuthorizationError(
+      "fork pull request heads are not supported",
+    );
   }
   const [reviewThreads, reviews] = await Promise.all([
     repositoryClient.listReviewThreads(ref.number),
@@ -204,6 +214,7 @@ export async function authorizePullRequest(
       baseSha: pullRequest.baseSha,
       headBranch: pullRequest.headBranch,
       headSha: pullRequest.headSha,
+      draft: pullRequest.draft,
       installationId,
     },
     reviewThreads,

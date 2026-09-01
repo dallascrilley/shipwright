@@ -103,6 +103,7 @@ export type GitHubCheckSuiteRelayValidation =
 export type GitHubWebhookTrustPayloadValidation =
   | { kind: "valid" }
   | { kind: "disallowed" }
+  | { kind: "wrong_installation" }
   | { kind: "invalid" };
 
 export function validateGitHubWebhookTrustPayload(
@@ -125,11 +126,11 @@ export function validateGitHubWebhookTrustPayload(
   const installation = payload.installation;
   if (
     !isRecord(installation) ||
-    !isPositiveSafeInteger(installation.id) ||
-    installation.id !== installationId
+    !isPositiveSafeInteger(installation.id)
   ) {
     return { kind: "invalid" };
   }
+  if (installation.id !== installationId) return { kind: "wrong_installation" };
   return { kind: "valid" };
 }
 
