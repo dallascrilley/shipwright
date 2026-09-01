@@ -367,7 +367,7 @@ describe("POST /api/github/webhook", () => {
     expect(service.getSnapshot().queueEntries).toHaveLength(0);
   });
 
-  test("returns retryable failures for a timeout and non-202 receipt before later success", async () => {
+  test("returns retryable failures for a timeout and Symphony 5xx receipt before later 202 acceptance", async () => {
     const service = createService();
     const { agent, trigger } = await createEnabledAgent(
       service,
@@ -391,7 +391,7 @@ describe("POST /api/github/webhook", () => {
           });
         }
         return Promise.resolve(
-          new Response(null, { status: attempt === 2 ? 204 : 202 }),
+          new Response(null, { status: attempt === 2 ? 502 : 202 }),
         );
       },
     );
