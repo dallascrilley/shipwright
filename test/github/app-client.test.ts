@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   authorizeIssue,
   authorizePullRequest,
+  authorizePullRequestMetadata,
   buildInstallationAuthOptions,
   collectAccessibleRepositories,
   extractInstallationToken,
@@ -188,6 +189,51 @@ test("authorizePullRequest returns exact same-repository head and review context
   expect(authorized.pullRequest).toMatchObject({ headBranch: "feature", headSha: "head1", installationId: 9 });
   expect(authorized.reviewThreads).toHaveLength(1);
   expect(authorized.reviews[0]?.state).toBe("CHANGES_REQUESTED");
+});
+
+test("authorizePullRequestMetadata authorizes without listing review threads or history", async () => {
+  let reviewThreadsListed = false;
+  let reviewsListed = false;
+  const transport: GitHubTransport = {
+    async listAccessibleRepositories() { return []; },
+    async resolveInstallation() { return 9; },
+    async createRepositoryClient() {
+      return {
+        client: {
+          async getRepository() { return { id: 1, owner: "Acme", name: "Widget", defaultBranch: "main" }; },
+          async getIssue() { throw new Error("unused"); },
+          async getBranchSha() { throw new Error("unused"); },
+          async listPullRequests() { return []; },
+          async createPullRequest() { throw new Error("unused"); },
+          async getPullRequest() {
+            return { title: "PR", body: "body", state: "open", draft: false, baseBranch: "main", baseSha: "b".repeat(40), headBranch: "feature", headSha: "a".repeat(40), headOwner: "Acme", headRepo: "Widget" };
+          },
+          async listReviewThreads() { reviewThreadsListed = true; return []; },
+          async listReviews() { reviewsListed = true; return []; },
+          async replyToReviewThread() { throw new Error("unused"); },
+          async resolveReviewThread() { throw new Error("unused"); },
+          async addPullRequestComment() { throw new Error("unused"); },
+        },
+        async withInstallationToken(action) { return action("secret"); },
+      };
+    },
+  };
+  const config: GitHubConfig = { appId: 1, privateKey: "key", allowedRepositories: new Set(["acme/widget"]), allowedOwners: new Set() };
+
+  const authorized = await authorizePullRequestMetadata(
+    { owner: "acme", repo: "widget", number: 4, url: "https://github.com/acme/widget/pull/4" },
+    config,
+    transport,
+  );
+
+  expect(authorized.pullRequest).toMatchObject({
+    baseSha: "b".repeat(40),
+    headSha: "a".repeat(40),
+    draft: false,
+    installationId: 9,
+  });
+  expect(reviewThreadsListed).toBeFalse();
+  expect(reviewsListed).toBeFalse();
 });
 
 test("authorizePullRequest rejects fork heads", async () => {

@@ -155,6 +155,12 @@ export interface AuthorizedIssue {
   withInstallationToken<T>(action: (token: string) => Promise<T>): Promise<T>;
 }
 
+export interface AuthorizedPullRequestMetadata {
+  pullRequest: PullRequestContext;
+  repositoryClient: RepositoryClient & PullRequestApi;
+  withInstallationToken<T>(action: (token: string) => Promise<T>): Promise<T>;
+}
+
 export interface AuthorizedPullRequest {
   pullRequest: PullRequestContext;
   reviewThreads: ReviewThread[];
@@ -163,13 +169,53 @@ export interface AuthorizedPullRequest {
   withInstallationToken<T>(action: (token: string) => Promise<T>): Promise<T>;
 }
 
+interface AuthorizedPullRequestSession extends AuthorizedPullRequestMetadata {
+  repositoryClient: RepositoryClient & PullRequestApi & ReviewApi;
+}
+
 export class PullRequestAuthorizationError extends Error {}
+
+/**
+ * Authorize a pull request using only repository and pull-request metadata.
+ * Review threads and review history are intentionally not fetched here so
+ * lightweight authorization at the GitHub webhook boundary cannot ingest
+ * untrusted review content.
+ */
+export async function authorizePullRequestMetadata(
+  ref: PullRequestRef,
+  config: GitHubConfig,
+  transport: GitHubTransport,
+): Promise<AuthorizedPullRequestMetadata> {
+  const authorized = await authorizePullRequestSession(ref, config, transport);
+  return {
+    pullRequest: authorized.pullRequest,
+    repositoryClient: authorized.repositoryClient,
+    withInstallationToken: authorized.withInstallationToken,
+  };
+}
 
 export async function authorizePullRequest(
   ref: PullRequestRef,
   config: GitHubConfig,
   transport: GitHubTransport,
 ): Promise<AuthorizedPullRequest> {
+  const authorized = await authorizePullRequestSession(ref, config, transport);
+  const [reviewThreads, reviews] = await Promise.all([
+    authorized.repositoryClient.listReviewThreads(ref.number),
+    authorized.repositoryClient.listReviews(ref.number),
+  ]);
+  return {
+    ...authorized,
+    reviewThreads,
+    reviews,
+  };
+}
+
+async function authorizePullRequestSession(
+  ref: PullRequestRef,
+  config: GitHubConfig,
+  transport: GitHubTransport,
+): Promise<AuthorizedPullRequestSession> {
   if (!isRepositoryAllowed(config, `${ref.owner}/${ref.repo}`)) {
     throw new PullRequestAuthorizationError(
       "repository is not in the GitHub repository allowlist",
@@ -199,10 +245,6 @@ export async function authorizePullRequest(
       "fork pull request heads are not supported",
     );
   }
-  const [reviewThreads, reviews] = await Promise.all([
-    repositoryClient.listReviewThreads(ref.number),
-    repositoryClient.listReviews(ref.number),
-  ]);
   return {
     pullRequest: {
       ...ref,
@@ -217,8 +259,6 @@ export async function authorizePullRequest(
       draft: pullRequest.draft,
       installationId,
     },
-    reviewThreads,
-    reviews,
     repositoryClient,
     withInstallationToken: repositorySession.withInstallationToken,
   };

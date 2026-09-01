@@ -1,11 +1,8 @@
-import {
-  isRepositoryAllowed,
-  parseGitHubConfig,
-  type GitHubConfig,
-} from "../../src/config/github.js";
+import { parseGitHubConfig, type GitHubConfig } from "../../src/config/github.js";
 import {
   authorizeIssue,
   authorizePullRequest,
+  authorizePullRequestMetadata,
   createOctokitTransport,
   type GitHubTransport,
 } from "../../src/github/app-client.js";
@@ -22,6 +19,7 @@ export interface ResolveTargetDeps {
   createTransport: (config: GitHubConfig) => GitHubTransport;
   authorizeIssue: typeof authorizeIssue;
   authorizePullRequest: typeof authorizePullRequest;
+  authorizePullRequestMetadata: typeof authorizePullRequestMetadata;
 }
 
 function defaultDeps(): ResolveTargetDeps {
@@ -38,6 +36,7 @@ function defaultDeps(): ResolveTargetDeps {
     createTransport: createOctokitTransport,
     authorizeIssue,
     authorizePullRequest,
+    authorizePullRequestMetadata,
   };
 }
 
@@ -121,7 +120,20 @@ export async function resolveTarget(
     }
 
     if (!includeReviewThreads) {
-      return resolvePullRequestHead(parsed, config, transport);
+      const authorized = await resolved.authorizePullRequestMetadata(
+        {
+          owner: parsed.owner,
+          repo: parsed.repo,
+          number: parsed.number,
+          url: parsed.url,
+        },
+        config,
+        transport,
+      );
+      return fromParsed(parsed, {
+        title: authorized.pullRequest.title,
+        pinned: { headSha: authorized.pullRequest.headSha },
+      });
     }
 
     const authorized = await resolved.authorizePullRequest(
@@ -151,69 +163,4 @@ export async function resolveTarget(
         : "Target could not be authorized.";
     return fromParsed(parsed, { allowed: false, denyReason: message });
   }
-}
-
-async function resolvePullRequestHead(
-  parsed: NonNullable<ReturnType<typeof parseOperatorTarget>>,
-  config: GitHubConfig,
-  transport: GitHubTransport,
-): Promise<ResolveTargetResult> {
-  const repoKey = `${parsed.owner}/${parsed.repo}`.toLowerCase();
-  if (!isRepositoryAllowed(config, repoKey)) {
-    return fromParsed(parsed, {
-      allowed: false,
-      denyReason: "repository is not in the GitHub repository allowlist",
-    });
-  }
-
-  const installationId =
-    config.installationId ??
-    (await transport.resolveInstallation({
-      owner: parsed.owner,
-      repo: parsed.repo,
-      number: parsed.number,
-      url: parsed.url,
-    }));
-  const session = await transport.createRepositoryClient({
-    installationId,
-    owner: parsed.owner,
-    repo: parsed.repo,
-    permissions: {
-      contents: "write",
-      issues: "read",
-      pull_requests: "write",
-      metadata: "read",
-    },
-  });
-  const repository = await session.client.getRepository();
-  const canonicalName = `${repository.owner}/${repository.name}`.toLowerCase();
-  if (!isRepositoryAllowed(config, canonicalName)) {
-    return fromParsed(parsed, {
-      allowed: false,
-      denyReason:
-        "canonical repository is not in the GitHub repository allowlist",
-    });
-  }
-
-  const pullRequest = await session.client.getPullRequest(parsed.number);
-  if (pullRequest.state !== "open") {
-    return fromParsed(parsed, {
-      allowed: false,
-      denyReason: "pull request must be open",
-    });
-  }
-  if (
-    `${pullRequest.headOwner}/${pullRequest.headRepo}`.toLowerCase() !==
-    canonicalName
-  ) {
-    return fromParsed(parsed, {
-      allowed: false,
-      denyReason: "fork pull request heads are not supported",
-    });
-  }
-
-  return fromParsed(parsed, {
-    title: pullRequest.title,
-    pinned: { headSha: pullRequest.headSha },
-  });
 }
