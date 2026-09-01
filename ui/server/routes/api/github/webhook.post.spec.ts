@@ -367,7 +367,7 @@ describe("POST /api/github/webhook", () => {
     expect(service.getSnapshot().queueEntries).toHaveLength(0);
   });
 
-  test("returns retryable failures for a timeout and Symphony 5xx receipt before later 202 acceptance", async () => {
+  test("returns retryable failures for a timeout, Symphony 5xx, and non-202 receipt before later 202 acceptance", async () => {
     const service = createService();
     const { agent, trigger } = await createEnabledAgent(
       service,
@@ -390,9 +390,8 @@ describe("POST /api/github/webhook", () => {
             );
           });
         }
-        return Promise.resolve(
-          new Response(null, { status: attempt === 2 ? 502 : 202 }),
-        );
+        const status = attempt === 2 ? 502 : attempt === 3 ? 204 : 202;
+        return Promise.resolve(new Response(null, { status }));
       },
     );
     const app = new H3().post(
@@ -446,9 +445,12 @@ describe("POST /api/github/webhook", () => {
     const rejected = await app.request("/api/github/webhook", init);
     expect(rejected.status).toBe(503);
     expect(rejected.headers.get("retry-after")).toBe("10");
+    const nonAcceptance = await app.request("/api/github/webhook", init);
+    expect(nonAcceptance.status).toBe(503);
+    expect(nonAcceptance.headers.get("retry-after")).toBe("10");
     expect((await app.request("/api/github/webhook", init)).status).toBe(202);
 
-    expect(relayFetch).toHaveBeenCalledTimes(3);
+    expect(relayFetch).toHaveBeenCalledTimes(4);
     expect(service.getSnapshot().queueEntries).toHaveLength(1);
     expect(service.getSnapshot().executions).toHaveLength(1);
   });
