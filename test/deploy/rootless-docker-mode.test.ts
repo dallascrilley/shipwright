@@ -36,6 +36,9 @@ describe("Shipwright Docker deployment modes", () => {
     expect(result.stdout).toContain("Requires=docker.service");
     expect(result.stdout).toContain("SupplementaryGroups=docker");
     expect(result.stdout).not.toContain("BindReadOnlyPaths=");
+    expect(result.stdout).toContain(
+      "ExecStart=/usr/local/bin/mise exec -- pnpm start",
+    );
   });
 
   test("renders a rootless unit bound only to the Shipwright socket", () => {
@@ -46,6 +49,9 @@ describe("Shipwright Docker deployment modes", () => {
     expect(result.stdout).toContain("After=shipwright-docker.service");
     expect(result.stdout).toContain(
       "ExecStartPre=/bin/sh -c 'socket=/run/user/1001/docker.sock; docker_ping() { curl --fail --silent --show-error --connect-timeout 1 --max-time 2 --unix-socket \"$socket\" http://localhost/_ping >/dev/null; }; for attempt in $(seq 1 30); do test -S \"$socket\" && docker_ping && exit 0; sleep 1; done; exit 1'",
+    );
+    expect(result.stdout).toContain(
+      "ExecStart=/usr/local/bin/mise exec -- pnpm start",
     );
     expect(result.stdout).toContain(
       "BindReadOnlyPaths=/run/user/1001/docker.sock:/var/run/docker.sock",
