@@ -4,6 +4,7 @@ After=shipwright-docker.service network-online.target
 Wants=network-online.target
 Wants=shipwright-docker.service
 BindsTo=shipwright-docker.service
+PartOf=shipwright-docker.service
 
 [Service]
 Type=simple

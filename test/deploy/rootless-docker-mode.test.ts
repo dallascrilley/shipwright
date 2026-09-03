@@ -45,6 +45,7 @@ describe("Shipwright Docker deployment modes", () => {
     const result = renderService("rootless", "1001");
 
     expect(result.stdout).toContain("BindsTo=shipwright-docker.service");
+    expect(result.stdout).toContain("PartOf=shipwright-docker.service");
     expect(result.stdout).toContain("Wants=shipwright-docker.service");
     expect(result.stdout).toContain("After=shipwright-docker.service");
     expect(result.stdout).toContain(
@@ -128,6 +129,9 @@ describe("Shipwright Docker deployment modes", () => {
     );
     expect(deploy).toContain("loginctl disable-linger shipwright");
     expect(docs).toContain("Ubuntu 24.04 Noble on amd64");
+    expect(docs).toContain("range=<proxy-ip>/32");
+    expect(docs).toContain("tailscale serve --bg --https=8443");
+    expect(docs).not.toContain("agent-apps-fsn1");
     expect(example).toContain("SHIPWRIGHT_DOCKER_MODE=rootful");
   });
 
