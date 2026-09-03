@@ -320,9 +320,51 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
 On the host: `systemctl status caddy --no-pager` and
 `journalctl -u caddy -n 50 --no-pager` show certificate issuance. First-cert
 issuance can take a few seconds after DNS resolves.
-
 To return to Tailscale-only, clear `SHIPWRIGHT_PUBLIC_HOST`, run
 `systemctl disable --now caddy`, and close firewall 80/443.
+
+
+### Colocated shared host (rootless) without Caddy
+
+On a shared host where another reverse proxy already owns public `80/443`
+(for example a Traefik or Caddy instance in a sibling compose stack), the
+Caddy edge cannot bind and its ACME challenges cannot complete. Leave
+`SHIPWRIGHT_PUBLIC_HOST` unset and publish the webhook route through the
+existing proxy instead:
+
+1. Install `socat` on the host if it is missing.
+2. Bridge the loopback service to the proxy's network only. For Docker's
+   `docker_gwbridge`, run a host-level forwarder bound to the bridge
+   gateway and restricted to the proxy container's address
+   (`socat TCP-LISTEN:4317,bind=<gateway-ip>,range=<proxy-ip>/32,fork,reuseaddr
+   TCP:127.0.0.1:4317` under systemd). Never bind the forwarder to a public
+   interface, and do not omit `range=`: other containers on the same bridge
+   can otherwise reach every loopback path, including the console.
+3. Add a proxy route that forwards only `POST /api/github/webhook` for the
+   chosen DNS name to the bridge, with TLS from the proxy's own resolver.
+   Do not add a plain-HTTP redirect router for the name: it shadows the
+   proxy's ACME HTTP challenge and certificate issuance fails with a 404
+   from the challenge URL.
+4. Point both GitHub App webhooks at
+   `https://<dns-name>/api/github/webhook` and verify a signed delivery
+   (`scripts/replay-github-webhook.sh`) plus a real GitHub `202` in the App's
+   delivery history.
+
+Tailscale Funnel is not a substitute on such a host: Funnel terminates on
+the node, its listener collides with the proxy's published ports on `443`,
+and on the remaining Funnel ports GitHub's hookshot egress proved unable to
+reach the node reliably.
+
+Keep the console tailnet-only on a port the shared proxy does not own. Do
+not run `tailscale serve` on `443` while that proxy is bound there. Publish
+loopback over a free tailnet HTTPS port instead:
+
+```sh
+tailscale serve --bg --https=8443 http://127.0.0.1:4317
+```
+
+Use the HTTPS URL `tailscale serve status` reports. It is a tailnet name
+and port such as `8443`, not the public webhook DNS name.
 
 ## Verify
 
