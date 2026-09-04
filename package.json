@@ -65,6 +65,7 @@
     "typescript": "^5.9.0"
   },
   "patchedDependencies": {
-    "@rivet-dev/agentos-core@0.2.7": "patches/@rivet-dev%2Fagentos-core@0.2.7.patch"
+    "@rivet-dev/agentos-core@0.2.7": "patches/@rivet-dev%2Fagentos-core@0.2.7.patch",
+    "sandbox-agent@0.4.2": "patches/sandbox-agent@0.4.2.patch"
   }
 }

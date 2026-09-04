@@ -34,7 +34,9 @@ group. Docker group membership is root-equivalent, so no unrelated workloads
 belong on that host. `SHIPWRIGHT_DOCKER_MODE=rootless` creates a user Docker
 service and does not grant Docker group membership. The Shipwright systemd unit
 maps only the `shipwright` user's socket to `/var/run/docker.sock` inside the
-service mount namespace because the pinned sandbox provider uses that path.
+service mount namespace because the pinned sandbox provider uses that path by
+default. Direct CLI and acceptance-test runs honor a `unix://` `DOCKER_HOST`, so
+they can target the same rootless socket without joining the host Docker group.
 
 ## Agent queue status
 

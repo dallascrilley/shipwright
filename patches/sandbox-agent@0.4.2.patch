@@ -1,0 +1,58 @@
+diff --git a/dist/providers/docker.d.ts b/dist/providers/docker.d.ts
+index 796aaf9f0daefab948da7193c29a4d985697aa28..29bc40ca3ed058abe24cc8a3e8b2200a83a5179f 100644
+--- a/dist/providers/docker.d.ts
++++ b/dist/providers/docker.d.ts
+@@ -8,4 +8,5 @@ interface DockerProviderOptions {
+     binds?: string[] | (() => string[] | Promise<string[]>);
+     createContainerOptions?: Record<string, unknown>;
+ }
+ declare function docker(options?: DockerProviderOptions): SandboxProvider;
++declare function resolveDockerSocketPath(dockerHost?: string): string;
+@@ -13 +14 @@ declare function docker(options?: DockerProviderOptions): SandboxProvider;
+-export { type DockerProviderOptions, docker };
++export { type DockerProviderOptions, docker, resolveDockerSocketPath };
+diff --git a/dist/providers/docker.js b/dist/providers/docker.js
+index ff9153ca33289f2c5f7681ca7542b1e4bdba27e1..5ac523279e89240e170e4cc5b5ac393b03d9ecd9 100644
+--- a/dist/providers/docker.js
++++ b/dist/providers/docker.js
+@@ -7,6 +7,22 @@ import Docker from "dockerode";
+ import getPort from "get-port";
+ var DEFAULT_HOST = "127.0.0.1";
+ var DEFAULT_AGENT_PORT = 3e3;
++var DEFAULT_DOCKER_SOCKET = "/var/run/docker.sock";
++function resolveDockerSocketPath(dockerHost = process.env.DOCKER_HOST) {
++  if (dockerHost === void 0 || dockerHost.trim() === "") {
++    return DEFAULT_DOCKER_SOCKET;
++  }
++  const prefix = "unix://";
++  const value = dockerHost.trim();
++  if (!value.startsWith(prefix)) {
++    throw new Error("DOCKER_HOST must name a non-empty unix:// socket");
++  }
++  const socketPath = value.slice(prefix.length);
++  if (!socketPath.startsWith("/")) {
++    throw new Error("DOCKER_HOST must name a non-empty unix:// socket");
++  }
++  return socketPath;
++}
+ async function resolveValue(value, fallback) {
+   if (value === void 0) {
+     return fallback;
+@@ -27,7 +43,7 @@ function docker(options = {}) {
+   const image = options.image ?? DEFAULT_SANDBOX_AGENT_IMAGE;
+   const host = options.host ?? DEFAULT_HOST;
+   const agentPort = options.agentPort ?? DEFAULT_AGENT_PORT;
+-  const client = new Docker({ socketPath: "/var/run/docker.sock" });
++  const client = new Docker({ socketPath: resolveDockerSocketPath() });
+   return {
+     name: "docker",
+     defaultCwd: "/home/sandbox",
+@@ -71,6 +87,7 @@ function docker(options = {}) {
+   };
+ }
+ export {
+-  docker
++  docker,
++  resolveDockerSocketPath
+ };
+ //# sourceMappingURL=docker.js.map
