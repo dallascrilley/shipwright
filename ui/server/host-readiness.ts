@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { resolveShipwrightStateDirectory } from "../../src/config/state.js";
+import { resolveProviderChain } from "../../src/config/provider.js";
 import {
   buildHostReadinessReport,
   type HostReadinessComponent,
@@ -13,6 +14,8 @@ import { isOperatorDemoMode } from "./operator-runs";
 
 /** Redacted presence flags only — never credential values. */
 export interface ProviderReadinessInput {
+  /** False when non-secret provider selection or thinking configuration is invalid. */
+  configurationValid?: boolean;
   hasCredential: boolean;
   /** Non-secret provider identity when known (e.g. "kimi"). */
   providerName?: string;
@@ -75,6 +78,15 @@ export function evaluateProviderReadiness(
       "not_configured",
       "provider_missing",
       checkedAt,
+    );
+  }
+  if (input.configurationValid === false) {
+    return component(
+      "provider",
+      "unavailable",
+      "provider_invalid",
+      checkedAt,
+      input.providerName,
     );
   }
   return component(
@@ -241,13 +253,21 @@ export function loadHostReadinessProbeInputs(
   const hasCredential = requested
     ? Boolean(providerFlags[requested as keyof typeof providerFlags])
     : Object.values(providerFlags).some(Boolean);
-  const providerName = requested
+  let providerName = requested
     ? hasCredential
       ? requested
       : undefined
     : (Object.entries(providerFlags).find(([, present]) => present)?.[0] as
         | string
         | undefined);
+  let configurationValid = true;
+  if (hasCredential) {
+    try {
+      providerName = resolveProviderChain(env)[0]?.name ?? providerName;
+    } catch {
+      configurationValid = false;
+    }
+  }
 
   const hasInlinePrivateKey = envHasNonEmpty("GITHUB_APP_PRIVATE_KEY", env);
   const keyPath = env.GITHUB_APP_PRIVATE_KEY_PATH?.trim() ?? "";
@@ -283,6 +303,7 @@ export function loadHostReadinessProbeInputs(
     demoMode,
     checkedAt,
     provider: {
+      configurationValid,
       hasCredential,
       ...(providerName ? { providerName } : {}),
     },

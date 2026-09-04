@@ -38,6 +38,20 @@ describe("host readiness evaluators", () => {
       code: "provider_configured",
       detail: "kimi",
     });
+    expect(
+      evaluateProviderReadiness(
+        {
+          configurationValid: false,
+          hasCredential: true,
+          providerName: "openai-codex",
+        },
+        checkedAt,
+      ),
+    ).toMatchObject({
+      status: "unavailable",
+      code: "provider_invalid",
+      detail: "openai-codex",
+    });
   });
 
   test("github app states", () => {
@@ -174,6 +188,7 @@ describe("loadHostReadinessProbeInputs", () => {
     expect(serialized).not.toContain("sk-secret");
     expect(serialized).not.toContain("PRIVATE-KEY-MATERIAL");
     expect(inputs.provider).toEqual({
+      configurationValid: true,
       hasCredential: true,
       providerName: "anthropic",
     });
@@ -192,13 +207,43 @@ describe("loadHostReadinessProbeInputs", () => {
     });
   });
 
+  test("invalid thinking configuration blocks live starts without exposing values", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shipwright-ready-"));
+    dirs.push(dir);
+    const state = join(dir, "state");
+    mkdirSync(state);
+
+    const inputs = loadHostReadinessProbeInputs({
+      AGENTOS_CODEX_AUTH_FILE: join(dir, "codex-auth.json"),
+      AGENTOS_PROVIDER: "openai-codex",
+      AGENTOS_THINKING_LEVEL: "invalid-secret-shaped-value",
+    } as NodeJS.ProcessEnv, {
+      now: () => checkedAt,
+      stateDirectory: state,
+      dockerSocketPath: join(dir, "docker.sock"),
+    });
+    const report = evaluateHostReadiness(inputs);
+
+    expect(inputs.provider).toEqual({
+      configurationValid: false,
+      hasCredential: true,
+      providerName: "openai-codex",
+    });
+    expect(report.components.find((component) => component.id === "provider")).toMatchObject({
+      status: "unavailable",
+      code: "provider_invalid",
+    });
+    expect(report.blocksLiveStart).toBe(true);
+    expect(JSON.stringify(report)).not.toContain("invalid-secret-shaped-value");
+  });
+
   test("injected loader arguments stay redacted for getHostReadiness", () => {
     const seen: HostReadinessProbeInputs[] = [];
     const report = getHostReadiness(() => {
       const inputs: HostReadinessProbeInputs = {
         demoMode: false,
         checkedAt,
-        provider: { hasCredential: true, providerName: "kimi" },
+        provider: { configurationValid: true, hasCredential: true, providerName: "kimi" },
         githubApp: {
           hasAppId: true,
           hasInlinePrivateKey: true,
@@ -225,7 +270,7 @@ describe("loadHostReadinessProbeInputs", () => {
     expect(seen[0]).toEqual({
       demoMode: false,
       checkedAt,
-      provider: { hasCredential: true, providerName: "kimi" },
+      provider: { configurationValid: true, hasCredential: true, providerName: "kimi" },
       githubApp: {
         hasAppId: true,
         hasInlinePrivateKey: true,
