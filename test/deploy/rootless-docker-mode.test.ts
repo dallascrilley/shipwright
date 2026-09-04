@@ -94,6 +94,7 @@ describe("Shipwright Docker deployment modes", () => {
     const deploy = readFileSync(resolve(repoRoot, "deploy", "deploy.sh"), "utf8");
     const docs = readFileSync(resolve(repoRoot, "docs", "deployment.md"), "utf8");
     const example = readFileSync(resolve(repoRoot, "deploy", "shipwright.env.example"), "utf8");
+    const localExample = readFileSync(resolve(repoRoot, ".env.example"), "utf8");
 
     expect(bootstrap).toContain("dockerd-rootless-setuptool.sh");
     expect(bootstrap).toContain("docker-ce-rootless-extras");
@@ -131,8 +132,12 @@ describe("Shipwright Docker deployment modes", () => {
     expect(docs).toContain("Ubuntu 24.04 Noble on amd64");
     expect(docs).toContain("range=<proxy-ip>/32");
     expect(docs).toContain("tailscale serve --bg --https=8443");
+    expect(docs).toContain(
+      "sudo -u shipwright env SHIPWRIGHT_DOCKER_MODE=rootless DOCKER_HOST=unix:///run/user/$(id -u shipwright)/docker.sock",
+    );
     expect(docs).not.toContain("agent-apps-fsn1");
     expect(example).toContain("SHIPWRIGHT_DOCKER_MODE=rootful");
+    expect(localExample).toContain("SHIPWRIGHT_DOCKER_MODE=rootful");
   });
 
   test("rejects unsupported rootless extras platforms before package setup", () => {

@@ -59,10 +59,22 @@ describe("sandbox command helpers", () => {
     );
   });
 
-  test("matches the sandbox container user to the Linux host workspace owner", () => {
-    expect(resolveSandboxContainerUser("linux", 996, 988)).toBe("996:988");
-    expect(resolveSandboxContainerUser("darwin", 501, 20)).toBeUndefined();
-    expect(resolveSandboxContainerUser("linux", undefined, undefined)).toBeUndefined();
+  test("maps the sandbox user for rootful and rootless Docker", () => {
+    expect(resolveSandboxContainerUser("linux", 996, 988, "rootful")).toBe("996:988");
+    expect(resolveSandboxContainerUser("linux", 996, 988, "rootless")).toBe("0:0");
+    expect(resolveSandboxContainerUser("darwin", 501, 20, "rootless")).toBeUndefined();
+    expect(resolveSandboxContainerUser("linux", undefined, undefined, "rootful")).toBeUndefined();
+  });
+
+  test("uses the configured Docker mode when the caller omits an override", () => {
+    const previousMode = process.env.SHIPWRIGHT_DOCKER_MODE;
+    try {
+      process.env.SHIPWRIGHT_DOCKER_MODE = "rootless";
+      expect(resolveSandboxContainerUser("linux", 996, 988)).toBe("0:0");
+    } finally {
+      if (previousMode === undefined) delete process.env.SHIPWRIGHT_DOCKER_MODE;
+      else process.env.SHIPWRIGHT_DOCKER_MODE = previousMode;
+    }
   });
 
   test("resolves the installed Pi dependency root for a read-only sandbox mount", () => {
