@@ -1,0 +1,13 @@
+diff --git a/dist/providers/docker.js b/dist/providers/docker.js
+index ff9153ca33289f2c5f7681ca7542b1e4bdba27e1..6c8d088bf125537dd52266b35f8c63cb2bd115cc 100644
+--- a/dist/providers/docker.js
++++ b/dist/providers/docker.js
+@@ -27,7 +27,7 @@ function docker(options = {}) {
+   const image = options.image ?? DEFAULT_SANDBOX_AGENT_IMAGE;
+   const host = options.host ?? DEFAULT_HOST;
+   const agentPort = options.agentPort ?? DEFAULT_AGENT_PORT;
+-  const client = new Docker({ socketPath: "/var/run/docker.sock" });
++  const client = new Docker();
+   return {
+     name: "docker",
+     defaultCwd: "/home/sandbox",
