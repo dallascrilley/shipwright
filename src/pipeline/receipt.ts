@@ -15,7 +15,7 @@ export type RunPhase =
 
 export interface AgentExecution {
   readonly runtime: "agentos";
-  readonly software: "pi";
+  software: "codex" | "pi";
   provider: ProviderConfig["name"];
   model: string;
   fallbackUsed?: boolean;

@@ -236,7 +236,20 @@ The provisioned Linux Bun binary is mounted read-only at `/usr/local/bin/bun` in
 
 Before the first deploy, create `/etc/shipwright/shipwright.env` from `deploy/shipwright.env.example` and write the GitHub App key to `/etc/shipwright/github-app.pem`. Retrieve values from the existing 1Password items without printing them. Both files must be owned by `root:shipwright` with mode `0640`; `/etc/shipwright` is `root:shipwright` with mode `0750`, so the service can read but cannot rewrite its own credentials.
 
-For the optional OpenAI Codex fallback, copy the signed-in operator's local `~/.codex/auth.json` to `/var/lib/shipwright/codex-auth.json`. The production copy must be owned by `shipwright:shipwright` with mode `0600`; Shipwright deliberately rejects group/world-readable files and files owned by another user. Configure `AGENTOS_CODEX_AUTH_FILE=/var/lib/shipwright/codex-auth.json`, `AGENTOS_FALLBACK_PROVIDER=openai-codex`, and `AGENTOS_FALLBACK_MODEL=gpt-5.4`. Replace this copy when the local Codex OAuth session rotates or the fallback reports an authentication failure. The deployment installs the lockfile-pinned Pi CLI; Shipwright mounts that dependency tree read-only and projects only the required OAuth fields into temporary storage inside the existing disposable agent sandbox. It does not install Pi extensions or packages at runtime.
+For OpenAI Codex authentication, copy the signed-in operator's local
+`~/.codex/auth.json` to `/var/lib/shipwright/codex-auth.json`. The production
+copy must be owned by `shipwright:shipwright` with mode `0600`; Shipwright
+deliberately rejects group/world-readable files and files owned by another
+user. Configure `AGENTOS_CODEX_AUTH_FILE=/var/lib/shipwright/codex-auth.json`,
+select `AGENTOS_PROVIDER=openai-codex` when Codex is primary (or
+`AGENTOS_FALLBACK_PROVIDER=openai-codex` when it is the fallback), and set the
+matching model plus `AGENTOS_THINKING_LEVEL`. Replace this copy when the local
+Codex OAuth session rotates or the provider reports an authentication failure.
+The deployment installs the lockfile-pinned Codex CLI. Shipwright mounts its
+dependency tree read-only, projects only the required ChatGPT OAuth fields into
+owner-only temporary storage inside the existing disposable agent sandbox, and
+invokes the selected model and reasoning effort directly. It does not use an
+OpenAI API key or install packages at runtime.
 
 The repository policy should remain owner-bound:
 

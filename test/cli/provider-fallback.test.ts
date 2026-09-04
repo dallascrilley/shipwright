@@ -4,8 +4,8 @@ import type { ProviderConfig } from "../../src/config/provider.js";
 import type { AgentExecution } from "../../src/pipeline/receipt.js";
 
 const providers: ProviderConfig[] = [
-  { name: "kimi", model: "k3", env: { KIMI_API_KEY: "kimi-key" } },
-  { name: "openai", model: "gpt-5.4", env: { OPENAI_API_KEY: "openai-key" } },
+  { name: "kimi", model: "k3", env: { KIMI_API_KEY: "kimi-key" }, thinkingLevel: "low" },
+  { name: "openai", model: "gpt-5.4", env: { OPENAI_API_KEY: "openai-key" }, thinkingLevel: "low" },
 ];
 
 function execution(): AgentExecution {
@@ -28,6 +28,25 @@ test("falls back once when Pi returns a provider quota response", async () => {
       { provider: "kimi", model: "k3", outcome: "capacity_failed" },
       { provider: "openai", model: "gpt-5.4", outcome: "succeeded" },
     ],
+  });
+});
+
+test("records the native Codex CLI when subscription OAuth is selected", async () => {
+  const state = execution();
+  const codexProviders: ProviderConfig[] = [{
+    authFile: "/secure/auth.json",
+    env: {},
+    name: "openai-codex",
+    model: "gpt-5.6-luna",
+    thinkingLevel: "xhigh",
+  }];
+
+  await expect(runWithProviderFallback(codexProviders, state, async () => "done")).resolves.toBe("done");
+  expect(state).toMatchObject({
+    runtime: "agentos",
+    software: "codex",
+    provider: "openai-codex",
+    model: "gpt-5.6-luna",
   });
 });
 

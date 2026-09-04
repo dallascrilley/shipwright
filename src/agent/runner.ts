@@ -7,7 +7,11 @@ import {
 import { readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isProviderCapacityError, type ProviderConfig } from "../config/provider.js";
+import {
+  isProviderCapacityError,
+  piSettingsConfig,
+  type ProviderConfig,
+} from "../config/provider.js";
 import {
   AGENT_WORKSPACE,
   SANDBOX_PI_NODE_MODULES,
@@ -51,6 +55,9 @@ const SIDECAR_FRAME_TIMEOUT_BUFFER_MS = 60_000;
 const SANDBOX_PI_HOME = "/tmp/shipwright-pi-home";
 const SANDBOX_PI_AGENT_DIR = "/tmp/shipwright-pi-agent";
 const SANDBOX_PI_CLI = `${SANDBOX_PI_NODE_MODULES}/@mariozechner/pi-coding-agent/dist/cli.js`;
+const SANDBOX_CODEX_HOME = "/tmp/shipwright-codex-home";
+const SANDBOX_CODEX_OUTPUT = "/tmp/shipwright-codex-last-message.txt";
+const SANDBOX_CODEX_CLI = `${SANDBOX_PI_NODE_MODULES}/@openai/codex/bin/codex.js`;
 const EMPTY_TURN_RECOVERY_PROMPT = [
   "Your previous turn completed without a final response.",
   "Resume the original task, finish any required workspace artifact, and return the requested final response now.",
@@ -105,7 +112,14 @@ function piModelsConfig(provider: ProviderConfig): string | undefined {
   });
 }
 
-function piAuthConfig(provider: ProviderConfig): string | undefined {
+interface CodexOAuthFields {
+  access: string;
+  accountId: string;
+  idToken?: string;
+  refresh: string;
+}
+
+function readCodexOAuth(provider: ProviderConfig): CodexOAuthFields | undefined {
   if (provider.name !== "openai-codex") return undefined;
   if (!provider.authFile) throw new Error("OpenAI Codex auth file is not configured");
 
@@ -125,20 +139,42 @@ function piAuthConfig(provider: ProviderConfig): string | undefined {
     throw new Error("OpenAI Codex auth file is unreadable, invalid, or not owner-only");
   }
   const tokens = asRecord(asRecord(auth)?.tokens);
+  const idToken = stringField(tokens, "id_token");
   const access = stringField(tokens, "access_token");
   const refresh = stringField(tokens, "refresh_token");
   const accountId = stringField(tokens, "account_id");
   if (!access || !refresh || !accountId) {
     throw new Error("OpenAI Codex auth file is missing OAuth token fields");
   }
-  const expires = jwtExpiryMs(access);
+  return { access, accountId, idToken, refresh };
+}
+
+function piAuthConfig(provider: ProviderConfig): string | undefined {
+  const oauth = readCodexOAuth(provider);
+  if (!oauth) return undefined;
+  const expires = jwtExpiryMs(oauth.access);
   return JSON.stringify({
     "openai-codex": {
       type: "oauth",
-      access,
-      refresh,
+      access: oauth.access,
+      refresh: oauth.refresh,
       expires,
-      accountId,
+      accountId: oauth.accountId,
+    },
+  });
+}
+
+function codexAuthConfig(provider: ProviderConfig): string {
+  const oauth = readCodexOAuth(provider);
+  if (!oauth?.idToken) throw new Error("OpenAI Codex auth file is missing OAuth token fields");
+  return JSON.stringify({
+    auth_mode: "chatgpt",
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: oauth.idToken,
+      access_token: oauth.access,
+      refresh_token: oauth.refresh,
+      account_id: oauth.accountId,
     },
   });
 }
@@ -178,7 +214,7 @@ export async function runPiAgent(
     await vm.mkdir("/home/agentos/.pi/agent", { recursive: true });
     await vm.writeFile(
       "/home/agentos/.pi/agent/settings.json",
-      JSON.stringify({ defaultProvider: provider.name, defaultModel: provider.model }),
+      piSettingsConfig(provider),
     );
     const authConfig = piAuthConfig(provider);
     if (authConfig) await vm.writeFile("/home/agentos/.pi/agent/auth.json", authConfig);
@@ -224,68 +260,70 @@ export async function runPiAgent(
   }
 }
 
-export async function runSandboxPiAgent(
+export async function runSandboxCodexAgent(
   workspace: SandboxWorkspace,
   provider: ProviderConfig,
   prompt: string,
   timeoutMs = DEFAULT_PI_TIMEOUT_MS,
   skills: AgentSkillProjection[] = [],
 ): Promise<string> {
-  const authConfig = piAuthConfig(provider);
-  if (!authConfig) throw new Error("sandbox Pi runner requires OpenAI Codex OAuth");
+  if (provider.name !== "openai-codex") {
+    throw new Error("sandbox Codex runner requires OpenAI Codex OAuth");
+  }
+  const authConfig = codexAuthConfig(provider);
   for (const skill of skills) assertSafeSkillName(skill.name);
 
   try {
-    await workspace.runOrThrow("OpenAI Codex Pi workspace preparation", {
+    await workspace.runOrThrow("OpenAI Codex workspace preparation", {
       command: "mkdir",
-      args: ["-p", SANDBOX_PI_HOME, `${SANDBOX_PI_AGENT_DIR}/skills`],
+      args: ["-p", `${SANDBOX_CODEX_HOME}/skills`],
       cwd: "/",
     });
-    await workspace.runOrThrow("OpenAI Codex Pi credential permissions", {
+    await workspace.runOrThrow("OpenAI Codex credential permissions", {
       command: "chmod",
-      args: ["700", SANDBOX_PI_HOME, SANDBOX_PI_AGENT_DIR, `${SANDBOX_PI_AGENT_DIR}/skills`],
+      args: ["700", SANDBOX_CODEX_HOME, `${SANDBOX_CODEX_HOME}/skills`],
       cwd: "/",
     });
-    await workspace.client.writeFsFile({ path: `${SANDBOX_PI_AGENT_DIR}/auth.json` }, authConfig);
+    await workspace.client.writeFsFile({ path: `${SANDBOX_CODEX_HOME}/auth.json` }, authConfig);
     for (const skill of skills) {
-      const skillDirectory = `${SANDBOX_PI_AGENT_DIR}/skills/${skill.name}`;
-      await workspace.runOrThrow("OpenAI Codex Pi skill preparation", {
+      const skillDirectory = `${SANDBOX_CODEX_HOME}/skills/${skill.name}`;
+      await workspace.runOrThrow("OpenAI Codex skill preparation", {
         command: "mkdir",
         args: ["-p", skillDirectory],
         cwd: "/",
       });
       await workspace.client.writeFsFile({ path: `${skillDirectory}/SKILL.md` }, skill.content);
     }
-    await workspace.runOrThrow("OpenAI Codex Pi auth permissions", {
+    await workspace.runOrThrow("OpenAI Codex auth permissions", {
       command: "chmod",
-      args: ["600", `${SANDBOX_PI_AGENT_DIR}/auth.json`],
+      args: ["600", `${SANDBOX_CODEX_HOME}/auth.json`],
       cwd: "/",
     });
 
     const result = await workspace.run({
       command: "node",
       args: [
-        SANDBOX_PI_CLI,
-        "--provider", provider.name,
+        SANDBOX_CODEX_CLI,
+        "exec",
         "--model", provider.model,
-        "--thinking", "low",
-        "--no-session",
-        "--no-extensions",
-        "--no-prompt-templates",
-        "--no-themes",
-        "-p", prompt,
+        "--config", `model_reasoning_effort=${provider.thinkingLevel}`,
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--color", "never",
+        "--output-last-message", SANDBOX_CODEX_OUTPUT,
+        prompt,
       ],
       cwd: SANDBOX_WORKSPACE,
       env: {
-        HOME: SANDBOX_PI_HOME,
-        PI_CODING_AGENT_DIR: SANDBOX_PI_AGENT_DIR,
+        CODEX_HOME: SANDBOX_CODEX_HOME,
         ...provider.env,
       },
       timeoutMs,
     });
-    if (result.timedOut) throw new Error("OpenAI Codex Pi CLI timed out");
+    if (result.timedOut) throw new Error("OpenAI Codex CLI timed out");
     if (result.stdoutTruncated || result.stderrTruncated) {
-      throw new Error("OpenAI Codex Pi CLI output exceeded the configured limit");
+      throw new Error("OpenAI Codex CLI output exceeded the configured limit");
     }
     if (result.exitCode !== 0) {
       const upstream = `${result.stderr}\n${result.stdout}`;
@@ -295,17 +333,22 @@ export async function runSandboxPiAgent(
       if (/\b(?:401|403|unauthori[sz]ed|forbidden|authentication|invalid_grant|login required|access token|refresh token)\b/i.test(upstream)) {
         throw new Error("OpenAI Codex OAuth authentication failed");
       }
-      throw new Error(`OpenAI Codex Pi CLI failed with exit ${result.exitCode}`);
+      throw new Error(`OpenAI Codex CLI failed with exit ${result.exitCode}`);
     }
-    if (!result.stdout.trim()) {
-      throw new PiAgentOutputError("OpenAI Codex Pi CLI completed without text output");
+    const output = await workspace.runOrThrow("OpenAI Codex final response", {
+      command: "cat",
+      args: [SANDBOX_CODEX_OUTPUT],
+      cwd: "/",
+    });
+    if (!output.stdout.trim()) {
+      throw new PiAgentOutputError("OpenAI Codex CLI completed without text output");
     }
-    return result.stdout;
+    return output.stdout;
   } finally {
     try {
       await workspace.run({
         command: "rm",
-        args: ["-rf", "--", SANDBOX_PI_AGENT_DIR, SANDBOX_PI_HOME],
+        args: ["-rf", "--", SANDBOX_CODEX_HOME, SANDBOX_CODEX_OUTPUT],
         cwd: "/",
       });
     } catch {
@@ -407,7 +450,7 @@ export async function createAndRunPiAgent(
 ): Promise<string> {
   const effectiveTimeoutMs = timeoutMs ?? DEFAULT_PI_TIMEOUT_MS;
   if (provider.name === "openai-codex") {
-    return runSandboxPiAgent(workspace, provider, prompt, effectiveTimeoutMs, skills);
+    return runSandboxCodexAgent(workspace, provider, prompt, effectiveTimeoutMs, skills);
   }
   const runtimeDeadlineMs = effectiveTimeoutMs + SIDECAR_FRAME_TIMEOUT_BUFFER_MS;
   const sidecar = await runtime.createSidecar({ frameTimeoutMs: runtimeDeadlineMs });

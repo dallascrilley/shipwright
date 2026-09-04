@@ -1,6 +1,6 @@
 import { createClient } from "@rivet-dev/agentos/client";
 import type { registry } from "./server.js";
-import { resolveProvider } from "./src/config/provider.js";
+import { piSettingsConfig, resolveProvider } from "./src/config/provider.js";
 
 const endpoint = process.env.AGENTOS_ENDPOINT ?? "http://localhost:6420";
 
@@ -31,7 +31,7 @@ async function whenRunnerReady<T>(action: () => Promise<T>): Promise<T> {
 await whenRunnerReady(() => vm.exec("mkdir -p /home/agentos/.pi/agent"));
 await vm.writeFile(
   "/home/agentos/.pi/agent/settings.json",
-  JSON.stringify({ defaultProvider: provider.name, defaultModel: provider.model }),
+  piSettingsConfig(provider),
 );
 console.error(`[agentOS] VM ready; using ${provider.name}/${provider.model}`);
 

@@ -20,6 +20,7 @@ export type HostReadinessComponentId =
 export const HOST_READINESS_CODES = [
   "demo_mode",
   "provider_configured",
+  "provider_invalid",
   "provider_missing",
   "github_app_configured",
   "github_app_missing",
@@ -54,6 +55,7 @@ export interface HostReadinessReport {
 export const HOST_READINESS_CODE_LABELS: Record<HostReadinessCode, string> = {
   demo_mode: "Demo mode — live host checks are advisory only.",
   provider_configured: "Model provider credentials are configured on the host.",
+  provider_invalid: "Model provider selection or thinking configuration is invalid.",
   provider_missing: "No model provider credential is configured.",
   github_app_configured: "GitHub App id and private key source are configured.",
   github_app_missing: "GitHub App id or private key source is not configured.",

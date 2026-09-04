@@ -1,5 +1,5 @@
 ---
-title: Shipwright can use local Codex OAuth as a quota fallback
+title: Shipwright can use local Codex OAuth without API billing
 date: 2026-07-22
 category: integration
 module: agentos-provider-fallback
@@ -10,7 +10,7 @@ related:
   - docs/solutions/integration/sandbox-bun-verification-runtime.md
 ---
 
-# Shipwright can use local Codex OAuth as a quota fallback
+# Shipwright can use local Codex OAuth without API billing
 
 ## Problem
 
@@ -32,30 +32,31 @@ There were two independent boundaries:
 1. Codex CLI and Pi can use the same ChatGPT OAuth account, but they persist different JSON shapes. The usable local credential is in `~/.codex/auth.json`, while Pi expects an `openai-codex` OAuth entry in its own agent directory.
 2. AgentOS `0.2.7` does not provide a working native Codex path for this deployment. Its Pi ACP/V8 adapter stalled while direct Pi succeeded with identical inputs.
 
-The fallback therefore needs both a least-privilege credential projection and a provider-specific execution path outside the failing ACP adapter.
+The provider therefore needs both a least-privilege credential projection and a provider-specific execution path outside the failing ACP adapter. Pi also cannot be allowed to normalize an unrecognized Codex model's requested `xhigh` effort down to `high`.
 
 ## Solution
 
-Configure a Codex auth source and select the OAuth-backed fallback:
+Configure a Codex auth source and select the subscription-backed provider:
 
 ```dotenv
 AGENTOS_CODEX_AUTH_FILE=/var/lib/shipwright/codex-auth.json
-AGENTOS_FALLBACK_PROVIDER=openai-codex
-AGENTOS_FALLBACK_MODEL=gpt-5.4
+AGENTOS_PROVIDER=openai-codex
+AGENTOS_MODEL=gpt-5.6-luna
+AGENTOS_THINKING_LEVEL=xhigh
 ```
 
 Shipwright now:
 
 1. Requires the source to be a regular file owned by the Shipwright process user with no group or world permissions.
-2. Parses only `tokens.access_token`, `tokens.refresh_token`, and `tokens.account_id`, deriving the expiry from the access token.
-3. Mounts the lockfile-pinned Pi `0.60.0` dependency tree read-only into the existing disposable Docker workspace.
-4. Writes the minimal Pi `openai-codex` OAuth record to owner-only temporary storage inside that sandbox.
-5. Runs the Codex attempt through Pi's non-interactive CLI in the same cloned workspace; Kimi and other providers continue through AgentOS.
-6. Disables package extensions, prompt templates, themes, and session persistence for the fallback attempt while retaining Pi's built-in coding tools and the selected Shipwright skill.
-7. Removes the temporary Pi home and auth projection after the attempt, whether it succeeds or fails.
-8. Omits the Codex `id_token`, API-key field, and all unrelated local auth state, and keeps paths, tokens, and raw provider errors out of receipts.
+2. Parses only the OAuth token set needed by the official Codex CLI.
+3. Mounts the lockfile-pinned Codex CLI dependency tree read-only into the existing disposable Docker workspace.
+4. Writes the minimal native Codex auth record to owner-only temporary storage inside that sandbox, with `OPENAI_API_KEY` explicitly null.
+5. Runs Codex directly with the configured model and `model_reasoning_effort`; Kimi and other API-backed providers continue through AgentOS and Pi.
+6. Uses an ephemeral Codex session, ignores host user configuration, and retains repository instructions plus the selected Shipwright skill.
+7. Removes the temporary Codex home, auth projection, and final-response file after the attempt, whether it succeeds or fails.
+8. Keeps credential values, raw provider errors, and source credential paths out of receipts.
 
-No Pi extension is required. The fallback uses the already locked `@mariozechner/pi-coding-agent` package rather than downloading code at runtime.
+The subscription path uses the lockfile-pinned `@openai/codex` package rather than downloading code at runtime. Removing Pi from this path prevents its older model catalog from clamping Luna's `xhigh` effort to `high`.
 
 The fallback remains bounded to one retry and runs only for recognized provider quota, rate-limit, or capacity failures. Agent, verification, policy, and publication failures still do not switch providers.
 
@@ -63,14 +64,14 @@ The fallback remains bounded to one retry and runs only for recognized provider 
 
 Copy the current signed-in local Codex auth file to `/var/lib/shipwright/codex-auth.json`, then set owner `shipwright:shipwright` and mode `0600`. Do not place it in Git, a release directory, or a deployment artifact. When local Codex rotates the OAuth session, refresh the production copy if the fallback begins returning an authentication failure.
 
-## Verification
+## Historical verification
 
-Production release `5da38ce` passed two fresh checks:
+Production release `5da38ce` proved the earlier Pi-based fallback with two checks:
 
 - Shipwright's own `SandboxWorkspace` and `createAndRunPiAgent` path returned exactly `OK` from `openai-codex/gpt-5.4` inside a new disposable Docker workspace within the two-minute bound.
 - No-publish review receipt `9c2abc5b9e781680` recorded `kimi/k3` as `capacity_failed`, `openai-codex/gpt-5.4` as `succeeded`, and `fallbackUsed: true`. The run then reached the independent verification phase and failed separately because the selected target command was `bun test` while that repository sandbox did not provide `bun` (`exit 127`). The authorized pull-request head and its two unresolved current review threads remained unchanged. Follow-up receipt `cf10b590b73e2702`, after [[sandbox-bun-verification-runtime]], preserved the same fallback result and advanced `bun test` to its real repository exit 1 without publishing or changing those threads.
 
-This distinguishes provider recovery from repository verification: the fallback is working even when a later host-controlled gate rejects the run.
+Those receipts remain historical evidence for the original fallback; they do not prove the native Codex path. The current implementation is covered by the focused runner and provider tests, while production acceptance still requires a fresh no-publish run through `SandboxWorkspace` on the deployed Linux release.
 
 ## Prevention
 
