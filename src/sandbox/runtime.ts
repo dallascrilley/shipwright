@@ -73,8 +73,11 @@ export function resolveSandboxContainerUser(
   platform: NodeJS.Platform,
   uid: number | undefined,
   gid: number | undefined,
+  dockerMode: string | undefined = process.env.SHIPWRIGHT_DOCKER_MODE,
 ): string | undefined {
-  return platform === "linux" && uid !== undefined && gid !== undefined ? `${uid}:${gid}` : undefined;
+  if (platform !== "linux") return undefined;
+  if (dockerMode === "rootless") return "0:0";
+  return uid !== undefined && gid !== undefined ? `${uid}:${gid}` : undefined;
 }
 
 export function resolvePiNodeModulesDirectory(): string {
@@ -139,6 +142,7 @@ export class SandboxWorkspace {
         process.platform,
         typeof process.getuid === "function" ? process.getuid() : undefined,
         typeof process.getgid === "function" ? process.getgid() : undefined,
+        process.env.SHIPWRIGHT_DOCKER_MODE,
       );
       const client = await SandboxAgent.start({
         sandbox: docker({

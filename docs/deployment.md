@@ -37,6 +37,10 @@ maps only the `shipwright` user's socket to `/var/run/docker.sock` inside the
 service mount namespace because the pinned sandbox provider uses that path by
 default. Direct CLI and acceptance-test runs honor a `unix://` `DOCKER_HOST`, so
 they can target the same rootless socket without joining the host Docker group.
+Rootless sandboxes run as container `0:0`; that identity maps to the
+unprivileged `shipwright` account through the daemon's user namespace and is
+required for access to host-owned workspace binds. Rootful Linux sandboxes keep
+the service uid:gid instead.
 
 ## Agent queue status
 
