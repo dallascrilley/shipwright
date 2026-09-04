@@ -25,7 +25,7 @@ bun run shipwright -- https://github.com/OWNER/REPO/issues/123 \
 ```
 intake     resolve issue 123, check OWNER/REPO against the allowlist, pin base SHA
 workspace  start a disposable Docker sandbox, clone at the pinned SHA
-agent      run Pi in the sandbox with the model key and nothing else
+agent      run the selected agent in the sandbox with only its model credential
 verify     run `bun test` in the sandbox, capture exit code and output tails
 policy     reject empty diffs, >100 files, >1 MiB, .git/**, .github/workflows/**
 publish    host pushes agent/issue-123-<run-id> and opens the PR
@@ -72,8 +72,9 @@ push, no pull request, and a receipt that says exactly how far it got.
 Every agent-writes-PRs tool I looked at hands the model a token and hopes the
 prompt holds. Shipwright splits the trust boundary at the sandbox wall instead.
 [`src/agent/runner.ts`](src/agent/runner.ts) builds the sandbox session's
-environment explicitly: `HOME`, `PI_CODING_AGENT_DIR`, and the model provider's
-own key. The GitHub App private key, the installation token, and the host
+environment explicitly. Subscription-backed Codex receives an isolated
+`CODEX_HOME` with a least-privilege OAuth projection; API-backed providers
+receive only their own model key. The GitHub App private key, the installation token, and the host
 environment stay on the host, and every git and GitHub write is executed by host
 code in [`src/github/publisher.ts`](src/github/publisher.ts).
 

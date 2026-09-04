@@ -1,7 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { resolveProvider, resolveProviderChain } from "../../src/config/provider.js";
+import { piSettingsConfig, resolveProvider, resolveProviderChain } from "../../src/config/provider.js";
 
 describe("resolveProvider", () => {
+  test("serializes the provider, model, and thinking level for Pi clients", () => {
+    expect(JSON.parse(piSettingsConfig({
+      env: {},
+      name: "openai-codex",
+      model: "gpt-5.6-luna",
+      thinkingLevel: "xhigh",
+    }))).toEqual({
+      defaultProvider: "openai-codex",
+      defaultModel: "gpt-5.6-luna",
+      defaultThinkingLevel: "xhigh",
+    });
+  });
+
   test("selects an explicitly requested configured provider", () => {
     expect(
       resolveProvider({ AGENTOS_PROVIDER: "openai", OPENAI_API_KEY: "test-key" }),
@@ -25,6 +38,13 @@ describe("resolveProvider", () => {
       AGENTOS_CODEX_AUTH_FILE: "/secure/codex-auth.json",
       AGENTOS_THINKING_LEVEL: "maximum",
     })).toThrow("AGENTOS_THINKING_LEVEL");
+  });
+
+  test("defaults subscription OAuth to Luna", () => {
+    expect(resolveProvider({
+      AGENTOS_PROVIDER: "openai-codex",
+      AGENTOS_CODEX_AUTH_FILE: "/secure/codex-auth.json",
+    })).toMatchObject({ model: "gpt-5.6-luna" });
   });
 
   test("selects the Kimi Coding model through the Kimi provider", () => {

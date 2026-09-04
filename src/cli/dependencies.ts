@@ -47,6 +47,7 @@ export async function runWithProviderFallback<T>(
   execution.fallbackUsed = false;
   for (let index = 0; index < providers.length; index += 1) {
     const provider = providers[index]!;
+    execution.software = provider.name === "openai-codex" ? "codex" : "pi";
     execution.provider = provider.name;
     execution.model = provider.model;
     execution.fallbackUsed = index > 0;
@@ -86,7 +87,7 @@ function agentExecution(providers: ProviderConfig[]): AgentExecution {
   const primary = providers[0]!;
   return {
     runtime: "agentos",
-    software: "pi",
+    software: primary.name === "openai-codex" ? "codex" : "pi",
     provider: primary.name,
     model: primary.model,
     fallbackUsed: false,

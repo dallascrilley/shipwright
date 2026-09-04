@@ -6,7 +6,7 @@ import {
   createAndRunPiAgent,
   PiAgentOutputError,
   runPiAgent,
-  runSandboxPiAgent,
+  runSandboxCodexAgent,
   type AgentVm,
   type AgentOsRuntime,
 } from "../../src/agent/runner.js";
@@ -137,7 +137,7 @@ test("runPiAgent rejects Codex auth files readable by other users", async () => 
   }
 });
 
-test("createAndRunPiAgent routes Codex through Pi in the existing disposable workspace", async () => {
+test("createAndRunPiAgent routes Codex through the native CLI in the existing disposable workspace", async () => {
   const directory = mkdtempSync(join(tmpdir(), "shipwright-codex-auth-"));
   const authFile = join(directory, "auth.json");
   const expires = Math.floor(Date.now() / 1000) + 3600;
@@ -154,7 +154,7 @@ test("createAndRunPiAgent routes Codex through Pi in the existing disposable wor
   const runs: Array<{ command: string; args?: string[]; env?: Record<string, string> }> = [];
   const success = {
     exitCode: 0,
-    stdout: "done\n",
+    stdout: "",
     stderr: "",
     stdoutTruncated: false,
     stderrTruncated: false,
@@ -169,7 +169,7 @@ test("createAndRunPiAgent routes Codex through Pi in the existing disposable wor
     },
     async runOrThrow(_label: string, request: { command: string; args?: string[] }) {
       runs.push(request);
-      return success;
+      return request.command === "cat" ? { ...success, stdout: "done\n" } : success;
     },
     async run(request: { command: string; args?: string[]; env?: Record<string, string> }) {
       runs.push(request);
@@ -193,39 +193,45 @@ test("createAndRunPiAgent routes Codex through Pi in the existing disposable wor
     rmSync(directory, { recursive: true, force: true });
   }
 
-  const projected = writes.get("/tmp/shipwright-pi-agent/auth.json")!;
+  const projected = writes.get("/tmp/shipwright-codex-home/auth.json")!;
   expect(JSON.parse(projected)).toEqual({
-    "openai-codex": {
-      type: "oauth",
-      access,
-      refresh: "refresh-token",
-      expires: expires * 1000,
-      accountId: "account-id",
+    auth_mode: "chatgpt",
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: "must-not-be-projected",
+      access_token: access,
+      refresh_token: "refresh-token",
+      account_id: "account-id",
     },
   });
-  expect(projected).not.toContain("must-not-be-projected");
-  expect(writes.get("/tmp/shipwright-pi-agent/skills/fix-review-findings/SKILL.md")).toBe("skill body");
+  expect(writes.get("/tmp/shipwright-codex-home/skills/fix-review-findings/SKILL.md")).toBe("skill body");
   const prompt = runs.find((run) => run.command === "node")!;
-  expect(prompt.args).toContain("/opt/shipwright/node_modules/@mariozechner/pi-coding-agent/dist/cli.js");
+  expect(prompt.args).toContain("/opt/shipwright/node_modules/@openai/codex/bin/codex.js");
+  expect(prompt.args).toContain("exec");
   expect(prompt.args).toContain("fix it");
-  expect(prompt.args?.at((prompt.args?.indexOf("--thinking") ?? -2) + 1)).toBe("xhigh");
+  expect(prompt.args).toContain("model_reasoning_effort=xhigh");
+  expect(prompt.args?.at((prompt.args?.indexOf("--model") ?? -2) + 1)).toBe("gpt-5.4");
   expect(prompt.env).toEqual({
-    HOME: "/tmp/shipwright-pi-home",
-    PI_CODING_AGENT_DIR: "/tmp/shipwright-pi-agent",
+    CODEX_HOME: "/tmp/shipwright-codex-home",
   });
   expect(JSON.stringify(prompt)).not.toContain("refresh-token");
   expect(runs.at(-1)).toMatchObject({
     command: "rm",
-    args: ["-rf", "--", "/tmp/shipwright-pi-agent", "/tmp/shipwright-pi-home"],
+    args: ["-rf", "--", "/tmp/shipwright-codex-home", "/tmp/shipwright-codex-last-message.txt"],
   });
 });
 
-test("runSandboxPiAgent normalizes Codex CLI failures without leaking stderr", async () => {
+test("runSandboxCodexAgent normalizes Codex CLI failures without leaking stderr", async () => {
   const directory = mkdtempSync(join(tmpdir(), "shipwright-codex-auth-"));
   const authFile = join(directory, "auth.json");
   const access = `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url")}.signature`;
   writeFileSync(authFile, JSON.stringify({
-    tokens: { access_token: access, refresh_token: "refresh-token", account_id: "account-id" },
+    tokens: {
+      id_token: "id-token",
+      access_token: access,
+      refresh_token: "refresh-token",
+      account_id: "account-id",
+    },
   }), { mode: 0o600 });
   const result = {
     exitCode: 1,
@@ -245,7 +251,7 @@ test("runSandboxPiAgent normalizes Codex CLI failures without leaking stderr", a
   };
 
   try {
-    const run = runSandboxPiAgent(
+    const run = runSandboxCodexAgent(
       workspace as never,
       { authFile, env: {}, name: "openai-codex", model: "gpt-5.4", thinkingLevel: "low" },
       "fix it",

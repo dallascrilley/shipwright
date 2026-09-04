@@ -31,6 +31,14 @@ export function isProviderCapacityError(message: string): boolean {
   return PROVIDER_CAPACITY_SIGNATURES.some((pattern) => pattern.test(message));
 }
 
+export function piSettingsConfig(provider: ProviderConfig): string {
+  return JSON.stringify({
+    defaultProvider: provider.name,
+    defaultModel: provider.model,
+    defaultThinkingLevel: provider.thinkingLevel,
+  });
+}
+
 function configuredProvider(
   key: string | undefined,
   envName: string,
@@ -76,7 +84,7 @@ function configuredProviders(env: Environment): Record<string, ProviderConfig | 
     ),
     openai: configuredProvider(env.OPENAI_API_KEY, "OPENAI_API_KEY", "openai", "gpt-4.1-mini", thinkingLevel),
     "openai-codex": codexAuthFile
-      ? { authFile: codexAuthFile, env: {}, name: "openai-codex", model: "gpt-5.4", thinkingLevel }
+      ? { authFile: codexAuthFile, env: {}, name: "openai-codex", model: "gpt-5.6-luna", thinkingLevel }
       : undefined,
     google: configuredProvider(env.GEMINI_API_KEY, "GEMINI_API_KEY", "google", "gemini-2.5-flash", thinkingLevel),
     kimi: configuredProvider(env.KIMI_API_KEY, "KIMI_API_KEY", "kimi", "kimi-for-coding", thinkingLevel),

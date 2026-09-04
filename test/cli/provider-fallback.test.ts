@@ -31,6 +31,25 @@ test("falls back once when Pi returns a provider quota response", async () => {
   });
 });
 
+test("records the native Codex CLI when subscription OAuth is selected", async () => {
+  const state = execution();
+  const codexProviders: ProviderConfig[] = [{
+    authFile: "/secure/auth.json",
+    env: {},
+    name: "openai-codex",
+    model: "gpt-5.6-luna",
+    thinkingLevel: "xhigh",
+  }];
+
+  await expect(runWithProviderFallback(codexProviders, state, async () => "done")).resolves.toBe("done");
+  expect(state).toMatchObject({
+    runtime: "agentos",
+    software: "codex",
+    provider: "openai-codex",
+    model: "gpt-5.6-luna",
+  });
+});
+
 test("does not fall back after an ordinary agent failure", async () => {
   const state = execution();
   const attempted: string[] = [];

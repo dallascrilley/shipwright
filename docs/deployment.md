@@ -245,10 +245,11 @@ select `AGENTOS_PROVIDER=openai-codex` when Codex is primary (or
 `AGENTOS_FALLBACK_PROVIDER=openai-codex` when it is the fallback), and set the
 matching model plus `AGENTOS_THINKING_LEVEL`. Replace this copy when the local
 Codex OAuth session rotates or the provider reports an authentication failure.
-The deployment installs the lockfile-pinned Pi CLI; Shipwright mounts that
-dependency tree read-only and projects only the required OAuth fields into
-temporary storage inside the existing disposable agent sandbox. It does not
-install Pi extensions or packages at runtime.
+The deployment installs the lockfile-pinned Codex CLI. Shipwright mounts its
+dependency tree read-only, projects only the required ChatGPT OAuth fields into
+owner-only temporary storage inside the existing disposable agent sandbox, and
+invokes the selected model and reasoning effort directly. It does not use an
+OpenAI API key or install packages at runtime.
 
 The repository policy should remain owner-bound:
 
