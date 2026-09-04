@@ -22,10 +22,38 @@ test("runPiAgent configures Pi, prompts once, and always cleans up", async () =>
     async dispose() { events.push("dispose"); },
   };
 
-  const result = await runPiAgent(vm, { env: {}, name: "openai", model: "gpt-test" }, "fix it");
+  const result = await runPiAgent(
+    vm,
+    { env: {}, name: "openai", model: "gpt-test", thinkingLevel: "low" },
+    "fix it",
+  );
 
   expect(result).toBe("done");
   expect(events).toEqual(["mkdir", "settings", "session", "prompt", "close-session", "dispose"]);
+});
+
+test("runPiAgent configures the requested Pi thinking level", async () => {
+  const writes = new Map<string, string>();
+  const vm: AgentVm = {
+    async mkdir() {},
+    async writeFile(path, content) { writes.set(path, String(content)); },
+    async createSession() { return { sessionId: "s1" }; },
+    async prompt() { return { text: "done" }; },
+    closeSession() {},
+    async dispose() {},
+  };
+
+  await runPiAgent(
+    vm,
+    { env: {}, name: "openai", model: "gpt-5.6-luna", thinkingLevel: "xhigh" },
+    "fix it",
+  );
+
+  expect(JSON.parse(writes.get("/home/agentos/.pi/agent/settings.json")!)).toEqual({
+    defaultProvider: "openai",
+    defaultModel: "gpt-5.6-luna",
+    defaultThinkingLevel: "xhigh",
+  });
 });
 
 test("runPiAgent projects local Codex OAuth without unrelated auth fields", async () => {
@@ -60,6 +88,7 @@ test("runPiAgent projects local Codex OAuth without unrelated auth fields", asyn
       env: {},
       name: "openai-codex",
       model: "gpt-5.4",
+      thinkingLevel: "low",
     }, "fix it");
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -101,6 +130,7 @@ test("runPiAgent rejects Codex auth files readable by other users", async () => 
       env: {},
       name: "openai-codex",
       model: "gpt-5.4",
+      thinkingLevel: "low",
     }, "fix it")).rejects.toThrow("unreadable, invalid, or not owner-only");
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -150,7 +180,7 @@ test("createAndRunPiAgent routes Codex through Pi in the existing disposable wor
   try {
     await expect(createAndRunPiAgent(
       workspace as never,
-      { authFile, env: {}, name: "openai-codex", model: "gpt-5.4" },
+      { authFile, env: {}, name: "openai-codex", model: "gpt-5.4", thinkingLevel: "xhigh" },
       "fix it",
       5_000,
       [{ name: "fix-review-findings", content: "skill body" }],
@@ -178,6 +208,7 @@ test("createAndRunPiAgent routes Codex through Pi in the existing disposable wor
   const prompt = runs.find((run) => run.command === "node")!;
   expect(prompt.args).toContain("/opt/shipwright/node_modules/@mariozechner/pi-coding-agent/dist/cli.js");
   expect(prompt.args).toContain("fix it");
+  expect(prompt.args?.at((prompt.args?.indexOf("--thinking") ?? -2) + 1)).toBe("xhigh");
   expect(prompt.env).toEqual({
     HOME: "/tmp/shipwright-pi-home",
     PI_CODING_AGENT_DIR: "/tmp/shipwright-pi-agent",
@@ -216,7 +247,7 @@ test("runSandboxPiAgent normalizes Codex CLI failures without leaking stderr", a
   try {
     const run = runSandboxPiAgent(
       workspace as never,
-      { authFile, env: {}, name: "openai-codex", model: "gpt-5.4" },
+      { authFile, env: {}, name: "openai-codex", model: "gpt-5.4", thinkingLevel: "low" },
       "fix it",
       5_000,
     );
@@ -247,7 +278,7 @@ test("runPiAgent rejects an ACP prompt error instead of accepting empty output",
   };
 
   await expect(
-    runPiAgent(vm, { env: {}, name: "openai", model: "gpt-test" }, "fix it"),
+    runPiAgent(vm, { env: {}, name: "openai", model: "gpt-test", thinkingLevel: "low" }, "fix it"),
   ).rejects.toThrow("Pi agent request failed (RPC -32000): upstream request failed");
 });
 
@@ -274,7 +305,7 @@ test("runPiAgent retries one empty completed turn in the same session", async ()
   };
 
   await expect(
-    runPiAgent(vm, { env: {}, name: "openai", model: "gpt-test" }, "fix it"),
+    runPiAgent(vm, { env: {}, name: "openai", model: "gpt-test", thinkingLevel: "low" }, "fix it"),
   ).resolves.toBe("done");
   expect(prompts).toHaveLength(2);
   expect(prompts[1]).toContain("previous turn completed without a final response");
@@ -298,7 +329,7 @@ test("runPiAgent does not recover a canceled empty turn", async () => {
   };
 
   await expect(
-    runPiAgent(vm, { env: {}, name: "openai", model: "gpt-test" }, "fix it"),
+    runPiAgent(vm, { env: {}, name: "openai", model: "gpt-test", thinkingLevel: "low" }, "fix it"),
   ).rejects.toThrow("without text output (stopReason=cancelled");
   expect(prompts).toBe(1);
 });
@@ -343,7 +374,11 @@ test("runPiAgent reports safe event diagnostics after two empty turns", async ()
     async dispose() {},
   } as AgentVm;
 
-  const run = runPiAgent(vm, { env: {}, name: "openai", model: "gpt-test" }, "fix it");
+  const run = runPiAgent(
+    vm,
+    { env: {}, name: "openai", model: "gpt-test", thinkingLevel: "low" },
+    "fix it",
+  );
   await expect(run).rejects.toBeInstanceOf(PiAgentOutputError);
   await expect(run).rejects.toThrow(
     "stopReason=end_turn; agentMessageChunks=0, agentThoughtChunks=2, toolCalls=2, toolFailures=1",
@@ -362,11 +397,16 @@ test("runPiAgent configures Pi's Kimi K3 catalog", async () => {
     async dispose() {},
   };
 
-  await runPiAgent(vm, { env: { KIMI_API_KEY: "test-key" }, name: "kimi", model: "k3" }, "fix it");
+  await runPiAgent(
+    vm,
+    { env: { KIMI_API_KEY: "test-key" }, name: "kimi", model: "k3", thinkingLevel: "low" },
+    "fix it",
+  );
 
   expect(JSON.parse(writes.get("/home/agentos/.pi/agent/settings.json")!)).toEqual({
     defaultProvider: "kimi",
     defaultModel: "k3",
+    defaultThinkingLevel: "low",
   });
   expect(JSON.parse(writes.get("/home/agentos/.pi/agent/models.json")!)).toEqual({
     providers: {
@@ -406,7 +446,7 @@ test("runPiAgent projects a canonical skill before creating the session", async 
 
   await runPiAgent(
     vm,
-    { env: {}, name: "openai", model: "gpt-test" },
+    { env: {}, name: "openai", model: "gpt-test", thinkingLevel: "low" },
     "fix it",
     5_000,
     [{ name: "fix-review-findings", content: "---\nname: fix-review-findings\ndescription: test\n---\n" }],
@@ -429,7 +469,7 @@ test("runPiAgent rejects unsafe skill names", async () => {
   };
   await expect(runPiAgent(
     vm,
-    { env: {}, name: "openai", model: "gpt-test" },
+    { env: {}, name: "openai", model: "gpt-test", thinkingLevel: "low" },
     "fix it",
     5_000,
     [{ name: "../bad", content: "bad" }],
@@ -447,7 +487,11 @@ test("runPiAgent disposes the VM when session creation fails", async () => {
     async dispose() { events.push("dispose"); },
   };
 
-  await expect(runPiAgent(vm, { env: {}, name: "openai", model: "gpt-test" }, "fix it")).rejects.toThrow("no session");
+  await expect(runPiAgent(
+    vm,
+    { env: {}, name: "openai", model: "gpt-test", thinkingLevel: "low" },
+    "fix it",
+  )).rejects.toThrow("no session");
   expect(events).toEqual(["dispose"]);
 });
 
@@ -461,7 +505,12 @@ test("runPiAgent bounds the prompt and still tears down", async () => {
     closeSession() { events.push("close-session"); },
     async dispose() { events.push("dispose"); },
   };
-  await expect(runPiAgent(vm, { env: {}, name: "openai", model: "gpt-test" }, "fix it", 5)).rejects.toThrow("timed out");
+  await expect(runPiAgent(
+    vm,
+    { env: {}, name: "openai", model: "gpt-test", thinkingLevel: "low" },
+    "fix it",
+    5,
+  )).rejects.toThrow("timed out");
   expect(events).toEqual(["close-session", "dispose"]);
 });
 
@@ -506,7 +555,7 @@ test("createAndRunPiAgent gives its explicit sidecar a deadline beyond the Pi de
 
   await expect(createAndRunPiAgent(
     workspace as never,
-    { env: {}, name: "openai", model: "gpt-test" },
+    { env: {}, name: "openai", model: "gpt-test", thinkingLevel: "low" },
     "fix it",
     5_000,
     [],

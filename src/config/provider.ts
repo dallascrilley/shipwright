@@ -3,7 +3,11 @@ export interface ProviderConfig {
   env: Record<string, string>;
   name: "anthropic" | "openrouter" | "openai" | "openai-codex" | "google" | "kimi";
   model: string;
+  thinkingLevel: PiThinkingLevel;
 }
+
+export const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+export type PiThinkingLevel = (typeof PI_THINKING_LEVELS)[number];
 
 type Environment = Record<string, string | undefined>;
 
@@ -32,31 +36,50 @@ function configuredProvider(
   envName: string,
   name: ProviderConfig["name"],
   model: string,
+  thinkingLevel: PiThinkingLevel,
 ): ProviderConfig | undefined {
-  return key ? { env: { [envName]: key }, name, model } : undefined;
+  return key ? { env: { [envName]: key }, name, model, thinkingLevel } : undefined;
+}
+
+function resolveThinkingLevel(value: string | undefined): PiThinkingLevel {
+  const candidate = value?.trim() || "low";
+  switch (candidate) {
+    case "off":
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+      return candidate;
+    default:
+      throw new Error(`AGENTOS_THINKING_LEVEL must be one of ${PI_THINKING_LEVELS.join(", ")}`);
+  }
 }
 
 function configuredProviders(env: Environment): Record<string, ProviderConfig | undefined> {
   const codexAuthFile = env.AGENTOS_CODEX_AUTH_FILE?.trim();
+  const thinkingLevel = resolveThinkingLevel(env.AGENTOS_THINKING_LEVEL);
   return {
     anthropic: configuredProvider(
       env.ANTHROPIC_API_KEY,
       "ANTHROPIC_API_KEY",
       "anthropic",
       "claude-opus-4-6",
+      thinkingLevel,
     ),
     openrouter: configuredProvider(
       env.OPENROUTER_API_KEY,
       "OPENROUTER_API_KEY",
       "openrouter",
       "openai/gpt-5.1-codex",
+      thinkingLevel,
     ),
-    openai: configuredProvider(env.OPENAI_API_KEY, "OPENAI_API_KEY", "openai", "gpt-4.1-mini"),
+    openai: configuredProvider(env.OPENAI_API_KEY, "OPENAI_API_KEY", "openai", "gpt-4.1-mini", thinkingLevel),
     "openai-codex": codexAuthFile
-      ? { authFile: codexAuthFile, env: {}, name: "openai-codex", model: "gpt-5.4" }
+      ? { authFile: codexAuthFile, env: {}, name: "openai-codex", model: "gpt-5.4", thinkingLevel }
       : undefined,
-    google: configuredProvider(env.GEMINI_API_KEY, "GEMINI_API_KEY", "google", "gemini-2.5-flash"),
-    kimi: configuredProvider(env.KIMI_API_KEY, "KIMI_API_KEY", "kimi", "kimi-for-coding"),
+    google: configuredProvider(env.GEMINI_API_KEY, "GEMINI_API_KEY", "google", "gemini-2.5-flash", thinkingLevel),
+    kimi: configuredProvider(env.KIMI_API_KEY, "KIMI_API_KEY", "kimi", "kimi-for-coding", thinkingLevel),
   };
 }
 

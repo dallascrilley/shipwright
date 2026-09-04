@@ -178,7 +178,11 @@ export async function runPiAgent(
     await vm.mkdir("/home/agentos/.pi/agent", { recursive: true });
     await vm.writeFile(
       "/home/agentos/.pi/agent/settings.json",
-      JSON.stringify({ defaultProvider: provider.name, defaultModel: provider.model }),
+      JSON.stringify({
+        defaultProvider: provider.name,
+        defaultModel: provider.model,
+        defaultThinkingLevel: provider.thinkingLevel,
+      }),
     );
     const authConfig = piAuthConfig(provider);
     if (authConfig) await vm.writeFile("/home/agentos/.pi/agent/auth.json", authConfig);
@@ -268,7 +272,7 @@ export async function runSandboxPiAgent(
         SANDBOX_PI_CLI,
         "--provider", provider.name,
         "--model", provider.model,
-        "--thinking", "low",
+        "--thinking", provider.thinkingLevel,
         "--no-session",
         "--no-extensions",
         "--no-prompt-templates",
