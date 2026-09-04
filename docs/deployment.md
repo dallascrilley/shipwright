@@ -35,8 +35,11 @@ belong on that host. `SHIPWRIGHT_DOCKER_MODE=rootless` creates a user Docker
 service and does not grant Docker group membership. The Shipwright systemd unit
 maps only the `shipwright` user's socket to `/var/run/docker.sock` inside the
 service mount namespace because the pinned sandbox provider uses that path by
-default. Direct CLI and acceptance-test runs honor a `unix://` `DOCKER_HOST`, so
-they can target the same rootless socket without joining the host Docker group.
+default. Direct CLI and acceptance-test runs can target the same rootless socket
+without joining the host Docker group by setting both the `unix://`
+`DOCKER_HOST` and `SHIPWRIGHT_DOCKER_MODE=rootless`. The mode is required
+because it also controls the sandbox container user; a socket path alone does
+not safely establish the daemon's identity model.
 Rootless sandboxes run as container `0:0`; that identity maps to the
 unprivileged `shipwright` account through the daemon's user namespace and is
 required for access to host-owned workspace binds. Rootful Linux sandboxes keep
@@ -397,7 +400,7 @@ curl -fsS http://127.0.0.1:4317/metrics | head -20
 tailscale serve status
 sudo systemctl is-active shipwright-docker  # rootless mode only
 sudo systemctl --user --machine=shipwright@ is-active docker.service
-sudo -u shipwright env DOCKER_HOST=unix:///run/user/$(id -u shipwright)/docker.sock \
+sudo -u shipwright env SHIPWRIGHT_DOCKER_MODE=rootless DOCKER_HOST=unix:///run/user/$(id -u shipwright)/docker.sock \
   docker ps --format 'table {{.Names}}\t{{.Status}}'
 df -h /
 free -h

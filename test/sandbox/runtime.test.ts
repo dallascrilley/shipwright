@@ -66,6 +66,17 @@ describe("sandbox command helpers", () => {
     expect(resolveSandboxContainerUser("linux", undefined, undefined, "rootful")).toBeUndefined();
   });
 
+  test("uses the configured Docker mode when the caller omits an override", () => {
+    const previousMode = process.env.SHIPWRIGHT_DOCKER_MODE;
+    try {
+      process.env.SHIPWRIGHT_DOCKER_MODE = "rootless";
+      expect(resolveSandboxContainerUser("linux", 996, 988)).toBe("0:0");
+    } finally {
+      if (previousMode === undefined) delete process.env.SHIPWRIGHT_DOCKER_MODE;
+      else process.env.SHIPWRIGHT_DOCKER_MODE = previousMode;
+    }
+  });
+
   test("resolves the installed Pi dependency root for a read-only sandbox mount", () => {
     const nodeModules = resolvePiNodeModulesDirectory();
     expect(nodeModules.endsWith("/node_modules")).toBe(true);
