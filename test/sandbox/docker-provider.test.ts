@@ -1,20 +1,52 @@
-import { describe, expect, test } from "bun:test";
-import { resolveDockerSocketPath } from "sandbox-agent/docker";
+import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { docker } from "sandbox-agent/docker";
 
-describe("sandbox-agent Docker socket selection", () => {
-  test("uses Docker's conventional root socket when DOCKER_HOST is unset", () => {
-    expect(resolveDockerSocketPath()).toBe("/var/run/docker.sock");
+test("sandbox-agent honors a configured rootless Docker socket", async () => {
+  const root = await mkdtemp(join(tmpdir(), "shipwright-docker-provider-"));
+  const socketPath = join(root, "docker.sock");
+  const requests: string[] = [];
+  const server = createServer((request, response) => {
+    requests.push(`${request.method} ${request.url}`);
+    request.resume();
+    if (request.method === "POST" && request.url?.startsWith("/containers/create?")) {
+      response.writeHead(201, { "content-type": "application/json" });
+      response.end('{"Id":"sandbox-fixture"}');
+      return;
+    }
+    if (request.method === "POST" && request.url === "/containers/sandbox-fixture/start") {
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    response.writeHead(404);
+    response.end();
   });
+  const previousDockerHost = process.env.DOCKER_HOST;
 
-  test("uses a configured rootless Unix socket", () => {
-    expect(resolveDockerSocketPath("unix:///run/user/1001/docker.sock"))
-      .toBe("/run/user/1001/docker.sock");
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    process.env.DOCKER_HOST = `unix://${socketPath}`;
 
-  test("rejects unsupported and empty Docker hosts without echoing them", () => {
-    expect(() => resolveDockerSocketPath("tcp://secret.example:2376"))
-      .toThrow("DOCKER_HOST must name a non-empty unix:// socket");
-    expect(() => resolveDockerSocketPath("unix://"))
-      .toThrow("DOCKER_HOST must name a non-empty unix:// socket");
-  });
+    const sandboxId = await docker({ image: "sandbox-fixture:latest" }).create();
+
+    expect(sandboxId).toBe("sandbox-fixture");
+    expect(requests).toEqual([
+      expect.stringMatching(/^POST \/containers\/create\?/),
+      "POST /containers/sandbox-fixture/start",
+    ]);
+  } finally {
+    if (previousDockerHost === undefined) delete process.env.DOCKER_HOST;
+    else process.env.DOCKER_HOST = previousDockerHost;
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+    await rm(root, { recursive: true, force: true });
+  }
 });
