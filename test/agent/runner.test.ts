@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -258,6 +258,195 @@ test("runSandboxCodexAgent normalizes Codex CLI failures without leaking stderr"
       5_000,
     );
     await expect(run).rejects.toThrow("OpenAI Codex OAuth authentication failed");
+    await expect(run).rejects.not.toThrow("sensitive-upstream-value");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("runSandboxCodexAgent projects last_refresh into the sandbox auth file when the source has it", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "shipwright-codex-auth-"));
+  const authFile = join(directory, "auth.json");
+  const access = `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url")}.signature`;
+  const lastRefresh = "2026-09-01T00:00:00.000Z";
+  writeFileSync(authFile, JSON.stringify({
+    tokens: {
+      id_token: "id-token",
+      access_token: access,
+      refresh_token: "refresh-token",
+      account_id: "account-id",
+    },
+    last_refresh: lastRefresh,
+  }), { mode: 0o600 });
+  const writes = new Map<string, string>();
+  const success = {
+    exitCode: 0, stdout: "", stderr: "", stdoutTruncated: false, stderrTruncated: false, timedOut: false, durationMs: 12,
+  };
+  const workspace = {
+    client: {
+      async writeFsFile({ path }: { path: string }, content: string) { writes.set(path, content); },
+      async readFsFile() { return new TextEncoder().encode(writes.get(`/tmp/shipwright-codex-home/auth.json`)!); },
+    },
+    async runOrThrow(_label: string, request: { command: string; args?: string[] }) {
+      return request.command === "cat" ? { ...success, stdout: "done\n" } : success;
+    },
+    async run(request: { command: string }) { return success; },
+  };
+
+  try {
+    await runSandboxCodexAgent(
+      workspace as never,
+      { authFile, env: {}, name: "openai-codex", model: "gpt-5.4", thinkingLevel: "low" },
+      "fix it",
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+
+  const projected = JSON.parse(writes.get("/tmp/shipwright-codex-home/auth.json")!);
+  expect(projected.last_refresh).toBe(lastRefresh);
+});
+
+test("runSandboxCodexAgent persists a rotated refresh token to the persistent auth file", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "shipwright-codex-auth-"));
+  const authFile = join(directory, "auth.json");
+  const access = `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url")}.signature`;
+  writeFileSync(authFile, JSON.stringify({
+    OPENAI_API_KEY: null,
+    unrelated_field: "keep-me",
+    tokens: {
+      id_token: "id-token",
+      access_token: access,
+      refresh_token: "refresh-token",
+      account_id: "account-id",
+      unrelated_token_field: "keep-me-too",
+    },
+  }), { mode: 0o600 });
+  const rotatedRefresh = "rotated-refresh-token";
+  const rotatedLastRefresh = "2026-09-07T12:00:00.000Z";
+  const sandboxAuth: Record<string, unknown> = {};
+  const success = {
+    exitCode: 0, stdout: "", stderr: "", stdoutTruncated: false, stderrTruncated: false, timedOut: false, durationMs: 12,
+  };
+  const workspace = {
+    client: {
+      async writeFsFile({ path }: { path: string }, content: string) {
+        if (path === "/tmp/shipwright-codex-home/auth.json") Object.assign(sandboxAuth, JSON.parse(content));
+      },
+      async readFsFile() {
+        return new TextEncoder().encode(JSON.stringify({
+          ...sandboxAuth,
+          last_refresh: rotatedLastRefresh,
+          tokens: { ...(sandboxAuth.tokens as object), refresh_token: rotatedRefresh },
+        }));
+      },
+    },
+    async runOrThrow(_label: string, request: { command: string; args?: string[] }) {
+      return request.command === "cat" ? { ...success, stdout: "done\n" } : success;
+    },
+    async run(request: { command: string }) { return success; },
+  };
+
+  try {
+    await runSandboxCodexAgent(
+      workspace as never,
+      { authFile, env: {}, name: "openai-codex", model: "gpt-5.4", thinkingLevel: "low" },
+      "fix it",
+    );
+  } finally {
+    const persisted = JSON.parse(readFileSync(authFile, "utf8"));
+    expect(persisted.tokens.refresh_token).toBe(rotatedRefresh);
+    expect(persisted.tokens.access_token).toBe(access);
+    expect(persisted.tokens.unrelated_token_field).toBe("keep-me-too");
+    expect(persisted.unrelated_field).toBe("keep-me");
+    expect(persisted.last_refresh).toBe(rotatedLastRefresh);
+    expect(statSync(authFile).mode & 0o777).toBe(0o600);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("runSandboxCodexAgent leaves the persistent auth file untouched when tokens do not rotate", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "shipwright-codex-auth-"));
+  const authFile = join(directory, "auth.json");
+  const access = `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url")}.signature`;
+  writeFileSync(authFile, JSON.stringify({
+    tokens: {
+      id_token: "id-token",
+      access_token: access,
+      refresh_token: "refresh-token",
+      account_id: "account-id",
+    },
+  }), { mode: 0o600 });
+  const originalContents = readFileSync(authFile, "utf8");
+  const originalMtime = statSync(authFile).mtimeMs;
+  const success = {
+    exitCode: 0, stdout: "", stderr: "", stdoutTruncated: false, stderrTruncated: false, timedOut: false, durationMs: 12,
+  };
+  const workspace = {
+    client: {
+      async writeFsFile() {},
+      async readFsFile() {
+        return new TextEncoder().encode(JSON.stringify({
+          tokens: { id_token: "id-token", access_token: access, refresh_token: "refresh-token", account_id: "account-id" },
+        }));
+      },
+    },
+    async runOrThrow(_label: string, request: { command: string; args?: string[] }) {
+      return request.command === "cat" ? { ...success, stdout: "done\n" } : success;
+    },
+    async run(request: { command: string }) { return success; },
+  };
+
+  try {
+    await runSandboxCodexAgent(
+      workspace as never,
+      { authFile, env: {}, name: "openai-codex", model: "gpt-5.4", thinkingLevel: "low" },
+      "fix it",
+    );
+  } finally {
+    expect(readFileSync(authFile, "utf8")).toBe(originalContents);
+    expect(statSync(authFile).mtimeMs).toBe(originalMtime);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("runSandboxCodexAgent appends a redacted OAuth failure hint from the upstream error", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "shipwright-codex-auth-"));
+  const authFile = join(directory, "auth.json");
+  const access = `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url")}.signature`;
+  writeFileSync(authFile, JSON.stringify({
+    tokens: {
+      id_token: "id-token",
+      access_token: access,
+      refresh_token: "refresh-token",
+      account_id: "account-id",
+    },
+  }), { mode: 0o600 });
+  const result = {
+    exitCode: 1,
+    stdout: "",
+    stderr: '401 unauthorized {"error": {"code": "refresh_token_reused", "message": "sensitive-upstream-value https://auth.openai.com/x"}}',
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    timedOut: false,
+    durationMs: 12,
+  };
+  const workspace = {
+    client: { async writeFsFile() {}, async readFsFile() { throw new Error("no sandbox file"); } },
+    async runOrThrow() { return { ...result, exitCode: 0, stderr: "" }; },
+    async run(request: { command: string }) {
+      return request.command === "node" ? result : { ...result, exitCode: 0, stderr: "" };
+    },
+  };
+
+  try {
+    const run = runSandboxCodexAgent(
+      workspace as never,
+      { authFile, env: {}, name: "openai-codex", model: "gpt-5.4", thinkingLevel: "low" },
+      "fix it",
+      5_000,
+    );
+    await expect(run).rejects.toThrow("OpenAI Codex OAuth authentication failed (refresh_token_reused)");
     await expect(run).rejects.not.toThrow("sensitive-upstream-value");
   } finally {
     rmSync(directory, { recursive: true, force: true });
