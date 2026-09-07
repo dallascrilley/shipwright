@@ -4,7 +4,7 @@ import {
   type JsonRpcResponse,
   type SessionEventHandler,
 } from "@rivet-dev/agentos-core";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -12,6 +12,7 @@ import {
   piSettingsConfig,
   type ProviderConfig,
 } from "../config/provider.js";
+import { redactSecrets } from "../pipeline/secret-safety.js";
 import {
   AGENT_WORKSPACE,
   SANDBOX_PI_NODE_MODULES,
@@ -117,6 +118,7 @@ interface CodexOAuthFields {
   accountId: string;
   idToken?: string;
   refresh: string;
+  lastRefresh?: string;
 }
 
 function readCodexOAuth(provider: ProviderConfig): CodexOAuthFields | undefined {
@@ -138,15 +140,17 @@ function readCodexOAuth(provider: ProviderConfig): CodexOAuthFields | undefined 
   } catch {
     throw new Error("OpenAI Codex auth file is unreadable, invalid, or not owner-only");
   }
-  const tokens = asRecord(asRecord(auth)?.tokens);
+  const record = asRecord(auth);
+  const tokens = asRecord(record?.tokens);
   const idToken = stringField(tokens, "id_token");
   const access = stringField(tokens, "access_token");
   const refresh = stringField(tokens, "refresh_token");
   const accountId = stringField(tokens, "account_id");
+  const lastRefresh = stringField(record, "last_refresh");
   if (!access || !refresh || !accountId) {
     throw new Error("OpenAI Codex auth file is missing OAuth token fields");
   }
-  return { access, accountId, idToken, refresh };
+  return { access, accountId, idToken, refresh, lastRefresh };
 }
 
 function piAuthConfig(provider: ProviderConfig): string | undefined {
@@ -164,9 +168,8 @@ function piAuthConfig(provider: ProviderConfig): string | undefined {
   });
 }
 
-function codexAuthConfig(provider: ProviderConfig): string {
-  const oauth = readCodexOAuth(provider);
-  if (!oauth?.idToken) throw new Error("OpenAI Codex auth file is missing OAuth token fields");
+function codexAuthConfig(oauth: CodexOAuthFields): string {
+  if (!oauth.idToken) throw new Error("OpenAI Codex auth file is missing OAuth token fields");
   return JSON.stringify({
     auth_mode: "chatgpt",
     OPENAI_API_KEY: null,
@@ -176,7 +179,66 @@ function codexAuthConfig(provider: ProviderConfig): string {
       refresh_token: oauth.refresh,
       account_id: oauth.accountId,
     },
+    ...(oauth.lastRefresh ? { last_refresh: oauth.lastRefresh } : {}),
   });
+}
+
+const OAUTH_ERROR_HINT_PATTERN = /"code"\s*:\s*"([a-z][a-z0-9_]*)"|\b(invalid_grant|refresh_token_reused|login required)\b/i;
+
+function oauthErrorHint(upstream: string): string | undefined {
+  const match = OAUTH_ERROR_HINT_PATTERN.exec(upstream);
+  return match?.[1] ?? match?.[2];
+}
+
+/**
+ * Codex CLI 0.153.2 refreshes an OAuth token whenever the projected auth file
+ * lacks `last_refresh`, and OpenAI rotates the refresh token on every
+ * refresh. The sandbox's `auth.json` is destroyed with the rest of
+ * `SANDBOX_CODEX_HOME` once the run ends, so a rotated token that never makes
+ * it back to the persistent auth file is dead on the next run. Read the
+ * sandbox file back and, if the CLI rotated any token, persist the update.
+ */
+async function persistRotatedCodexTokens(
+  workspace: SandboxWorkspace,
+  provider: ProviderConfig,
+  projected: CodexOAuthFields,
+): Promise<void> {
+  if (!provider.authFile) return;
+  try {
+    const raw = await workspace.client.readFsFile({ path: `${SANDBOX_CODEX_HOME}/auth.json` });
+    const sandboxAuth = asRecord(JSON.parse(Buffer.from(raw).toString("utf8")));
+    const tokens = asRecord(sandboxAuth?.tokens);
+    const access = stringField(tokens, "access_token");
+    const refresh = stringField(tokens, "refresh_token");
+    const idToken = stringField(tokens, "id_token");
+    const lastRefresh = stringField(sandboxAuth, "last_refresh");
+    if (!access || !refresh) return;
+    const rotated = access !== projected.access
+      || refresh !== projected.refresh
+      || (idToken !== undefined && idToken !== projected.idToken);
+    if (!rotated) return;
+
+    const persisted = asRecord(JSON.parse(readFileSync(provider.authFile, "utf8"))) ?? {};
+    const persistedTokens = asRecord(persisted.tokens) ?? {};
+    const updated = {
+      ...persisted,
+      tokens: {
+        ...persistedTokens,
+        access_token: access,
+        refresh_token: refresh,
+        ...(idToken ? { id_token: idToken } : {}),
+      },
+      ...(lastRefresh ? { last_refresh: lastRefresh } : {}),
+    };
+    const tempPath = `${provider.authFile}.${process.pid}.tmp`;
+    writeFileSync(tempPath, JSON.stringify(updated, null, 2), { mode: 0o600 });
+    renameSync(tempPath, provider.authFile);
+  } catch (error) {
+    console.error(
+      "Failed to persist rotated OpenAI Codex OAuth tokens:",
+      redactSecrets(error instanceof Error ? error.message : String(error)),
+    );
+  }
 }
 
 function assertSafeSkillName(name: string): void {
@@ -270,7 +332,9 @@ export async function runSandboxCodexAgent(
   if (provider.name !== "openai-codex") {
     throw new Error("sandbox Codex runner requires OpenAI Codex OAuth");
   }
-  const authConfig = codexAuthConfig(provider);
+  const oauth = readCodexOAuth(provider);
+  if (!oauth) throw new Error("OpenAI Codex auth file is missing OAuth token fields");
+  const authConfig = codexAuthConfig(oauth);
   for (const skill of skills) assertSafeSkillName(skill.name);
 
   try {
@@ -331,7 +395,10 @@ export async function runSandboxCodexAgent(
         throw new Error("OpenAI Codex provider capacity exhausted");
       }
       if (/\b(?:401|403|unauthori[sz]ed|forbidden|authentication|invalid_grant|login required|access token|refresh token)\b/i.test(upstream)) {
-        throw new Error("OpenAI Codex OAuth authentication failed");
+        const hint = oauthErrorHint(upstream);
+        throw new Error(
+          hint ? `OpenAI Codex OAuth authentication failed (${hint})` : "OpenAI Codex OAuth authentication failed",
+        );
       }
       throw new Error(`OpenAI Codex CLI failed with exit ${result.exitCode}`);
     }
@@ -345,6 +412,7 @@ export async function runSandboxCodexAgent(
     }
     return output.stdout;
   } finally {
+    await persistRotatedCodexTokens(workspace, provider, oauth);
     try {
       await workspace.run({
         command: "rm",
