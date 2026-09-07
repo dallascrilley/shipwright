@@ -4,7 +4,7 @@ import {
   type JsonRpcResponse,
   type SessionEventHandler,
 } from "@rivet-dev/agentos-core";
-import { readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -232,7 +232,16 @@ async function persistRotatedCodexTokens(
     };
     const tempPath = `${provider.authFile}.${process.pid}.tmp`;
     writeFileSync(tempPath, JSON.stringify(updated, null, 2), { mode: 0o600 });
-    renameSync(tempPath, provider.authFile);
+    try {
+      renameSync(tempPath, provider.authFile);
+    } catch (error) {
+      try {
+        unlinkSync(tempPath);
+      } catch {
+        // The temp file is owner-only; leaving it is the lesser failure.
+      }
+      throw error;
+    }
   } catch (error) {
     console.error(
       "Failed to persist rotated OpenAI Codex OAuth tokens:",
@@ -397,7 +406,9 @@ export async function runSandboxCodexAgent(
       if (/\b(?:401|403|unauthori[sz]ed|forbidden|authentication|invalid_grant|login required|access token|refresh token)\b/i.test(upstream)) {
         const hint = oauthErrorHint(upstream);
         throw new Error(
-          hint ? `OpenAI Codex OAuth authentication failed (${hint})` : "OpenAI Codex OAuth authentication failed",
+          hint
+            ? `OpenAI Codex OAuth authentication failed (${redactSecrets(hint)})`
+            : "OpenAI Codex OAuth authentication failed",
         );
       }
       throw new Error(`OpenAI Codex CLI failed with exit ${result.exitCode}`);
