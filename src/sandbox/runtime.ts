@@ -394,21 +394,19 @@ export class SandboxWorkspace {
     await this.hostGit(["switch", "-C", branch]);
   }
   /**
-   * Apply a retained candidate patch inside the sandbox without invoking the
-   * model. The patch is written through the already-mounted workspace and
+   * Apply a retained candidate patch using host Git, including after quiescence.
+   * The patch is written through the already-mounted workspace and
    * removed regardless of whether `git apply` succeeds.
    */
   async applyReviewCandidatePatch(patch: Uint8Array): Promise<void> {
     assertSecretSafeBytes(patch);
+    await this.assertAuthorizedRepoConfig();
+    if (patch.byteLength === 0) return;
     const relativePath = `.shipwright-review-patch-${randomUUID()}.diff`;
     const hostPath = join(this.hostWorkspace, relativePath);
     await writeFile(hostPath, patch, { mode: 0o600 });
     try {
-      await this.runOrThrow("retained review patch", {
-        command: "git",
-        args: ["apply", "--binary", "--whitespace=nowarn", "--", relativePath],
-        cwd: SANDBOX_WORKSPACE,
-      });
+      await this.hostGit(["apply", "--binary", "--whitespace=nowarn", "--", relativePath]);
     } finally {
       await rm(hostPath, { force: true });
     }
@@ -610,11 +608,12 @@ export class SandboxWorkspace {
         indexEnv,
       );
       const changedFiles = parseNulList(names).sort();
-      const patch = await this.hostGit(
+      const patchData = await this.hostGitBytes(
         ["diff", "--cached", "--binary", "--no-ext-diff", authorizedHeadSha],
         indexEnv,
+        DEFAULT_MAX_OUTPUT_BYTES,
       );
-      const patchData = new TextEncoder().encode(patch);
+      const patch = new TextDecoder().decode(patchData);
       assertSecretSafeBytes(patchData);
       const changedBlobs: ChangedBlob[] = [];
       for (const path of changedFiles) {
