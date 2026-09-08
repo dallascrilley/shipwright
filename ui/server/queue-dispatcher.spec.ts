@@ -19,6 +19,7 @@ const draft: AgentDraftInput = {
 };
 
 interface QueueFixtureOptions {
+  leaseDurationMs?: number;
   globalConcurrency?: number;
   perAgentConcurrency?: number;
   failureThreshold?: number;
@@ -61,7 +62,7 @@ function createFixture(options?: QueueFixtureOptions): QueueFixture {
     () => `queue-${++queueIds}`,
     clock.now,
     {
-      leaseDurationMs: 1_000,
+      leaseDurationMs: options?.leaseDurationMs ?? 1_000,
       globalConcurrency: options?.globalConcurrency ?? 1,
       perAgentConcurrency: options?.perAgentConcurrency ?? 1,
       failureThreshold: options?.failureThreshold ?? 3,
@@ -230,6 +231,127 @@ describe("QueueDispatcher", () => {
     });
   });
 
+  test("retains candidate receipt identity when a failed execution is retried", async () => {
+    const fixture = createFixture();
+    const agent = createEnabledAgent(fixture);
+    const queued = fixture.dispatcher.enqueue({
+      agentId: agent.agentId,
+      source: "test",
+      idempotencyKey: "test:resume",
+      candidateId: "candidate-1",
+      target: {
+        kind: "pull",
+        owner: "dallascrilley",
+        repo: "shipwright",
+        number: 42,
+      },
+    });
+    await fixture.dispatcher.dispatchNext("worker-a", async ({ execution }) => ({
+      receipt: {
+        runId: execution.executionId,
+        phase: "publish",
+        verificationPassed: false,
+        errorCode: "ambiguous_effect",
+        candidateId: execution.candidateId,
+        candidateDigest: "a".repeat(64),
+        effectIds: ["effect-1"],
+        resumeCursor: 1,
+      },
+    }));
+    const retried = fixture.dispatcher.retry(queued.execution.executionId);
+    expect(retried.state).toBe("queued");
+    expect(retried.receipt).toMatchObject({
+      candidateId: "candidate-1",
+      candidateDigest: "a".repeat(64),
+      effectIds: ["effect-1"],
+      resumeCursor: 1,
+    });
+  });
+
+  test("coalesces equivalent current-finding scopes instead of delivery ids", () => {
+    const fixture = createFixture();
+    const agent = createEnabledAgent(fixture);
+    const scope = {
+      mode: "all-current-findings" as const,
+      headSha: "a".repeat(40),
+      findingIds: ["thread-2", "thread-1"],
+    };
+    const first = fixture.dispatcher.enqueue({
+      agentId: agent.agentId,
+      source: "test",
+      idempotencyKey: "delivery-a",
+      reviewScope: scope,
+      target: {
+        kind: "pull",
+        owner: "dallascrilley",
+        repo: "shipwright",
+        number: 42,
+      },
+    });
+    const equivalent = fixture.dispatcher.enqueue({
+      agentId: agent.agentId,
+      source: "test",
+      idempotencyKey: "delivery-b",
+      reviewScope: { ...scope, findingIds: ["thread-1", "thread-2"] },
+      target: {
+        kind: "pull",
+        owner: "dallascrilley",
+        repo: "shipwright",
+        number: 42,
+      },
+    });
+    expect(equivalent).toEqual(first);
+    expect(first.execution.candidateId).toBeUndefined();
+    expect(first.entry.resourceKey).toBe("pull:dallascrilley/shipwright#42");
+  });
+
+  test("enforces a persisted pull-request lease across dispatcher instances and agents", () => {
+    const fixture = createFixture({
+      globalConcurrency: 2,
+      perAgentConcurrency: 2,
+    });
+    const firstAgent = createEnabledAgent(fixture);
+    const secondAgent = createEnabledAgent(fixture);
+    fixture.dispatcher.enqueue({
+      agentId: firstAgent.agentId,
+      source: "test",
+      idempotencyKey: "pull:first",
+      target: {
+        kind: "pull",
+        owner: "dallascrilley",
+        repo: "shipwright",
+        number: 42,
+      },
+    });
+    fixture.dispatcher.enqueue({
+      agentId: secondAgent.agentId,
+      source: "test",
+      idempotencyKey: "pull:second",
+      target: {
+        kind: "pull",
+        owner: "dallascrilley",
+        repo: "shipwright",
+        number: 42,
+      },
+    });
+    const firstClaim = fixture.dispatcher.claimNext("worker-a");
+    const secondDispatcher = new QueueDispatcher(
+      fixture.store,
+      () => "queue-secondary",
+      fixture.clock.now,
+      {
+        leaseDurationMs: 1_000,
+        globalConcurrency: 2,
+        perAgentConcurrency: 2,
+        failureThreshold: 3,
+      },
+    );
+    expect(firstClaim?.entry.resourceKey).toBe(
+      "pull:dallascrilley/shipwright#42",
+    );
+    expect(secondDispatcher.claimNext("worker-b")).toBeUndefined();
+  });
+
   test("allows one transactional claimer for one execution", () => {
     const fixture = createFixture({ globalConcurrency: 2 });
     const agent = createEnabledAgent(fixture);
@@ -264,6 +386,50 @@ describe("QueueDispatcher", () => {
     enqueue(global, secondAgent.agentId, "test:two");
     expect(global.dispatcher.claimNext("worker-a")).toBeDefined();
     expect(global.dispatcher.claimNext("worker-b")).toBeUndefined();
+  });
+
+  test("renews a running lease while a runner exceeds the lease duration", async () => {
+    const fixture = createFixture({
+      leaseDurationMs: 30,
+      globalConcurrency: 2,
+      perAgentConcurrency: 2,
+    });
+    const agent = createEnabledAgent(fixture);
+    const queued = enqueue(fixture, agent.agentId, "test:heartbeat");
+    let finishRun: () => void = () => undefined;
+    const runner: QueueRunner = ({ execution }) =>
+      new Promise((resolve) => {
+        finishRun = () =>
+          resolve({
+            receipt: {
+              runId: execution.executionId,
+              phase: "complete",
+              verificationPassed: true,
+            },
+          });
+      });
+
+    const running = fixture.dispatcher.dispatchNext("worker-a", runner);
+    await new Promise((resolve) => setTimeout(resolve, 45));
+    fixture.clock.advance(31);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+
+    const secondDispatcher = new QueueDispatcher(
+      fixture.store,
+      () => "queue-secondary",
+      fixture.clock.now,
+      {
+        leaseDurationMs: 30,
+        globalConcurrency: 2,
+        perAgentConcurrency: 2,
+        failureThreshold: 3,
+      },
+    );
+    await expect(secondDispatcher.dispatchNext("worker-b", succeeds)).resolves.toBeUndefined();
+    expect(fixture.dispatcher.get(queued.execution.executionId)?.state).toBe("running");
+
+    finishRun();
+    await running;
   });
 
   test("marks a running lease interrupted after restart and requires retry", async () => {

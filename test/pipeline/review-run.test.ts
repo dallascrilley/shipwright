@@ -1,4 +1,13 @@
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { expect, test } from "bun:test";
+import {
+  computeReviewChecksDigest,
+  type ReviewEffectJournalStore,
+  type ReviewEffectReceipt,
+  type ReviewFindingVerificationRecord,
+} from "../../src/pipeline/repair-candidate.js";
 import {
   isProviderQuotaError,
   PROVIDER_QUOTA_ERROR_CODE,
@@ -41,7 +50,7 @@ function fixture(options: {
       return {
         title: "Change", body: "body", state: "open", draft: false,
         baseBranch: "main", baseSha: "base1", headBranch: "feature",
-        headSha: options.movedHead ? "moved" : "head1", headOwner: "acme", headRepo: "widget",
+        headSha: options.movedHead ? "moved" : remoteHead, headOwner: "acme", headRepo: "widget",
       };
     },
     async listReviewThreads() { events.push("threads"); return [thread()]; },
@@ -75,11 +84,48 @@ function fixture(options: {
     async inspectChanges() { events.push("inspect"); return { changedFiles: changes, patch: changes.length ? "diff" : "", patchBytes: changes.length ? 4 : 0 }; },
     async quiesce() { events.push("quiesce"); },
     async assertRunIdentity() { events.push("identity"); },
-    async commit() { events.push("commit"); remoteHead = "commit1"; return "commit1"; },
-    async push() { events.push("push"); },
+    async commit() { events.push("commit"); return "commit1"; },
+    async push() { events.push("push"); remoteHead = "commit1"; },
     async destroy() { events.push("destroy"); },
   };
   const receipts: Array<Record<string, unknown>> = [];
+  const candidateRoot = join(tmpdir(), `shipwright-review-run-${randomUUID()}`);
+  const effects: ReviewEffectReceipt[] = [];
+  const records: ReviewFindingVerificationRecord[] = [];
+  const effectJournalFactory = async (): Promise<ReviewEffectJournalStore> => ({
+    async load() { return structuredClone(effects); },
+    async ensureDeliveryPlan(plan) { return structuredClone(plan); },
+    async beginEffect(input) {
+      const existing = effects.find((effect) => effect.effectId === input.effectId);
+      if (existing) return structuredClone(existing);
+      const effect: ReviewEffectReceipt = { ...input, status: "intent" };
+      effects.push(effect);
+      return structuredClone(effect);
+    },
+    async ackEffect(input) {
+      const index = effects.findIndex((effect) => effect.effectId === input.effectId);
+      if (index < 0) throw new Error(`unknown effect ${input.effectId}`);
+      const effect: ReviewEffectReceipt = {
+        ...effects[index]!,
+        ...input,
+        effectId: effects[index]!.effectId,
+        kind: effects[index]!.kind,
+        idempotencyKey: effects[index]!.idempotencyKey,
+        status: "confirmed",
+      };
+      effects[index] = effect;
+      return structuredClone(effect);
+    },
+    async markAmbiguous(input) {
+      const index = effects.findIndex((effect) => effect.effectId === input.effectId);
+      if (index < 0) throw new Error(`unknown effect ${input.effectId}`);
+      const effect = { ...effects[index]!, ...input, status: "ambiguous" as const };
+      effects[index] = effect;
+      return structuredClone(effect);
+    },
+    async getResumeCursor() { return 0; },
+    async setResumeCursor() {},
+  });
   const deps: ReviewPipelineDependencies = {
     execution: { runtime: "agentos", software: "pi", provider: "kimi", model: "kimi-for-coding" },
     skill: { name: "fix-review-findings", content: "skill", sha256: "abc123" },
@@ -90,6 +136,41 @@ function fixture(options: {
     async writeReceipt(_path, receipt) {
       events.push(`receipt:${receipt.phase}`);
       receipts.push(structuredClone(receipt) as unknown as Record<string, unknown>);
+    },
+    candidateRoot,
+    effectJournalFactory,
+    verificationStore: {
+      async put(record) { records.push(structuredClone(record)); },
+      async lookup(input) {
+        return records.find((record) =>
+          record.recordId === input.recordId &&
+          record.candidateDigest === input.candidateDigest &&
+          record.findingId === input.findingId &&
+          record.findingDigest === input.findingDigest &&
+          record.checksDigest === input.checksDigest,
+        );
+      },
+    },
+    findingVerifier: {
+      async verify({ candidate, findingId, checks }) {
+        const finding = candidate.findings.find((item) => item.findingId === findingId)!;
+        return {
+          schema: "shipwright-review-verification/v1",
+          recordId: `record-${candidate.candidateId}-${findingId}`,
+          candidateDigest: candidate.candidateDigest,
+          findingId,
+          findingDigest: finding.originalContentDigest!,
+          checksDigest: computeReviewChecksDigest(checks),
+          observedOutcome: outcome,
+          observedEvidence: "Host fixture verification",
+          observedReproduction: "Host fixture reproduction",
+          observedAffectedFiles: [...candidate.changedFiles],
+          requiredChecks: checks.requiredChecks,
+          riskLevel: "standard",
+          independentVerdict: "pass",
+          createdAt: "2026-08-20T00:00:00.000Z",
+        };
+      },
     },
   };
   return { deps, events, receipts, getReplyBody: () => replyBody };

@@ -8,7 +8,19 @@ export type ReviewRunPhase = "intake" | "workspace" | "agent" | "verify" | "poli
 
 export interface ReviewThreadResult {
   threadId: string;
+  /** Model proposal, retained for audit but never used as closure authority. */
   outcome: ReviewOutcome["outcome"];
+  proposedOutcome: ReviewOutcome["outcome"];
+  verifiedDisposition:
+    | "fixed"
+    | "deferred"
+    | "rejected"
+    | "already-addressed"
+    | "needs-human"
+    | "pending";
+  verificationStatus: "verified" | "pending" | "not-required";
+  verificationReason?: string;
+  verificationRecordId?: string;
   replyUrl: string;
   resolved: boolean;
 }
@@ -19,8 +31,12 @@ export interface ReviewRunReceipt {
   pullRequestUrl: string;
   execution: RunExecution;
   skill: { name: "fix-review-findings"; sha256: string };
+  authorizedBaseSha?: string;
   authorizedHeadSha?: string;
   headBranch?: string;
+  candidateId?: string;
+  candidateDigest?: string;
+  deliveryMode: "patch" | "commit" | "follow-up-pr" | "evidence-only";
   changedFiles: string[];
   verification: {
     command: string;
@@ -30,6 +46,7 @@ export interface ReviewRunReceipt {
     stderrTail?: string;
   };
   commitSha?: string;
+  followUpPullRequestUrl?: string;
   threadResults: ReviewThreadResult[];
   remainingOpenThreadIds: string[];
   errorCode?: string;

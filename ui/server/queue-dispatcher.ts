@@ -23,6 +23,8 @@ export interface QueueEnqueueInput {
   triggerId?: string;
   source: ExecutionRequestInput["source"];
   idempotencyKey: string;
+  candidateId?: string;
+  reviewScope?: ExecutionRequestInput["reviewScope"];
   target: ExecutionRequestInput["target"];
   scheduledAt?: string;
   priority?: number;
@@ -43,6 +45,7 @@ export interface QueueClaim {
 
 export interface QueueRunContext extends QueueClaim {
   signal: AbortSignal;
+  heartbeat(): boolean;
 }
 
 export interface QueueRunResult {
@@ -143,6 +146,17 @@ export class QueueDispatcher {
         return false;
       }
       if (execution.idempotencyKey === input.idempotencyKey) return true;
+      if (
+        input.reviewScope &&
+        execution.reviewScope &&
+        sameReviewScope(execution.reviewScope, input.reviewScope) &&
+        sameTarget(execution.target, input.target)
+      ) {
+        const entry = snapshot.queueEntries.find(
+          (item) => item.executionId === execution.executionId,
+        );
+        return entry !== undefined && !TERMINAL_STATES[entry.state];
+      }
       if (input.source !== "github") return false;
 
       const deliveryId = githubDeliveryId(input.idempotencyKey);
@@ -172,6 +186,8 @@ export class QueueDispatcher {
       ...(trigger ? { triggerId: trigger.triggerId } : {}),
       source: input.source,
       idempotencyKey: input.idempotencyKey,
+      ...(input.candidateId ? { candidateId: input.candidateId } : {}),
+      ...(input.reviewScope ? { reviewScope: input.reviewScope } : {}),
       target: input.target,
       scheduledAt: input.scheduledAt ?? now,
       priority: input.priority ?? 0,
@@ -186,6 +202,9 @@ export class QueueDispatcher {
       scheduledAt: execution.scheduledAt,
       priority: execution.priority,
       attempts: 0,
+      ...(resourceKey(execution.target)
+        ? { resourceKey: resourceKey(execution.target) }
+        : {}),
       createdAt: now,
       updatedAt: now,
     });
@@ -226,15 +245,26 @@ export class QueueDispatcher {
             left.scheduledAt.localeCompare(right.scheduledAt) ||
             left.queueEntryId.localeCompare(right.queueEntryId),
         )
-        .find(
-          (entry) =>
-            (!sources ||
-              sources.some(
-                (source) => source === entrySource(snapshot, entry),
-              )) &&
-            active.filter((item) => item.agentId === entry.agentId).length <
-              this.options.perAgentConcurrency,
-        );
+        .find((entry) => {
+          if (
+            sources &&
+            !sources.some(
+              (source) => source === entrySource(snapshot, entry),
+            )
+          ) {
+            return false;
+          }
+          if (
+            active.filter((item) => item.agentId === entry.agentId).length >=
+            this.options.perAgentConcurrency
+          ) {
+            return false;
+          }
+          const resource = entryResourceKey(snapshot, entry);
+          return !resource || !active.some(
+            (item) => entryResourceKey(snapshot, item) === resource,
+          );
+        });
       if (!candidate) return undefined;
 
       const lease = {
@@ -268,16 +298,27 @@ export class QueueDispatcher {
     const running = this.markRunning(
       claim.execution.executionId,
       claim.entry.lease.leaseId,
+      owner,
     );
     if (!running) {
       this.#controllers.delete(claim.execution.executionId);
       return this.get(claim.execution.executionId);
     }
+    const heartbeat = () => this.renewLease(
+      claim.execution.executionId,
+      claim.entry.lease!.leaseId,
+      owner,
+    );
+    const heartbeatTimer = setInterval(() => {
+      if (!heartbeat()) controller.abort(new Error("Queue lease ownership was lost."));
+    }, Math.max(10, Math.floor(this.options.leaseDurationMs / 3)));
+    heartbeatTimer.unref?.();
     try {
       const result = await runner({
         ...claim,
         entry: running,
         signal: controller.signal,
+        heartbeat,
       });
       const state = result.receipt.verificationPassed
         ? "succeeded"
@@ -285,6 +326,7 @@ export class QueueDispatcher {
       return this.finish(
         claim.execution.executionId,
         claim.entry.lease.leaseId,
+        owner,
         state,
         result.receipt,
         result.receipt.verificationPassed
@@ -298,11 +340,13 @@ export class QueueDispatcher {
       return this.finish(
         claim.execution.executionId,
         claim.entry.lease.leaseId,
+        owner,
         this.nextFailureState(running.attempts),
         undefined,
         "runner_failed",
       );
     } finally {
+      clearInterval(heartbeatTimer);
       this.#controllers.delete(claim.execution.executionId);
     }
   }
@@ -408,7 +452,6 @@ export class QueueDispatcher {
         ...this.withoutLease(current),
         state: "queued",
         failureCode: undefined,
-        receipt: undefined,
         scheduledAt: this.now(),
         updatedAt: this.now(),
       });
@@ -428,10 +471,15 @@ export class QueueDispatcher {
   private markRunning(
     executionId: string,
     leaseId: string,
+    owner: string,
   ): QueueEntry | undefined {
     return this.store.transaction((snapshot) => {
       const current = this.requireEntry(snapshot, executionId);
-      if (current.state !== "claimed" || current.lease?.leaseId !== leaseId) {
+      if (
+        current.state !== "claimed"
+        || current.lease?.leaseId !== leaseId
+        || current.lease.owner !== owner
+      ) {
         return undefined;
       }
       return this.replaceEntry(snapshot, current, {
@@ -442,9 +490,37 @@ export class QueueDispatcher {
     });
   }
 
+  private renewLease(
+    executionId: string,
+    leaseId: string,
+    owner: string,
+  ): boolean {
+    return this.store.transaction((snapshot) => {
+      const current = this.requireEntry(snapshot, executionId);
+      if (
+        (current.state !== "claimed" && current.state !== "running")
+        || current.lease?.leaseId !== leaseId
+        || current.lease.owner !== owner
+      ) {
+        return false;
+      }
+      const now = this.now();
+      const nowTime = Date.parse(now);
+      return Boolean(this.replaceEntry(snapshot, current, {
+        ...current,
+        lease: {
+          ...current.lease,
+          expiresAt: new Date(nowTime + this.options.leaseDurationMs).toISOString(),
+        },
+        updatedAt: now,
+      }));
+    });
+  }
+
   private finish(
     executionId: string,
     leaseId: string,
+    owner: string,
     state: "succeeded" | "failed" | "dead_letter",
     receipt?: QueueRunResult["receipt"],
     failureCode?: string,
@@ -453,7 +529,8 @@ export class QueueDispatcher {
       const current = this.requireEntry(snapshot, executionId);
       if (
         (current.state !== "claimed" && current.state !== "running") ||
-        current.lease?.leaseId !== leaseId
+        current.lease?.leaseId !== leaseId ||
+        current.lease.owner !== owner
       ) {
         return current;
       }
@@ -468,6 +545,7 @@ export class QueueDispatcher {
     if (TERMINAL_STATES[finished.state]) this.notifyTerminal();
     return finished;
   }
+
 
   private notifyTerminal(): void {
     for (const listener of this.#terminalListeners) listener();
@@ -566,4 +644,45 @@ function entrySource(
   return snapshot.executions.find(
     (execution) => execution.executionId === entry.executionId,
   )?.source;
+}
+
+function sameTarget(
+  left: ExecutionRequest["target"],
+  right: ExecutionRequest["target"],
+): boolean {
+  return (
+    left.kind === right.kind &&
+    left.number === right.number &&
+    left.owner.toLowerCase() === right.owner.toLowerCase() &&
+    left.repo.toLowerCase() === right.repo.toLowerCase()
+  );
+}
+
+function sameReviewScope(
+  left: NonNullable<ExecutionRequest["reviewScope"]>,
+  right: NonNullable<ExecutionRequestInput["reviewScope"]>,
+): boolean {
+  return (
+    left.mode === right.mode &&
+    left.reviewId === right.reviewId &&
+    left.headSha === right.headSha &&
+    [...left.findingIds].sort().join("\0") ===
+      [...right.findingIds].sort().join("\0")
+  );
+}
+
+function resourceKey(target: ExecutionRequest["target"]): string | undefined {
+  if (target.kind !== "pull") return undefined;
+  return `pull:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
+}
+
+function entryResourceKey(
+  snapshot: AgentControlPlaneSnapshot,
+  entry: QueueEntry,
+): string | undefined {
+  if (entry.resourceKey) return entry.resourceKey;
+  const execution = snapshot.executions.find(
+    (item) => item.executionId === entry.executionId,
+  );
+  return execution ? resourceKey(execution.target) : undefined;
 }

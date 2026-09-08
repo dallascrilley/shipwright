@@ -34,6 +34,15 @@ export interface AgentOsRuntime {
   createSidecar(options: { frameTimeoutMs: number }): Promise<AgentOsSidecar>;
   create(options: Parameters<typeof AgentOs.create>[0]): Promise<AgentVm>;
 }
+/**
+ * AgentOS's native sidecar factory does not accept the pipeline's optional
+ * frame-timeout hint. Keep the adapter boundary explicit instead of assigning
+ * the incompatible static class method directly.
+ */
+const DEFAULT_AGENT_OS_RUNTIME: AgentOsRuntime = {
+  createSidecar: () => AgentOs.createSidecar(),
+  create: (options) => AgentOs.create(options),
+};
 
 export interface AgentSkillProjection {
   name: string;
@@ -525,7 +534,7 @@ export async function createAndRunPiAgent(
   prompt: string,
   timeoutMs?: number,
   skills: AgentSkillProjection[] = [],
-  runtime: AgentOsRuntime = AgentOs,
+  runtime: AgentOsRuntime = DEFAULT_AGENT_OS_RUNTIME,
 ): Promise<string> {
   const effectiveTimeoutMs = timeoutMs ?? DEFAULT_PI_TIMEOUT_MS;
   if (provider.name === "openai-codex") {

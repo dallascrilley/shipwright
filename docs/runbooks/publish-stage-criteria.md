@@ -100,6 +100,35 @@ Before raising stage:
 
 When stage **and** policy are `publish_allowed`, the same agent may push and reply/resolve under existing gates; failures must leave redacted receipts and must not retry-storm.
 
+## Review artifact retention
+
+The Shipwright host owns cleanup of durable review candidates, verification
+records/plans, and effect journals. Run the bounded cleanup command from the
+same checkout and state directory as the control plane; do not remove these
+files by hand. The CLI defaults to 30 days and accepts
+`--max-age-days <1-3650>`; age is evaluated from each artifact's recorded
+`createdAt`, not filesystem modification time. It prints a JSON summary and
+returns a nonzero status with a redacted error when the sweep cannot run:
+
+```sh
+# Inspect the 30-day sweep without deleting anything
+SHIPWRIGHT_STATE_DIR=/var/lib/shipwright bun run review-retention -- --dry-run
+
+# The scheduled host job may apply the same policy
+SHIPWRIGHT_STATE_DIR=/var/lib/shipwright bun run review-retention -- --max-age-days 30
+```
+
+The command purges only aged, settled candidates and their associated journals,
+plus aged verification records/plans that are not referenced by a remaining
+candidate. Candidates whose own or journal effects are `intent` or `ambiguous`,
+whose state is unreadable/malformed, or whose effect journal is missing while
+the candidate carries effects are retained for recovery. Verification
+records/plans remain when referenced by any retained candidate; malformed
+records/plans are left untouched. Lock inodes are retained even after a JSON
+artifact is purged. A dry run never deletes anything. The operator owns
+scheduling, dry-run review, and receipt retention; no production purge is
+performed by the review agent itself.
+
 ## Rollback
 
 ```sh

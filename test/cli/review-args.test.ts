@@ -13,8 +13,24 @@ test("parses a publish review run", () => {
     verifyCommand: "bun test",
     skillPath: "/skills/fix-review-findings/SKILL.md",
     publish: true,
+    deliveryMode: "patch",
     timeoutMinutes: 10,
   });
+});
+
+test("accepts only explicit native delivery modes", () => {
+  expect(parseReviewArgs([
+    "https://github.com/acme/widget/pull/4",
+    "--verify", "bun test",
+    "--skill", "/skill",
+    "--delivery-mode", "follow-up-pr",
+  ]).deliveryMode).toBe("follow-up-pr");
+  expect(() => parseReviewArgs([
+    "https://github.com/acme/widget/pull/4",
+    "--verify", "bun test",
+    "--skill", "/skill",
+    "--delivery-mode", "followup",
+  ])).toThrow("invalid delivery mode");
 });
 
 test("requires verification and skill paths", () => {

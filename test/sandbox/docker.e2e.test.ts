@@ -106,6 +106,13 @@ liveTest("removes the reserved outcome artifact and inspects staged changes", as
     const changes = await workspace.inspectChanges(authorizedHead);
     expect(changes.changedFiles).toEqual(["source.txt"]);
     expect(changes.patch).toContain("changed");
+    expect([...changes.patchData!]).toEqual([
+      ...new TextEncoder().encode(changes.patch),
+    ]);
+    expect(changes.resultingTreeSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(changes.changedBlobs).toEqual([
+      { path: "source.txt", content: new TextEncoder().encode("changed\n") },
+    ]);
 
     // A commit by the agent must not hide the change: host git diffs against
     // the authorized head, not the moved sandbox HEAD.

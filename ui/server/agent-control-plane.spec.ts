@@ -15,6 +15,8 @@ import {
   type AgentControlPlaneStore,
 } from "./agent-control-plane";
 
+import { QueueDispatcher } from "./queue-dispatcher";
+
 const draft = {
   name: "Issue triage",
   instructions: "Triage allowlisted issues and prepare a dry run.",
@@ -370,6 +372,52 @@ describe("AgentControlPlane", () => {
     expect(statSync(join(directory, "state")).mode & 0o777).toBe(0o700);
   });
 
+  test("shares durable queue claims across independent control-plane instances", () => {
+    const directory = mkdtempSync(join(tmpdir(), "shipwright-control-plane-"));
+    const path = join(directory, "state", "agent-control-plane.json");
+    temporaryDirectories.push(directory);
+    const storeA = new JsonFileAgentControlPlaneStore(path);
+    const storeB = new JsonFileAgentControlPlaneStore(path);
+    const controlPlane = createControlPlane(storeA);
+    const agent = controlPlane.createAgent(draft);
+    controlPlane.setEnabled(agent.agentId, agent.currentRevision, true);
+    const now = () => "2026-07-21T00:00:00.000Z";
+    let id = 0;
+    const dispatcherA = new QueueDispatcher(storeA, () => `a-${++id}`, now, {
+      leaseDurationMs: 60_000,
+      globalConcurrency: 1,
+      perAgentConcurrency: 1,
+      failureThreshold: 3,
+    });
+    const dispatcherB = new QueueDispatcher(storeB, () => `b-${++id}`, now, {
+      leaseDurationMs: 60_000,
+      globalConcurrency: 1,
+      perAgentConcurrency: 1,
+      failureThreshold: 3,
+    });
+
+    dispatcherA.enqueue({
+      agentId: agent.agentId,
+      source: "test",
+      allowDisabledAgentForTest: true,
+      idempotencyKey: "test:durable-claim",
+      target: {
+        kind: "issue",
+        owner: "dallascrilley",
+        repo: "shipwright",
+        number: 42,
+      },
+    });
+    const claim = dispatcherA.claimNext("worker-a");
+    expect(claim?.entry.lease?.owner).toBe("worker-a");
+    expect(dispatcherB.claimNext("worker-b")).toBeUndefined();
+    const persisted = storeB.load();
+    expect(persisted.queueEntries[0]?.lease).toMatchObject({
+      owner: "worker-a",
+    });
+    expect(persisted.queueEntries[0]?.state).toBe("claimed");
+  });
+
   test("fails closed when durable control-plane state is malformed", () => {
     const directory = mkdtempSync(join(tmpdir(), "shipwright-control-plane-"));
     const path = join(directory, "agent-control-plane.json");
@@ -380,6 +428,7 @@ describe("AgentControlPlane", () => {
       `could not load agent control-plane state at ${path}`,
     );
   });
+
   test("rejects github triggers that conflict with the agent action preset", () => {
     const controlPlane = createControlPlane();
     const agent = controlPlane.createAgent({

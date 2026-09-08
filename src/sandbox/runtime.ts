@@ -10,9 +10,13 @@ import { createHostDirBackend, type ToolKit } from "@rivet-dev/agentos-core";
 import { SandboxAgent, type ProcessRunRequest, type ProcessRunResponse } from "sandbox-agent";
 import { docker } from "sandbox-agent/docker";
 import { z } from "zod";
-
+import { assertSecretSafeBytes } from "../pipeline/secret-safety.js";
+import type {
+  ReviewVerificationResult,
+} from "../pipeline/repair-candidate.js";
 const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
+const MAX_CHANGED_BLOB_SCAN_BYTES = 4 * 1024 * 1024;
 export const SANDBOX_WORKSPACE = "/home/sandbox/workspace";
 export const SANDBOX_PI_NODE_MODULES = "/opt/shipwright/node_modules";
 export const SANDBOX_BUN_EXECUTABLE = "/usr/local/bin/bun";
@@ -51,10 +55,21 @@ export interface PullRequestCloneInput {
   token: string;
 }
 
+export interface ChangedBlob {
+  path: string;
+  content: Uint8Array;
+}
+
 export interface ChangeInspection {
   changedFiles: string[];
   patch: string;
   patchBytes: number;
+  /** Byte-exact patch retained for binary-safe candidate persistence. */
+  patchData?: Uint8Array;
+  /** Tree represented by the scratch index, independent of the agent's HEAD. */
+  resultingTreeSha?: string;
+  /** Current blob bytes scanned before a candidate may be published. */
+  changedBlobs?: ChangedBlob[];
 }
 
 export function parseNulList(output: string): string[] {
@@ -294,6 +309,7 @@ export class SandboxWorkspace {
         env,
       });
     });
+
     const head = await this.runOrThrow("pull request head SHA check", {
       command: "git",
       args: ["rev-parse", "HEAD"],
@@ -303,6 +319,52 @@ export class SandboxWorkspace {
       throw new Error(`pull request head moved: expected ${input.headSha}, received ${head.stdout.trim()}`);
     }
     await this.captureAuthorizedRepoConfig();
+  }
+
+  /**
+   * Restore a host-owned commit object when a previous push acknowledgement was
+   * lost. The object must already exist locally; fetching is deliberately not
+   * attempted from this credential-free path.
+   */
+  async restoreCommittedReview(commitSha: string, branch: string): Promise<void> {
+    if (!/^[0-9a-f]{40}$/.test(commitSha) || !/^[A-Za-z0-9._/-]+$/.test(branch)) {
+      throw new Error("review commit identity is invalid");
+    }
+    await this.hostGit(["cat-file", "-e", `${commitSha}^{commit}`]);
+    await this.hostGit(["reset", "--hard", commitSha]);
+    await this.hostGit(["switch", "-C", branch]);
+  }
+
+  /**
+   * Rebase a retained patch onto the authorized PR base for follow-up delivery.
+   * This never talks to GitHub and does not grant the workspace any credentials.
+   */
+  async resetToReviewBase(baseSha: string, branch: string): Promise<void> {
+    if (!/^[0-9a-f]{40}$/.test(baseSha) || !/^[A-Za-z0-9._/-]+$/.test(branch)) {
+      throw new Error("review follow-up base identity is invalid");
+    }
+    await this.hostGit(["reset", "--hard", baseSha]);
+    await this.hostGit(["switch", "-C", branch]);
+  }
+  /**
+   * Apply a retained candidate patch inside the sandbox without invoking the
+   * model. The patch is written through the already-mounted workspace and
+   * removed regardless of whether `git apply` succeeds.
+   */
+  async applyReviewCandidatePatch(patch: Uint8Array): Promise<void> {
+    assertSecretSafeBytes(patch);
+    const relativePath = `.shipwright-review-patch-${randomUUID()}.diff`;
+    const hostPath = join(this.hostWorkspace, relativePath);
+    await writeFile(hostPath, patch, { mode: 0o600 });
+    try {
+      await this.runOrThrow("retained review patch", {
+        command: "git",
+        args: ["apply", "--binary", "--whitespace=nowarn", "--", relativePath],
+        cwd: SANDBOX_WORKSPACE,
+      });
+    } finally {
+      await rm(hostPath, { force: true });
+    }
   }
 
   async prepareReviewArtifact(path: string): Promise<void> {
@@ -354,6 +416,88 @@ export class SandboxWorkspace {
     });
   }
 
+  /**
+   * Run an operator-authored reproduction in two disposable host Git
+   * worktrees. The model sandbox is already quiesced before this method is
+   * called, so neither command can observe or modify the agent workspace.
+   */
+  async verifyReviewPlan(input: {
+    baselineSha: string;
+    patch: Uint8Array;
+    command: string;
+    timeoutMs: number;
+  }): Promise<{
+    baseline: ReviewVerificationResult;
+    candidate: ReviewVerificationResult;
+  }> {
+    if (
+      !/^[0-9a-f]{40}$/.test(input.baselineSha) ||
+      !input.command.trim() ||
+      !Number.isInteger(input.timeoutMs) ||
+      input.timeoutMs < 1
+    ) {
+      throw new Error("review verification plan execution input is invalid");
+    }
+    assertSecretSafeBytes(input.patch);
+    const suffix = randomUUID();
+    const baselineDirectory = `.shipwright-plan-baseline-${suffix}`;
+    const candidateDirectory = `.shipwright-plan-candidate-${suffix}`;
+    const patchPath = `.shipwright-plan-patch-${suffix}.diff`;
+    const patchAbsolutePath = join(this.hostWorkspace, patchPath);
+    await writeFile(patchAbsolutePath, input.patch, { mode: 0o600 });
+    try {
+      await this.hostGit([
+        "worktree",
+        "add",
+        "--detach",
+        baselineDirectory,
+        input.baselineSha,
+      ]);
+      await this.hostGit([
+        "worktree",
+        "add",
+        "--detach",
+        candidateDirectory,
+        input.baselineSha,
+      ]);
+      await this.hostGit([
+        "-C",
+        candidateDirectory,
+        "apply",
+        "--binary",
+        "--whitespace=nowarn",
+        "--",
+        patchAbsolutePath,
+      ]);
+      return {
+        baseline: await this.runReviewPlanCommand(
+          input.command,
+          baselineDirectory,
+          input.timeoutMs,
+        ),
+        candidate: await this.runReviewPlanCommand(
+          input.command,
+          candidateDirectory,
+          input.timeoutMs,
+        ),
+      };
+    } finally {
+      await this.hostGit([
+        "worktree",
+        "remove",
+        "--force",
+        baselineDirectory,
+      ]).catch(() => undefined);
+      await this.hostGit([
+        "worktree",
+        "remove",
+        "--force",
+        candidateDirectory,
+      ]).catch(() => undefined);
+      await rm(patchAbsolutePath, { force: true });
+    }
+  }
+
   async inspectChanges(authorizedHeadSha: string): Promise<ChangeInspection> {
     if (!/^[0-9a-f]{40}$/.test(authorizedHeadSha)) {
       throw new Error("inspectChanges requires a full authorized head SHA");
@@ -389,10 +533,35 @@ export class SandboxWorkspace {
         ["diff", "--cached", "--binary", "--no-ext-diff", authorizedHeadSha],
         indexEnv,
       );
+      const patchData = new TextEncoder().encode(patch);
+      assertSecretSafeBytes(patchData);
+      const changedBlobs: ChangedBlob[] = [];
+      for (const path of changedFiles) {
+        try {
+          await this.hostGit(["cat-file", "-e", `:${path}`], indexEnv);
+        } catch {
+          // A deleted path has no current blob to inspect.
+          continue;
+        }
+        const content = await this.hostGitBytes(
+          ["cat-file", "blob", `:${path}`],
+          indexEnv,
+          MAX_CHANGED_BLOB_SCAN_BYTES,
+        );
+        assertSecretSafeBytes(content);
+        changedBlobs.push({ path, content });
+      }
+      const resultingTreeSha = (await this.hostGit(["write-tree"], indexEnv)).trim();
+      if (!/^[0-9a-f]{40}$/.test(resultingTreeSha)) {
+        throw new Error("host Git produced an invalid resulting tree SHA");
+      }
       return {
         changedFiles,
         patch,
-        patchBytes: new TextEncoder().encode(patch).byteLength,
+        patchBytes: patchData.byteLength,
+        patchData,
+        resultingTreeSha,
+        changedBlobs,
       };
     } finally {
       await rm(indexDirectory, { recursive: true, force: true });
@@ -529,6 +698,81 @@ export class SandboxWorkspace {
     if (current !== this.authorizedLocalConfig) {
       throw new Error("repository Git configuration changed after authorization");
     }
+  }
+
+  private async runReviewPlanCommand(
+    command: string,
+    directory: string,
+    timeoutMs: number,
+  ): Promise<ReviewVerificationResult> {
+    const home = join(this.hostWorkspace, `${directory}-home`);
+    await mkdir(home, { recursive: true, mode: 0o700 });
+    const asText = (value: unknown): string =>
+      typeof value === "string"
+        ? value
+        : Buffer.isBuffer(value)
+          ? value.toString("utf8")
+          : "";
+    try {
+      const result = await execFileAsync("sh", ["-c", command], {
+        cwd: join(this.hostWorkspace, directory),
+        env: {
+          PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+          HOME: home,
+          TMPDIR: tmpdir(),
+          ENV: "",
+          BASH_ENV: "",
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+        },
+        timeout: timeoutMs,
+        maxBuffer: DEFAULT_MAX_OUTPUT_BYTES,
+        encoding: "utf8",
+      });
+      return {
+        exitCode: 0,
+        stdout: asText(result.stdout),
+        stderr: asText(result.stderr),
+      };
+    } catch (error) {
+      const result = error as {
+        code?: number | string;
+        stdout?: unknown;
+        stderr?: unknown;
+        killed?: boolean;
+        signal?: string;
+      };
+      return {
+        exitCode: typeof result.code === "number" ? result.code : null,
+        stdout: asText(result.stdout),
+        stderr: asText(result.stderr),
+        timedOut: result.killed === true || result.signal === "SIGTERM",
+        ...(result.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+          ? { stderrTruncated: true }
+          : {}),
+      };
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }
+
+  private async hostGitBytes(
+    args: string[],
+    extraEnv: Record<string, string>,
+    maxBuffer: number,
+  ): Promise<Uint8Array> {
+    const { stdout } = await execFileAsync("git", args, {
+      cwd: this.hostWorkspace,
+      env: {
+        ...process.env,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        ...extraEnv,
+      },
+      maxBuffer,
+      encoding: "buffer",
+    });
+    return new Uint8Array(stdout as Buffer);
   }
 
   private async hostGit(args: string[], extraEnv: Record<string, string> = {}): Promise<string> {

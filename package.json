@@ -35,6 +35,7 @@
     "client": "tsx client.ts",
     "shipwright": "tsx shipwright.ts",
     "review-agent": "tsx review-agent.ts",
+    "review-retention": "tsx review-retention.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:ui": "cd ui && pnpm test",
@@ -52,6 +53,7 @@
     "@rivet-dev/agentos": "0.2.7",
     "@rivet-dev/agentos-core": "0.2.7",
     "dockerode": "^5.0.1",
+    "fs-native-extensions": "1.5.1",
     "get-port": "^7.2.0",
     "sandbox-agent": "0.4.2",
     "zod": "4.4.3"
