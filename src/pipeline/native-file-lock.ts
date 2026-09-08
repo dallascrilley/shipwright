@@ -38,15 +38,17 @@ interface BunFfiModule {
   ): { symbols: BunFfiSymbols };
 }
 
-const requireModule = createRequire(import.meta.url);
+const bunRequire = createRequire(import.meta.url);
 let bunNativeLocks: { tryLock(fd: number): boolean; unlock(fd: number): void } | undefined;
-let nodeLocks: NodeNativeLocks | undefined;
+const nodeLocks: NodeNativeLocks | undefined = process.versions.bun
+  ? undefined
+  : ((await import("fs-native-extensions")) as NodeNativeLocks);
 
 function getBunLocks() {
   if (bunNativeLocks) return bunNativeLocks;
   // This platform-specific module cannot be statically imported: Node cannot
   // resolve bun:ffi, and a Bun import of the Node N-API addon crashes.
-  const ffi = requireModule("bun:ffi") as BunFfiModule;
+  const ffi = bunRequire("bun:ffi") as BunFfiModule;
   const library =
     process.platform === "darwin"
       ? "/usr/lib/libSystem.B.dylib"
@@ -113,9 +115,7 @@ const LINUX_LOCK_DATA = createLinuxLockData(F_WRLCK);
 const LINUX_UNLOCK_DATA = createLinuxLockData(F_UNLCK);
 
 function getNodeLocks(): NodeNativeLocks {
-  if (nodeLocks) return nodeLocks;
-  // Load only on Node; fs-native-extensions is not Bun-compatible.
-  nodeLocks = requireModule("fs-native-extensions") as NodeNativeLocks;
+  if (!nodeLocks) throw new Error("native file locks are unavailable in Bun");
   return nodeLocks;
 }
 

@@ -716,6 +716,9 @@ export async function runReviewAgent(
             throw error;
           }
         }
+        const pushedHead = await authorized.repositoryClient.getBranchSha(authorized.pullRequest.headBranch);
+        if (pushedHead !== receipt.commitSha) throw new Error("pushed pull request head does not match the generated commit");
+        await emitProgress();
       }
     } else if (deliveryMode === "follow-up-pr") {
       phase = receipt.phase = "publish";
