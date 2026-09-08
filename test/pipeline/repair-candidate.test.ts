@@ -277,7 +277,10 @@ describe("review artifact retention", () => {
       expect(result.purgedCandidateIds).toEqual(["candidate-1"]);
       expect(result.purgedVerificationRecordIds).toEqual(["record-1"]);
       expect(result.purgedEffectJournalIds).toEqual([]);
-      expect(result.retainedCandidates).toEqual([
+      // Filesystem directory order is not part of the retention contract.
+      expect([...result.retainedCandidates].sort((left, right) =>
+        left.candidateId.localeCompare(right.candidateId),
+      )).toEqual([
         { candidateId: "candidate-ambiguous", reason: "unresolved-or-ambiguous-effect" },
         { candidateId: "candidate-recent", reason: "within-retention-window" },
       ]);
