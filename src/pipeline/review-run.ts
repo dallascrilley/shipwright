@@ -658,6 +658,9 @@ export async function runReviewAgent(
         await emitProgress();
         const commitEffectId = `${operationId}:commit`;
         const priorCommitEffect = effects.find((effect) => effect.effectId === commitEffectId);
+        if (!priorCommitEffect) {
+          await workspace.assertRunIdentity(originalHeadSha, authorized.pullRequest.headBranch);
+        }
         const commitIntent = await effectJournal.beginEffect({
           effectId: commitEffectId,
           kind: "commit",
