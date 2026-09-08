@@ -49,6 +49,12 @@ export const operatorPipelineQueueRunner: QueueRunner = async (context) => {
     verifyCommand: preset.command,
     publish,
     timeoutMinutes: 30,
+    ...(isReview && context.execution.candidateId
+      ? { candidateId: context.execution.candidateId }
+      : {}),
+    ...(isReview && context.execution.reviewScope
+      ? { reviewScope: context.execution.reviewScope }
+      : {}),
   };
   try {
     const receipt = await executeOperatorPipeline(

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { reviewScopeSchema } from "./agent-definition";
 
 import type { RunExecution } from "../../src/pipeline/receipt";
 import { redactSecrets } from "../../src/pipeline/secret-safety";
@@ -109,6 +110,13 @@ const ISSUE_URL_PATTERN =
 const PULL_REQUEST_URL_PATTERN =
   /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/([1-9]\d*)\/?$/;
 
+export const reviewDeliveryModeSchema = z.enum([
+  "patch",
+  "commit",
+  "follow-up-pr",
+  "evidence-only",
+]);
+
 export const operatorRunRequestSchema = z
   .object({
     mode: z.enum(["issue", "review"]).default("issue"),
@@ -121,6 +129,10 @@ export const operatorRunRequestSchema = z
     publishConfirmed: z.boolean().default(false),
     timeoutMinutes: z.number().int().min(1).max(60).default(30),
     fromRunId: z.string().trim().max(64).optional(),
+    candidateId: z.string().trim().max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/).optional(),
+    deliveryMode: reviewDeliveryModeSchema.optional(),
+    reviewScope: reviewScopeSchema.optional(),
+    followUpBaseSha: z.string().trim().regex(/^[0-9a-f]{40}$/).optional(),
     /** Advanced path: treat verifyCommand as raw; not persisted on durable records. */
     useRawVerify: z.boolean().optional(),
   })
@@ -196,6 +208,8 @@ export interface OperatorRunReceipt {
   issueUrl: string;
   execution: RunExecution;
   baseSha?: string;
+  authorizedBaseSha?: string;
+  authorizedHeadSha?: string;
   branch?: string;
   changedFiles: string[];
   verification: {
@@ -206,13 +220,21 @@ export interface OperatorRunReceipt {
     stderrTail?: string;
   };
   commitSha?: string;
+  followUpPullRequestUrl?: string;
   pullRequestUrl?: string;
+  deliveryMode?: "patch" | "commit" | "follow-up-pr" | "evidence-only";
   errorCode?: string;
   errorMessage?: string;
   skillSha256?: string;
   threadResults?: Array<{
     threadId: string;
+    /** Model proposal, retained for audit but never closure authority. */
     outcome: string;
+    proposedOutcome: string;
+    verifiedDisposition: string;
+    verificationStatus: "verified" | "pending" | "not-required";
+    verificationReason?: string;
+    verificationRecordId?: string;
     replyUrl: string;
     resolved: boolean;
   }>;
@@ -871,6 +893,8 @@ export function hydrateIntakeFromRecord(record: OperatorRunRecord): {
   useRawVerify: boolean;
   timeoutMinutes: number;
   advancedOpen: boolean;
+  candidateId?: string;
+  deliveryMode?: OperatorRunRequest["deliveryMode"];
 } {
   const presetId = (record.request.presetId ?? "").trim();
   const useRawVerify = !presetId;
@@ -883,6 +907,12 @@ export function hydrateIntakeFromRecord(record: OperatorRunRecord): {
     useRawVerify,
     timeoutMinutes: record.request.timeoutMinutes,
     advancedOpen: record.request.mode === "review" || useRawVerify,
+    ...(record.request.candidateId
+      ? { candidateId: record.request.candidateId }
+      : {}),
+    ...(record.request.deliveryMode
+      ? { deliveryMode: record.request.deliveryMode }
+      : {}),
   };
 }
 

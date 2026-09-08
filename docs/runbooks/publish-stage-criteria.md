@@ -100,6 +100,70 @@ Before raising stage:
 
 When stage **and** policy are `publish_allowed`, the same agent may push and reply/resolve under existing gates; failures must leave redacted receipts and must not retry-storm.
 
+## Review delivery and recovery
+
+The host retains a repair candidate under `review-candidates/` with the
+authorized base/head, patch, changed files, findings, verification metadata,
+and evidence-token references. Host verification records and plans are stored
+under `review-verifications/` and `review-verification-plans/`. The effect
+journal under `review-effects/` records the delivery plan, effect
+intent/confirmation state, and resume cursor. Use `--candidate-id <id>` to
+load these records for a resumed run; do not edit or remove them by hand.
+Publication uses host verification, not the model's proposal, as its closure
+authority.
+
+- `patch` (the CLI default) and `evidence-only` retain local evidence and make
+  no remote commit, push, reply, or resolution, even when `--publish` is set.
+- `commit` with `--publish` commits and pushes changed files to the authorized
+  pull request, then replies to and resolves host-verified findings.
+  `needs-human` findings remain open.
+- `follow-up-pr` with `--publish` commits and pushes the candidate on a
+  separate branch, then opens or reuses a follow-up pull request. It does not
+  reply to or resolve the original threads. The selected base SHA defaults to
+  the retained candidate's immutable authorized head; any supplied base must
+  match it. Replay uses the original pull request's base branch without an
+  implicit rebase, and the effect journal binds the exact delivery plan.
+
+When a resumed run finds that a push response was lost, it acknowledges the
+push effect if the remote branch is already at the expected commit. If the
+remote state cannot prove the effect, the ambiguous journal entry stops the
+run rather than issuing an unsafe duplicate push. A lost reply is recovered
+similarly: an existing marked reply is matched and its URL is recorded in the
+journal; an ambiguous or confirmed effect without that matching reply stops
+for reconciliation instead of posting a duplicate. A follow-up PR is matched
+by its candidate ID and digest marker plus the expected branch and commit, so
+the existing marked PR is reused; a conflicting PR on that branch fails closed.
+
+
+## Review artifact retention
+
+The Shipwright host owns cleanup of durable review candidates, verification
+records/plans, and effect journals. Run the bounded cleanup command from the
+same checkout and state directory as the control plane; do not remove these
+files by hand. The CLI defaults to 30 days and accepts
+`--max-age-days <1-3650>`; age is evaluated from each artifact's recorded
+`createdAt`, not filesystem modification time. It prints a JSON summary and
+returns a nonzero status with a redacted error when the sweep cannot run:
+
+```sh
+# Inspect the 30-day sweep without deleting anything
+SHIPWRIGHT_STATE_DIR=/var/lib/shipwright bun run review-retention -- --dry-run
+
+# The scheduled host job may apply the same policy
+SHIPWRIGHT_STATE_DIR=/var/lib/shipwright bun run review-retention -- --max-age-days 30
+```
+
+The command purges only aged, settled candidates and their associated journals,
+plus aged verification records/plans that are not referenced by a remaining
+candidate. Candidates whose own or journal effects are `intent` or `ambiguous`,
+whose state is unreadable/malformed, or whose effect journal is missing while
+the candidate carries effects are retained for recovery. Verification
+records/plans remain when referenced by any retained candidate; malformed
+records/plans are left untouched. Lock inodes are retained even after a JSON
+artifact is purged. A dry run never deletes anything. The operator owns
+scheduling, dry-run review, and receipt retention; no production purge is
+performed by the review agent itself.
+
 ## Rollback
 
 ```sh

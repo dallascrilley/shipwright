@@ -353,7 +353,13 @@ export function createOctokitTransport(config: GitHubConfig): GitHubTransport {
             base: query.base,
             state: "open",
           });
-          return data.map((pull) => ({ number: pull.number, url: pull.html_url, headSha: pull.head.sha }));
+          return data.map((pull) => ({
+            number: pull.number,
+            url: pull.html_url,
+            headSha: pull.head.sha,
+            title: pull.title,
+            body: pull.body ?? "",
+          }));
         },
         async createPullRequest(query) {
           const { data } = await octokit.pulls.create({

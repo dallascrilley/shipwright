@@ -72,6 +72,33 @@ interface VerifyPreset {
   repositoryGlobs?: string[];
 }
 
+interface ReviewCandidateInspection {
+  candidateId: string;
+  candidateDigest: string;
+  authorizedBaseSha: string;
+  authorizedHeadSha: string;
+  resultingTreeSha: string;
+  patchBytes: number;
+  changedFiles: string[];
+  findings: Array<{
+    findingId: string;
+    originalContentDigest?: string;
+    proposedOutcome: string;
+    summary: string;
+  }>;
+  verification: {
+    command: string;
+    exitCode: number | null;
+    passed: boolean;
+    requiredChecks: string;
+  };
+  deliveryMode: string;
+  verificationRecords: unknown[];
+  effects: unknown[];
+  resumeCursor: number;
+  createdAt: string;
+}
+
 interface VerifyPresetRecommendation {
   presetId: string;
   command: string;
@@ -125,9 +152,13 @@ function historyMeta(item: OperatorRunRecord): string {
 }
 
 export function OperatorConsole() {
-  const [targetInput, setTargetInput] = useState("");
   const [mode, setMode] = useState<"issue" | "review">("issue");
+  const [targetInput, setTargetInput] = useState("");
+  const [runId, setRunId] = useState<string | null>(null);
   const [skillId, setSkillId] = useState(DEFAULT_SKILL_ID);
+  const [candidateId, setCandidateId] = useState("");
+  const [deliveryMode, setDeliveryMode] =
+    useState<NonNullable<OperatorRunRequest["deliveryMode"]>>("patch");
   const [presetId, setPresetId] = useState("");
   const [verifyCommand, setVerifyCommand] = useState(DEFAULT_VERIFY_COMMAND);
   const [timeoutMinutes, setTimeoutMinutes] = useState(30);
@@ -137,7 +168,6 @@ export function OperatorConsole() {
   const [publishSource, setPublishSource] = useState<OperatorRunRecord | null>(
     null,
   );
-  const [runId, setRunId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [historyQueryText, setHistoryQueryText] = useState("");
   const [debouncedHistoryQuery, setDebouncedHistoryQuery] = useState("");
@@ -154,6 +184,14 @@ export function OperatorConsole() {
 
   const startRun = useActionMutation("start-shipwright-run");
   const cancelRun = useActionMutation("cancel-shipwright-run");
+  const inspectCandidate = useActionQuery(
+    "inspect-review-candidate",
+    { candidateId: candidateId.trim() },
+    {
+      enabled: mode === "review" && candidateId.trim().length > 0,
+    },
+  );
+  const downloadCandidate = useActionMutation("download-review-candidate");
   const historyQuery = useActionQuery(
     "list-shipwright-runs",
     {
@@ -223,6 +261,9 @@ export function OperatorConsole() {
   );
 
   const record = runQuery.data as OperatorRunRecord | undefined;
+  const candidateInspection = inspectCandidate.data as
+    | ReviewCandidateInspection
+    | undefined;
   const historyResponse = historyQuery.data as
     | OperatorRunListResponse
     | undefined;
@@ -312,6 +353,8 @@ export function OperatorConsole() {
     setTargetInput(draft.targetInput);
     setMode(draft.mode);
     setSkillId(draft.skillId);
+    setCandidateId(draft.candidateId ?? "");
+    setDeliveryMode(draft.deliveryMode ?? "patch");
     setPresetId(draft.presetId);
     setVerifyCommand(draft.verifyCommand);
     setUseRawVerify(draft.useRawVerify);
@@ -324,7 +367,6 @@ export function OperatorConsole() {
     // Evidence stays on the historical record; intake is ready for a new start.
     setRunId(item.runId);
   }
-
   useEffect(() => {
     const detected = detectRunModeFromUrl(targetInput);
     if (detected) setMode(detected);
@@ -373,6 +415,10 @@ export function OperatorConsole() {
       issueUrl,
       pullRequestUrl,
       skillId: mode === "review" ? skillId : "",
+      ...(mode === "review" && candidateId.trim()
+        ? { candidateId: candidateId.trim() }
+        : {}),
+      ...(mode === "review" ? { deliveryMode } : {}),
       presetId: useRawVerify ? "" : presetId,
       useRawVerify,
       verifyCommand,
@@ -546,6 +592,30 @@ export function OperatorConsole() {
     } catch (error) {
       setFormError(
         error instanceof Error ? error.message : "Publish run could not start.",
+      );
+    }
+  }
+
+  async function downloadCandidatePatch() {
+    setFormError(null);
+    try {
+      const result = (await downloadCandidate.mutateAsync({
+        candidateId: candidateId.trim(),
+      })) as { filename: string; contentType: string; patchBase64: string };
+      const binary = atob(result.patchBase64);
+      const bytes = Uint8Array.from(binary, (character) =>
+        character.charCodeAt(0),
+      );
+      const blob = new Blob([bytes], { type: result.contentType });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = result.filename;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setFormError(
+        error instanceof Error ? error.message : "Candidate download failed.",
       );
     }
   }
@@ -831,6 +901,79 @@ export function OperatorConsole() {
                     fix-review-findings
                   </option>
                 </select>
+              </div>
+            )}
+
+            {mode === "review" && (
+              <div className="space-y-3 rounded-md border border-border p-4">
+                <div className="space-y-2">
+                  <Label htmlFor="candidate-id">
+                    Retained candidate (optional)
+                  </Label>
+                  <Input
+                    id="candidate-id"
+                    value={candidateId}
+                    onChange={(event) => setCandidateId(event.target.value)}
+                    placeholder="candidate id from a prior dry-run"
+                    autoComplete="off"
+                    disabled={busy}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Replays the host-verified candidate instead of asking the
+                    agent to produce a new patch.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="delivery-mode">Delivery mode</Label>
+                  <select
+                    id="delivery-mode"
+                    value={deliveryMode}
+                    disabled={busy}
+                    onChange={(event) =>
+                      setDeliveryMode(
+                        event.target.value as NonNullable<
+                          OperatorRunRequest["deliveryMode"]
+                        >,
+                      )
+                    }
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none"
+                  >
+                    <option value="patch">Patch only</option>
+                    <option value="commit">Commit on the original branch</option>
+                    <option value="follow-up-pr">Open a follow-up PR</option>
+                    <option value="evidence-only">Evidence only</option>
+                  </select>
+                </div>
+                {candidateInspection ? (
+                  <div className="space-y-2 rounded-md bg-muted/30 p-3 text-xs">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-medium">Candidate inspected</span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={downloadCandidate.isPending}
+                        onClick={() => void downloadCandidatePatch()}
+                      >
+                        {downloadCandidate.isPending ? "Preparing…" : "Download patch"}
+                      </Button>
+                    </div>
+                    <p className="font-mono break-all">
+                      digest: {candidateInspection.candidateDigest}
+                    </p>
+                    <p>
+                      {candidateInspection.findings.length} finding(s) ·{" "}
+                      {candidateInspection.patchBytes} bytes ·{" "}
+                      {candidateInspection.verification.passed
+                        ? "checks passed"
+                        : "checks not passed"}
+                    </p>
+                  </div>
+                ) : candidateId.trim() && inspectCandidate.isLoading ? (
+                  <p className="text-xs text-muted-foreground">
+                    Inspecting candidate…
+                  </p>
+                ) : null}
               </div>
             )}
 

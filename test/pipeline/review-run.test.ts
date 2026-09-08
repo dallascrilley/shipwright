@@ -1,4 +1,18 @@
-import { expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { afterEach, expect, test } from "bun:test";
+import {
+  computeReviewChecksDigest,
+  readReviewCandidate,
+  reviewCandidatePath,
+  type ReviewAuthorizedDeliveryPlan,
+  type ReviewEffectJournalStore,
+  type ReviewEffectReceipt,
+  type ReviewFindingVerificationRecord,
+} from "../../src/pipeline/repair-candidate.js";
+import { parseReviewArgs } from "../../src/cli/review-args.js";
 import {
   isProviderQuotaError,
   PROVIDER_QUOTA_ERROR_CODE,
@@ -8,6 +22,13 @@ import {
   type ReviewWorkspacePort,
 } from "../../src/pipeline/review-run.js";
 import type { AuthorizedPullRequest } from "../../src/github/app-client.js";
+const candidateRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    candidateRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
+  );
+});
 
 function fixture(options: {
   changes?: string[];
@@ -21,6 +42,9 @@ function fixture(options: {
   const changes = options.changes ?? ["src/a.ts"];
   const outcome = options.outcome ?? "fixed";
   let remoteHead = "head1";
+  let currentCommit = "commit1";
+  let followUpHead = "";
+  let followUpPullRequest: { number: number; url: string; title: string; body: string } | undefined;
   let resolved = false;
   let replyBody = "";
   const thread = () => ({
@@ -29,19 +53,55 @@ function fixture(options: {
     isOutdated: false,
     path: "src/a.ts",
     line: 4,
-    comments: replyBody ? [{ id: "reply-1", body: replyBody, url: "https://example/reply", author: "bot" }] : [{ id: "comment-1", body: "Please add a guard", url: "https://example/comment", author: "reviewer" }],
+    comments: [
+      { id: "comment-1", body: "Please add a guard", url: "https://example/comment", author: "reviewer" },
+      ...(replyBody
+        ? [{ id: "reply-1", body: replyBody, url: "https://example/reply", author: "bot" }]
+        : []),
+    ],
   });
   const repositoryClient: AuthorizedPullRequest["repositoryClient"] = {
     async getRepository() { throw new Error("unused"); },
     async getIssue() { throw new Error("unused"); },
-    async getBranchSha() { events.push("remote-head"); return options.movedHead ? "moved" : remoteHead; },
-    async listPullRequests() { return []; },
-    async createPullRequest() { throw new Error("unused"); },
-    async getPullRequest() {
+    async getBranchSha(branch) {
+      events.push("remote-head");
+      if (branch === "feature") return options.movedHead ? "moved" : remoteHead;
+      return followUpHead;
+    },
+    async listPullRequests() {
+      return followUpPullRequest
+        ? [{ ...followUpPullRequest, headSha: followUpHead }]
+        : [];
+    },
+    async createPullRequest(input) {
+      events.push("create-follow-up");
+      followUpPullRequest = {
+        number: 5,
+        url: "https://github.com/acme/widget/pull/5",
+        title: input.title,
+        body: input.body,
+      };
+      return { number: followUpPullRequest.number, url: followUpPullRequest.url };
+    },
+    async getPullRequest(number) {
+      if (number === 5 && followUpPullRequest) {
+        return {
+          title: followUpPullRequest.title,
+          body: followUpPullRequest.body,
+          state: "open",
+          draft: false,
+          baseBranch: "main",
+          baseSha: "base1",
+          headBranch: "shipwright/review-run-1",
+          headSha: followUpHead,
+          headOwner: "acme",
+          headRepo: "widget",
+        };
+      }
       return {
         title: "Change", body: "body", state: "open", draft: false,
         baseBranch: "main", baseSha: "base1", headBranch: "feature",
-        headSha: options.movedHead ? "moved" : "head1", headOwner: "acme", headRepo: "widget",
+        headSha: options.movedHead ? "moved" : remoteHead, headOwner: "acme", headRepo: "widget",
       };
     },
     async listReviewThreads() { events.push("threads"); return [thread()]; },
@@ -72,14 +132,74 @@ function fixture(options: {
       return JSON.stringify({ threads: [{ threadId: "thread-1", outcome, summary: "Handled", evidence: "src/a.ts:4" }] });
     },
     async verify() { events.push("verify"); return { exitCode: options.verifyExit ?? 0 }; },
-    async inspectChanges() { events.push("inspect"); return { changedFiles: changes, patch: changes.length ? "diff" : "", patchBytes: changes.length ? 4 : 0 }; },
+    async inspectChanges() {
+      events.push("inspect");
+      return {
+        changedFiles: changes,
+        patch: changes.length ? "diff" : "",
+        patchBytes: changes.length ? 4 : 0,
+        resultingTreeSha: "tree1",
+      };
+    },
     async quiesce() { events.push("quiesce"); },
     async assertRunIdentity() { events.push("identity"); },
-    async commit() { events.push("commit"); remoteHead = "commit1"; return "commit1"; },
-    async push() { events.push("push"); },
+    async applyReviewCandidatePatch() { events.push("apply-candidate"); },
+    async restoreCommittedReview({ commitSha }) { events.push(`restore:${commitSha}`); return currentCommit; },
+    async resetToReviewBase(baseSha, branch) { events.push(`reset:${baseSha}:${branch}`); },
+    async commit() { events.push("commit"); return currentCommit; },
+    async push(branch) {
+      events.push("push");
+      if (branch === "feature") remoteHead = currentCommit;
+      else followUpHead = currentCommit;
+    },
     async destroy() { events.push("destroy"); },
   };
   const receipts: Array<Record<string, unknown>> = [];
+  const candidateRoot = join(tmpdir(), `shipwright-review-run-${randomUUID()}`);
+  candidateRoots.push(candidateRoot);
+  const effects: ReviewEffectReceipt[] = [];
+  const records: ReviewFindingVerificationRecord[] = [];
+  let storedDeliveryPlan: ReviewAuthorizedDeliveryPlan | undefined;
+  const effectJournalFactory = async (): Promise<ReviewEffectJournalStore> => ({
+    async load() { return structuredClone(effects); },
+    async ensureDeliveryPlan(plan) {
+      if (storedDeliveryPlan && JSON.stringify(storedDeliveryPlan) !== JSON.stringify(plan)) {
+        throw new Error("fixture delivery plan changed");
+      }
+      storedDeliveryPlan ??= structuredClone(plan);
+      return structuredClone(storedDeliveryPlan);
+    },
+    async beginEffect(input) {
+      const existing = effects.find((effect) => effect.effectId === input.effectId);
+      if (existing) return structuredClone(existing);
+      const effect: ReviewEffectReceipt = { ...input, status: "intent" };
+      effects.push(effect);
+      return structuredClone(effect);
+    },
+    async ackEffect(input) {
+      const index = effects.findIndex((effect) => effect.effectId === input.effectId);
+      if (index < 0) throw new Error(`unknown effect ${input.effectId}`);
+      const effect: ReviewEffectReceipt = {
+        ...effects[index]!,
+        ...input,
+        effectId: effects[index]!.effectId,
+        kind: effects[index]!.kind,
+        idempotencyKey: effects[index]!.idempotencyKey,
+        status: "confirmed",
+      };
+      effects[index] = effect;
+      return structuredClone(effect);
+    },
+    async markAmbiguous(input) {
+      const index = effects.findIndex((effect) => effect.effectId === input.effectId);
+      if (index < 0) throw new Error(`unknown effect ${input.effectId}`);
+      const effect = { ...effects[index]!, ...input, status: "ambiguous" as const };
+      effects[index] = effect;
+      return structuredClone(effect);
+    },
+    async getResumeCursor() { return 0; },
+    async setResumeCursor() {},
+  });
   const deps: ReviewPipelineDependencies = {
     execution: { runtime: "agentos", software: "pi", provider: "kimi", model: "kimi-for-coding" },
     skill: { name: "fix-review-findings", content: "skill", sha256: "abc123" },
@@ -91,8 +211,52 @@ function fixture(options: {
       events.push(`receipt:${receipt.phase}`);
       receipts.push(structuredClone(receipt) as unknown as Record<string, unknown>);
     },
+    candidateRoot,
+    effectJournalFactory,
+    verificationStore: {
+      async put(record) { records.push(structuredClone(record)); },
+      async lookup(input) {
+        return records.find((record) =>
+          record.recordId === input.recordId &&
+          record.candidateDigest === input.candidateDigest &&
+          record.findingId === input.findingId &&
+          record.findingDigest === input.findingDigest &&
+          record.checksDigest === input.checksDigest,
+        );
+      },
+    },
+    findingVerifier: {
+      async verify({ candidate, findingId, checks }) {
+        const finding = candidate.findings.find((item) => item.findingId === findingId)!;
+        return {
+          schema: "shipwright-review-verification/v1",
+          recordId: `record-${candidate.candidateId}-${findingId}`,
+          candidateDigest: candidate.candidateDigest,
+          findingId,
+          findingDigest: finding.originalContentDigest!,
+          checksDigest: computeReviewChecksDigest(checks),
+          observedOutcome: outcome,
+          observedEvidence: "Host fixture verification",
+          observedReproduction: "Host fixture reproduction",
+          observedAffectedFiles: [...candidate.changedFiles],
+          requiredChecks: checks.requiredChecks,
+          riskLevel: "standard",
+          independentVerdict: "pass",
+          createdAt: "2026-08-20T00:00:00.000Z",
+        };
+      },
+    },
   };
-  return { deps, events, receipts, getReplyBody: () => replyBody };
+  return {
+    deps,
+    events,
+    receipts,
+    getReplyBody: () => replyBody,
+    getDeliveryPlan: () => structuredClone(storedDeliveryPlan),
+    effects,
+    setRemoteHead: (head: string) => { remoteHead = head; },
+    setCurrentCommit: (commit: string) => { currentCommit = commit; },
+  };
 }
 
 const request = { pullRequestUrl: "https://github.com/acme/widget/pull/4", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 };
@@ -109,6 +273,44 @@ test("verified changes push before replying and resolving", async () => {
   expect(getReplyBody()).toContain("agentos-review-run:run-1");
   expect(receipt.threadResults).toEqual([expect.objectContaining({ threadId: "thread-1", resolved: true })]);
   expect(events.at(-1)).toBe("destroy");
+});
+test("recreates a confirmed commit when the unpushed workspace was destroyed", async () => {
+  const fixtureValue = fixture();
+  const firstReceipt = await runReviewAgent(request, fixtureValue.deps);
+  const pushIndex = fixtureValue.effects.findIndex((effect) => effect.kind === "push");
+  fixtureValue.effects.splice(pushIndex, 1);
+  fixtureValue.setRemoteHead("head1");
+  fixtureValue.setCurrentCommit("commit2");
+  fixtureValue.deps.candidateLoader = {
+    async load(candidateId) {
+      return readReviewCandidate(
+        reviewCandidatePath(fixtureValue.deps.candidateRoot!, candidateId),
+      );
+    },
+  };
+
+  const resumedReceipt = await runReviewAgent({
+    ...request,
+    candidateId: firstReceipt.candidateId,
+  }, fixtureValue.deps);
+
+  expect(fixtureValue.events).toContain("restore:commit1");
+  expect(resumedReceipt.commitSha).toBe("commit2");
+  expect(fixtureValue.effects.find((effect) => effect.kind === "commit")?.commitSha).toBe("commit2");
+});
+
+
+test("publish CLI defaults to commit delivery", async () => {
+  const args = parseReviewArgs([
+    request.pullRequestUrl,
+    "--verify", request.verifyCommand,
+    "--skill", "/skills/fix-review-findings/SKILL.md",
+    "--publish",
+  ]);
+  const { deps, events } = fixture();
+  const receipt = await runReviewAgent(args, deps);
+  expect(receipt.deliveryMode).toBe("commit");
+  expect(events).toContain("push");
 });
 
 test("valid no-code rejection replies without committing", async () => {
@@ -235,4 +437,58 @@ test("protected paths leave an untouched-gate repair unaffected", async () => {
   );
   expect(receipt.commitSha).toBe("commit1");
   expect(events).toContain("verify");
+});
+
+test("follow-up CLI requests derive and replay the retained candidate base", async () => {
+  const { deps, events, getDeliveryPlan } = fixture();
+  const cliArgs = parseReviewArgs([
+    request.pullRequestUrl,
+    "--verify", request.verifyCommand,
+    "--skill", "/tmp/fix-review-findings/SKILL.md",
+    "--publish",
+    "--delivery-mode", "follow-up-pr",
+  ]);
+  expect("followUpBaseSha" in cliArgs).toBe(false);
+
+  const firstReceipt = await runReviewAgent(cliArgs, deps);
+  expect(firstReceipt.followUpPullRequestUrl).toBe("https://github.com/acme/widget/pull/5");
+  expect(firstReceipt.candidateId).toBe("run-1");
+
+  deps.candidateLoader = {
+    async load(candidateId) {
+      return readReviewCandidate(reviewCandidatePath(deps.candidateRoot!, candidateId));
+    },
+  };
+  const resumedArgs = parseReviewArgs([
+    request.pullRequestUrl,
+    "--verify", request.verifyCommand,
+    "--skill", "/tmp/fix-review-findings/SKILL.md",
+    "--publish",
+    "--delivery-mode", "follow-up-pr",
+    "--candidate-id", firstReceipt.candidateId!,
+  ]);
+  const resumedReceipt = await runReviewAgent(resumedArgs, deps);
+
+  expect(resumedReceipt.followUpPullRequestUrl).toBe(firstReceipt.followUpPullRequestUrl);
+  expect(getDeliveryPlan()).toEqual(expect.objectContaining({
+    deliveryMode: "follow-up-pr",
+    followUpBaseSha: "head1",
+  }));
+  expect(events.filter((event) => event === "create-follow-up")).toHaveLength(1);
+  expect(events.filter((event) => event === "commit")).toHaveLength(1);
+  expect(events.filter((event) => event === "push")).toHaveLength(1);
+  expect(events).toContain("reset:head1:shipwright/review-run-1");
+});
+
+test("conflicting explicit follow-up base is rejected before publication", async () => {
+  const { deps, events } = fixture();
+  await expect(runReviewAgent({
+    ...request,
+    deliveryMode: "follow-up-pr",
+    followUpBaseSha: "f".repeat(40),
+  }, deps)).rejects.toThrow("follow-up patch base does not match the selected follow-up base SHA");
+  expect(events).not.toContain("reset:head1:shipwright/review-run-1");
+  expect(events).not.toContain("create-follow-up");
+  expect(events).not.toContain("commit");
+  expect(events).not.toContain("push");
 });

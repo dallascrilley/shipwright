@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
+import type { ProcessRunRequest, ProcessRunResponse } from "sandbox-agent";
 import { join } from "node:path";
 import {
   EXPECTED_SANDBOX_BUN_VERSION,
+  maxBufferForGitBlob,
   requireExpectedBunVersion,
   parseNulList,
   requireSuccessfulCommand,
@@ -11,11 +13,18 @@ import {
   resolvePiNodeModulesDirectory,
   resolveSandboxContainerUser,
   resolveSandboxImage,
+  runReviewPlanCommand,
 } from "../../src/sandbox/runtime.js";
 
 describe("sandbox command helpers", () => {
   test("parses NUL-delimited git output", () => {
     expect(parseNulList("src/a.ts\0README.md\0")).toEqual(["src/a.ts", "README.md"]);
+  });
+
+  test("sizes changed-blob scanning for the actual Git blob", () => {
+    const blobBytes = 5 * 1024 * 1024;
+    expect(maxBufferForGitBlob(blobBytes)).toBe(blobBytes + 1);
+    expect(() => maxBufferForGitBlob(-1)).toThrow("Git blob size");
   });
 
   test("rejects nonzero, timed out, and truncated commands", () => {
@@ -152,4 +161,49 @@ describe("sandbox command helpers", () => {
       await rm(created, { recursive: true, force: true });
     }
   });
+  test("runs review-plan commands through the sandbox with isolated paths", async () => {
+    const requests: ProcessRunRequest[] = [];
+    const client = {
+      async runProcess(request: ProcessRunRequest): Promise<ProcessRunResponse> {
+        requests.push(request);
+        return {
+          exitCode: 0,
+          stdout: "ok",
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          timedOut: false,
+          durationMs: 1,
+        };
+      },
+    };
+
+    await expect(
+      runReviewPlanCommand(
+        client,
+        "node reproduce.mjs",
+        "/home/sandbox/workspace/.candidate",
+        "/tmp/plan-home",
+        "/tmp/plan-tmp",
+        1_000,
+      ),
+    ).resolves.toMatchObject({ exitCode: 0, stdout: "ok", stderr: "" });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      command: "sh",
+      args: ["-c", "node reproduce.mjs"],
+      cwd: "/home/sandbox/workspace/.candidate",
+      timeoutMs: 1_000,
+      env: {
+        PATH: "/usr/local/bin:/usr/bin:/bin",
+        HOME: "/tmp/plan-home",
+        TMPDIR: "/tmp/plan-tmp",
+        ENV: "",
+        BASH_ENV: "",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+      },
+    });
+  });
+
 });

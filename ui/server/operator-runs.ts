@@ -29,6 +29,7 @@ import {
   targetUrl,
   appendOperatorRunEvent,
   summarizeOperatorRunEvent,
+  reviewDeliveryModeSchema,
   type OperatorRunPhase,
   type OperatorRunReceipt,
   type OperatorRunRecord,
@@ -38,6 +39,7 @@ import {
   type OperatorRunListRequest,
   type OperatorRunListResponse,
 } from "../shared/operator-run";
+import { reviewScopeSchema } from "../shared/agent-definition";
 import { resolveTarget } from "./resolve-target";
 import {
   DEFAULT_REVIEW_SKILL_ID,
@@ -153,10 +155,27 @@ function sanitizeStoredRequest(
       }
     }
   }
-  if (mode === "review" && !skillId) {
-    skillId = DEFAULT_REVIEW_SKILL_ID;
-    mutated = true;
+  let reviewScope: StoredRequest["reviewScope"];
+  if (mode === "review" && raw?.reviewScope !== undefined) {
+    const parsed = reviewScopeSchema.safeParse(raw.reviewScope);
+    if (!parsed.success) {
+      throw new Error("persisted review scope is invalid");
+    }
+    reviewScope = parsed.data;
   }
+  let deliveryMode: StoredRequest["deliveryMode"];
+  if (raw?.deliveryMode !== undefined) {
+    const parsed = reviewDeliveryModeSchema.safeParse(raw.deliveryMode);
+    if (!parsed.success) {
+      throw new Error("persisted delivery mode is invalid");
+    }
+    deliveryMode = parsed.data;
+  }
+  const followUpBaseSha =
+    typeof raw?.followUpBaseSha === "string" &&
+    /^[0-9a-f]{40}$/.test(raw.followUpBaseSha)
+      ? raw.followUpBaseSha
+      : undefined;
   const request: StoredRequest = {
     mode,
     issueUrl: raw?.issueUrl ?? "",
@@ -166,6 +185,12 @@ function sanitizeStoredRequest(
     verifyCommand: raw?.verifyCommand ?? "",
     publish: Boolean(raw?.publish),
     timeoutMinutes: raw?.timeoutMinutes ?? 30,
+    ...(typeof raw?.candidateId === "string" && raw.candidateId.trim()
+      ? { candidateId: raw.candidateId.trim() }
+      : {}),
+    ...(deliveryMode ? { deliveryMode } : {}),
+    ...(reviewScope ? { reviewScope } : {}),
+    ...(followUpBaseSha ? { followUpBaseSha } : {}),
   };
   // Never persist host skillPath on durable records.
   return { request, operatorHint, mutated };
@@ -305,6 +330,10 @@ export class OperatorRunRegistry {
       verifyCommand: input.verifyCommand,
       publish: input.publish,
       timeoutMinutes: input.timeoutMinutes,
+      ...(input.candidateId ? { candidateId: input.candidateId } : {}),
+      ...(input.deliveryMode ? { deliveryMode: input.deliveryMode } : {}),
+      ...(input.reviewScope ? { reviewScope: input.reviewScope } : {}),
+      ...(input.followUpBaseSha ? { followUpBaseSha: input.followUpBaseSha } : {}),
     };
 
     if (input.fromRunId?.trim()) {
@@ -319,13 +348,16 @@ export class OperatorRunRegistry {
       }
       base = {
         ...prior.request,
-        // never copy skillPath from legacy
         publish: input.publish,
         timeoutMinutes: input.timeoutMinutes || prior.request.timeoutMinutes,
       };
       if (input.presetId !== undefined) base.presetId = input.presetId;
       if (input.verifyCommand) base.verifyCommand = input.verifyCommand;
       if (input.skillId) base.skillId = input.skillId;
+      if (input.candidateId !== undefined) base.candidateId = input.candidateId;
+      if (input.deliveryMode !== undefined) base.deliveryMode = input.deliveryMode;
+      if (input.reviewScope !== undefined) base.reviewScope = input.reviewScope;
+      if (input.followUpBaseSha !== undefined) base.followUpBaseSha = input.followUpBaseSha;
       // publishConfirmed enforced by schema when publish true
     }
 
@@ -378,6 +410,10 @@ export class OperatorRunRegistry {
       verifyCommand,
       publish: Boolean(base.publish),
       timeoutMinutes: base.timeoutMinutes ?? 30,
+      ...(base.candidateId ? { candidateId: base.candidateId } : {}),
+      ...(base.deliveryMode ? { deliveryMode: base.deliveryMode } : {}),
+      ...(base.reviewScope ? { reviewScope: base.reviewScope } : {}),
+      ...(base.followUpBaseSha ? { followUpBaseSha: base.followUpBaseSha } : {}),
     };
 
     const fromRunId = input.fromRunId?.trim() || "";
@@ -652,8 +688,8 @@ function toOperatorIssueReceipt(receipt: RunReceipt): OperatorRunReceipt {
     errorCode: receipt.errorCode,
     errorMessage: receipt.errorMessage,
   };
-}
 
+}
 function toOperatorReviewReceipt(
   receipt: ReviewRunReceipt,
 ): OperatorRunReceipt {
@@ -662,12 +698,20 @@ function toOperatorReviewReceipt(
     phase: receipt.phase,
     issueUrl: receipt.pullRequestUrl,
     execution: receipt.execution,
-    baseSha: receipt.authorizedHeadSha,
+    baseSha: receipt.authorizedBaseSha,
+    authorizedBaseSha: receipt.authorizedBaseSha,
+    authorizedHeadSha: receipt.authorizedHeadSha,
     branch: receipt.headBranch,
     changedFiles: receipt.changedFiles,
     verification: receipt.verification,
     commitSha: receipt.commitSha,
+    followUpPullRequestUrl: receipt.followUpPullRequestUrl,
     pullRequestUrl: receipt.pullRequestUrl,
+    ...(receipt.candidateId ? { candidateId: receipt.candidateId } : {}),
+    ...(receipt.candidateDigest
+      ? { candidateDigest: receipt.candidateDigest }
+      : {}),
+    deliveryMode: receipt.deliveryMode,
     errorCode: receipt.errorCode,
     errorMessage: receipt.errorMessage,
     skillSha256: receipt.skill.sha256,
@@ -697,6 +741,10 @@ export async function executeOperatorPipeline(
         protectedPaths: resolveProtectedVerificationPaths(request.presetId),
         publish: request.publish,
         timeoutMinutes: request.timeoutMinutes,
+        ...(request.candidateId ? { candidateId: request.candidateId } : {}),
+        ...(request.deliveryMode ? { deliveryMode: request.deliveryMode } : {}),
+        ...(request.reviewScope ? { reviewScope: request.reviewScope } : {}),
+        ...(request.followUpBaseSha ? { followUpBaseSha: request.followUpBaseSha } : {}),
       },
       createReviewPipelineDependencies(skill.path, {
         runId,
@@ -768,6 +816,9 @@ async function executeDemo(
             {
               threadId: "demo-thread",
               outcome: "fixed",
+              proposedOutcome: "fixed",
+              verifiedDisposition: "fixed",
+              verificationStatus: "not-required",
               replyUrl: "https://example.invalid/review_comment/1",
               resolved: true,
             },

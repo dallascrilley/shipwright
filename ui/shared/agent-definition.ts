@@ -572,6 +572,40 @@ export const lifecycleEventSchema = z
 
 export type LifecycleEvent = z.output<typeof lifecycleEventSchema>;
 
+export const reviewScopeSchema = z
+  .object({
+    mode: z.enum(["this-review", "all-current-findings"]),
+    reviewId: safeText(200).optional(),
+    headSha: safeText(100).regex(/^[0-9a-f]{40}$/, "Use a full review head SHA.").optional(),
+    findingIds: z.array(safeText(200)).max(500),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (new Set(value.findingIds).size !== value.findingIds.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["findingIds"],
+        message: "Finding IDs must be unique.",
+      });
+    }
+    if (value.mode === "this-review" && !value.reviewId) {
+      context.addIssue({
+        code: "custom",
+        path: ["reviewId"],
+        message: "This-review scope requires a review identifier.",
+      });
+    }
+    if (value.mode === "all-current-findings" && !value.headSha) {
+      context.addIssue({
+        code: "custom",
+        path: ["headSha"],
+        message: "All-current-findings scope requires the authorized head SHA.",
+      });
+    }
+  });
+
+export type ReviewScope = z.output<typeof reviewScopeSchema>;
+
 export const executionRequestSchema = z
   .object({
     executionId: identifierSchema,
@@ -580,6 +614,8 @@ export const executionRequestSchema = z
     triggerId: identifierSchema.optional(),
     source: z.enum(["github", "schedule", "test"]),
     idempotencyKey: safeText(500),
+    candidateId: safeText(160).optional(),
+    reviewScope: reviewScopeSchema.optional(),
     target: z
       .object({
         kind: z.enum(["issue", "pull"]),
@@ -621,6 +657,10 @@ const queueReceiptSchema = z
     phase: safeText(100),
     verificationPassed: z.boolean(),
     errorCode: identifierSchema.optional(),
+    candidateId: safeText(160).optional(),
+    candidateDigest: safeText(100).optional(),
+    effectIds: z.array(identifierSchema).max(100).optional(),
+    resumeCursor: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -644,6 +684,7 @@ export const queueEntrySchema = z
     priority: z.number().int().min(0).max(100),
     attempts: z.number().int().nonnegative(),
     lease: queueLeaseSchema.optional(),
+    resourceKey: safeText(300).optional(),
     receipt: queueReceiptSchema.optional(),
     failureCode: identifierSchema.optional(),
     createdAt: timestampSchema,

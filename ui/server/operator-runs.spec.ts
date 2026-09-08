@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -363,6 +363,59 @@ describe("OperatorRunRegistry", () => {
     const raw = readFileSync(path, "utf8");
     expect(raw).not.toContain("skillPath");
     expect(raw).not.toContain("/tmp/fix-review-findings");
+  });
+
+  test("rejects malformed persisted review delivery state", () => {
+    const cases = [
+      {
+        runId: "invalid-mode",
+        request: {
+          mode: "review",
+          issueUrl: "",
+          pullRequestUrl: "https://github.com/dallascrilley/example/pull/9",
+          skillId: "fix-review-findings",
+          verifyCommand: "bun test",
+          publish: false,
+          timeoutMinutes: 30,
+          deliveryMode: "bogus",
+        },
+        message: "delivery mode",
+      },
+      {
+        runId: "invalid-scope",
+        request: {
+          mode: "review",
+          issueUrl: "",
+          pullRequestUrl: "https://github.com/dallascrilley/example/pull/9",
+          skillId: "fix-review-findings",
+          verifyCommand: "bun test",
+          publish: false,
+          timeoutMinutes: 30,
+          reviewScope: { mode: "all-current-findings", findingIds: [] },
+        },
+        message: "review scope",
+      },
+    ];
+    for (const item of cases) {
+      const directory = mkdtempSync(join(tmpdir(), "shipwright-runs-"));
+      temporaryDirectories.push(directory);
+      const path = join(directory, "operator-runs.json");
+      writeFileSync(path, JSON.stringify([{
+        runId: item.runId,
+        status: "succeeded",
+        phase: "complete",
+        kind: "review",
+        request: item.request,
+        events: [],
+        startedAt: "2026-07-20T12:00:00.000Z",
+        updatedAt: "2026-07-20T12:00:01.000Z",
+      }]));
+      expect(() => new OperatorRunRegistry(
+        () => Promise.withResolvers<never>().promise,
+        () => "run-x",
+        new JsonFileOperatorRunStore(path),
+      )).toThrow(item.message);
+    }
   });
 
   test("expands verify preset and supports fromRunId dry clone", async () => {

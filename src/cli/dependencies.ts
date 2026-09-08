@@ -4,18 +4,34 @@ import { join } from "node:path";
 import { createAndRunPiAgent } from "../agent/runner.js";
 import { parseGitHubConfig } from "../config/github.js";
 import {
+  authorizeIssue,
+  authorizePullRequest,
+  createOctokitTransport,
+} from "../github/app-client.js";
+import { openOrReusePullRequest } from "../github/publisher.js";
+import {
   isProviderCapacityError,
   resolveProviderChain,
   type ProviderConfig,
 } from "../config/provider.js";
 import { resolveShipwrightStateDirectory } from "../config/state.js";
-import { authorizeIssue, authorizePullRequest, createOctokitTransport } from "../github/app-client.js";
-import { openOrReusePullRequest } from "../github/publisher.js";
+import {
+  FileReviewEffectJournalStore,
+  FileReviewFindingVerificationStore,
+  FileReviewVerificationPlanStore,
+  readReviewCandidate,
+  reviewCandidatePath,
+} from "../pipeline/repair-candidate.js";
+import type { AgentExecution } from "../pipeline/receipt.js";
 import type { RunReceipt } from "../pipeline/receipt.js";
 import { defaultReceiptWriter, type PipelineDependencies } from "../pipeline/run.js";
-import { defaultReviewReceiptWriter, type ReviewPipelineDependencies } from "../pipeline/review-run.js";
+import {
+  defaultReviewReceiptWriter,
+  FileReviewPublicationLease,
+  type ReviewPipelineDependencies,
+} from "../pipeline/review-run.js";
 import type { ReviewRunReceipt } from "../pipeline/review-receipt.js";
-import type { AgentExecution } from "../pipeline/receipt.js";
+import { createHostReviewFindingVerifier } from "../pipeline/review-verifier.js";
 import { SandboxWorkspace } from "../sandbox/runtime.js";
 
 export interface PipelineDependencyOptions {
@@ -112,6 +128,12 @@ export function createReviewPipelineDependencies(
     content,
     sha256: createHash("sha256").update(content).digest("hex"),
   };
+  const stateDirectory = resolveShipwrightStateDirectory();
+  const candidateRoot = stateDirectory;
+  const verificationRoot = join(stateDirectory, "review-verifications");
+  const verificationPlanStore = new FileReviewVerificationPlanStore(
+    stateDirectory,
+  );
   return {
     execution,
     skill,
@@ -128,8 +150,24 @@ export function createReviewPipelineDependencies(
         skills,
       ),
     ),
+    artifactRoot: join(stateDirectory, "review-receipts"),
+    candidateRoot,
+    candidateLoader: {
+      load: (candidateId) => readReviewCandidate(reviewCandidatePath(candidateRoot, candidateId)),
+    },
+    effectJournalFactory: (candidate) =>
+      FileReviewEffectJournalStore.open(
+        join(stateDirectory, "review-effects", `${candidate.candidateId}.json`),
+        candidate,
+      ),
+    verificationStore: {
+      put: async (record) => (await FileReviewFindingVerificationStore.open(verificationRoot)).put(record),
+      lookup: async (input) => (await FileReviewFindingVerificationStore.open(verificationRoot)).lookup(input),
+    },
+    verificationPlanStore,
+    findingVerifier: createHostReviewFindingVerifier(verificationPlanStore),
+    publicationLease: new FileReviewPublicationLease(stateDirectory),
     writeReceipt: defaultReviewReceiptWriter,
-    artifactRoot: join(resolveShipwrightStateDirectory(), "review-receipts"),
     ...options,
   };
 }

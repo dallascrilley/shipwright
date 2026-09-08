@@ -16,6 +16,7 @@
     "vite.config.ts",
     "react-router.config.ts",
     ".react-router/types/**/*",
-    ".generated/**/*"
+    ".generated/**/*",
+    "../src/pipeline/fs-native-extensions.d.ts"
   ]
 }

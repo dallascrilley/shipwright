@@ -4,9 +4,11 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { withNativeFileLockSync } from "../../src/pipeline/native-file-lock.js";
 
 import {
   agentControlPlaneSnapshotSchema,
@@ -40,6 +42,28 @@ export interface AgentControlPlaneStore {
     operation: (snapshot: AgentControlPlaneSnapshot) => Result,
   ): Result;
 }
+
+const TRANSACTION_LOCK_TIMEOUT_MS = 10_000;
+
+function sleepSynchronously(milliseconds: number): void {
+  const signal = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(signal, 0, 0, milliseconds);
+}
+interface TransactionLock {
+  path: string;
+  pid: number;
+  token: string;
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
 
 /** In-memory transactional store for U1; the production durable adapter lands before triggers. */
 export class MemoryAgentControlPlaneStore implements AgentControlPlaneStore {
@@ -93,24 +117,32 @@ export class JsonFileAgentControlPlaneStore implements AgentControlPlaneStore {
   transaction<Result>(
     operation: (snapshot: AgentControlPlaneSnapshot) => Result,
   ): Result {
-    const candidate = structuredClone(this.load());
-    const result = operation(candidate);
-    const snapshot = agentControlPlaneSnapshotSchema.parse(candidate);
-    this.save(snapshot);
-    return structuredClone(result);
+    return withNativeFileLockSync(`${this.path}.lock`, (assertHeld) => {
+      const candidate = structuredClone(this.load());
+      const result = operation(candidate);
+      const snapshot = agentControlPlaneSnapshotSchema.parse(candidate);
+      this.save(snapshot, assertHeld);
+      return structuredClone(result);
+    });
   }
 
-  private save(snapshot: AgentControlPlaneSnapshot): void {
+
+  private save(snapshot: AgentControlPlaneSnapshot, assertHeld: () => void): void {
     const directory = dirname(this.path);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     chmodSync(directory, 0o700);
     const temporaryPath = `${this.path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-    writeFileSync(temporaryPath, `${JSON.stringify(snapshot, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    renameSync(temporaryPath, this.path);
-    chmodSync(this.path, 0o600);
+    try {
+      writeFileSync(temporaryPath, `${JSON.stringify(snapshot, null, 2)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      assertHeld();
+      renameSync(temporaryPath, this.path);
+      chmodSync(this.path, 0o600);
+    } finally {
+      rmSync(temporaryPath, { force: true });
+    }
   }
 }
 
