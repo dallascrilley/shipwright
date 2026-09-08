@@ -579,6 +579,17 @@ export async function runReviewAgent(
     if (!retainedCandidate || !deps.candidateRoot || !effectJournal) {
       throw new Error("publication requires a durable review candidate and effect journal");
     }
+    const followUpBaseSha =
+      deliveryMode === "follow-up-pr"
+        ? request.followUpBaseSha ?? retainedCandidate.authorizedHeadSha
+        : undefined;
+    if (
+      deliveryMode === "follow-up-pr"
+      && request.followUpBaseSha !== undefined
+      && request.followUpBaseSha !== retainedCandidate.authorizedHeadSha
+    ) {
+      throw new Error("follow-up patch base does not match the selected follow-up base SHA");
+    }
     if (deps.publicationLease) {
       releasePublicationLease = await deps.publicationLease.acquire(
         `${ref.owner}/${ref.repo}#${ref.number}`,
@@ -594,9 +605,9 @@ export async function runReviewAgent(
       baseSha: authorized.pullRequest.baseSha,
       headBranch: authorized.pullRequest.headBranch,
       authorizedHeadSha: originalHeadSha,
-      ...(request.followUpBaseSha ? { followUpBaseSha: request.followUpBaseSha } : {}),
+      ...(followUpBaseSha !== undefined ? { followUpBaseSha } : {}),
     };
-    await effectJournal.ensureDeliveryPlan(deliveryPlan);
+    const authorizedDeliveryPlan = await effectJournal.ensureDeliveryPlan(deliveryPlan);
 
 
     const publishableOutcomes = outcomes
@@ -705,17 +716,15 @@ export async function runReviewAgent(
             throw error;
           }
         }
-        const pushedHead = await authorized.repositoryClient.getBranchSha(authorized.pullRequest.headBranch);
-        if (pushedHead !== receipt.commitSha) throw new Error("pushed pull request head does not match the generated commit");
-        await emitProgress();
       }
     } else if (deliveryMode === "follow-up-pr") {
       phase = receipt.phase = "publish";
       await emitProgress();
-      if (!request.followUpBaseSha) {
+      const selectedFollowUpBaseSha = authorizedDeliveryPlan.followUpBaseSha;
+      if (!selectedFollowUpBaseSha) {
         throw new Error("follow-up-pr requires an explicit selected base SHA");
       }
-      if (request.followUpBaseSha !== retainedCandidate.authorizedHeadSha) {
+      if (selectedFollowUpBaseSha !== retainedCandidate.authorizedHeadSha) {
         throw new Error("follow-up patch base does not match the selected follow-up base SHA");
       }
       await revalidateRemoteReviewState(authorized, ref.number, originalHeadSha);
@@ -723,13 +732,13 @@ export async function runReviewAgent(
         throw new Error("follow-up-pr requires a workspace that can reset and replay a candidate");
       }
       const followUpBranch = followUpBranchFor(retainedCandidate);
-      await workspace.resetToReviewBase(request.followUpBaseSha, followUpBranch);
+      await workspace.resetToReviewBase(selectedFollowUpBaseSha, followUpBranch);
       await workspace.applyReviewCandidatePatch(Buffer.from(retainedCandidate.patchBase64, "base64"));
-      const followUpChanges = await workspace.inspectChanges(request.followUpBaseSha);
+      const followUpChanges = await workspace.inspectChanges(selectedFollowUpBaseSha);
       if (followUpChanges.resultingTreeSha !== retainedCandidate.resultingTreeSha) {
         throw new Error("follow-up base produced a different candidate tree");
       }
-      await workspace.assertRunIdentity(request.followUpBaseSha, followUpBranch);
+      await workspace.assertRunIdentity(selectedFollowUpBaseSha, followUpBranch);
       await revalidateRemoteReviewState(authorized, ref.number, originalHeadSha);
       const commitEffectId = `${operationId}:follow-up-commit`;
       const priorCommitEffect = effects.find((effect) => effect.effectId === commitEffectId);

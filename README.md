@@ -200,9 +200,10 @@ delivery:
   `needs-human` findings stay open.
 - `follow-up-pr` with `--publish` commits and pushes the candidate on a
   separate branch, then opens or reuses a follow-up pull request; it does not
-  reply to or resolve the original threads. The pipeline requires an explicit
-  selected follow-up base SHA, but this CLI does not currently expose that
-  input.
+  reply to or resolve the original threads. The selected base SHA defaults to
+  the retained candidate's immutable authorized head; any supplied base must
+  match it. The follow-up uses the original pull request's base branch without
+  an implicit rebase, and the effect journal binds the exact replay plan.
 
 ```sh
 bun run review-agent -- https://github.com/OWNER/REPO/pull/123 \

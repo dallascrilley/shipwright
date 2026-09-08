@@ -119,8 +119,10 @@ authority.
   `needs-human` findings remain open.
 - `follow-up-pr` with `--publish` commits and pushes the candidate on a
   separate branch, then opens or reuses a follow-up pull request. It does not
-  reply to or resolve the original threads. The pipeline requires an explicit
-  selected follow-up base SHA; the current CLI does not expose that input.
+  reply to or resolve the original threads. The selected base SHA defaults to
+  the retained candidate's immutable authorized head; any supplied base must
+  match it. Replay uses the original pull request's base branch without an
+  implicit rebase, and the effect journal binds the exact delivery plan.
 
 When a resumed run finds that a push response was lost, it acknowledges the
 push effect if the remote branch is already at the expected commit. If the

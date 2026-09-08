@@ -4,10 +4,14 @@ import { tmpdir } from "node:os";
 import { expect, test } from "bun:test";
 import {
   computeReviewChecksDigest,
+  readReviewCandidate,
+  reviewCandidatePath,
+  type ReviewAuthorizedDeliveryPlan,
   type ReviewEffectJournalStore,
   type ReviewEffectReceipt,
   type ReviewFindingVerificationRecord,
 } from "../../src/pipeline/repair-candidate.js";
+import { parseReviewArgs } from "../../src/cli/review-args.js";
 import {
   isProviderQuotaError,
   PROVIDER_QUOTA_ERROR_CODE,
@@ -30,6 +34,8 @@ function fixture(options: {
   const changes = options.changes ?? ["src/a.ts"];
   const outcome = options.outcome ?? "fixed";
   let remoteHead = "head1";
+  let followUpHead = "";
+  let followUpPullRequest: { number: number; url: string; title: string; body: string } | undefined;
   let resolved = false;
   let replyBody = "";
   const thread = () => ({
@@ -43,10 +49,41 @@ function fixture(options: {
   const repositoryClient: AuthorizedPullRequest["repositoryClient"] = {
     async getRepository() { throw new Error("unused"); },
     async getIssue() { throw new Error("unused"); },
-    async getBranchSha() { events.push("remote-head"); return options.movedHead ? "moved" : remoteHead; },
-    async listPullRequests() { return []; },
-    async createPullRequest() { throw new Error("unused"); },
-    async getPullRequest() {
+    async getBranchSha(branch) {
+      events.push("remote-head");
+      if (branch === "feature") return options.movedHead ? "moved" : remoteHead;
+      return followUpHead;
+    },
+    async listPullRequests() {
+      return followUpPullRequest
+        ? [{ ...followUpPullRequest, headSha: followUpHead }]
+        : [];
+    },
+    async createPullRequest(input) {
+      events.push("create-follow-up");
+      followUpPullRequest = {
+        number: 5,
+        url: "https://github.com/acme/widget/pull/5",
+        title: input.title,
+        body: input.body,
+      };
+      return { number: followUpPullRequest.number, url: followUpPullRequest.url };
+    },
+    async getPullRequest(number) {
+      if (number === 5 && followUpPullRequest) {
+        return {
+          title: followUpPullRequest.title,
+          body: followUpPullRequest.body,
+          state: "open",
+          draft: false,
+          baseBranch: "main",
+          baseSha: "base1",
+          headBranch: "shipwright/review-run-1",
+          headSha: followUpHead,
+          headOwner: "acme",
+          headRepo: "widget",
+        };
+      }
       return {
         title: "Change", body: "body", state: "open", draft: false,
         baseBranch: "main", baseSha: "base1", headBranch: "feature",
@@ -81,20 +118,41 @@ function fixture(options: {
       return JSON.stringify({ threads: [{ threadId: "thread-1", outcome, summary: "Handled", evidence: "src/a.ts:4" }] });
     },
     async verify() { events.push("verify"); return { exitCode: options.verifyExit ?? 0 }; },
-    async inspectChanges() { events.push("inspect"); return { changedFiles: changes, patch: changes.length ? "diff" : "", patchBytes: changes.length ? 4 : 0 }; },
+    async inspectChanges() {
+      events.push("inspect");
+      return {
+        changedFiles: changes,
+        patch: changes.length ? "diff" : "",
+        patchBytes: changes.length ? 4 : 0,
+        resultingTreeSha: "tree1",
+      };
+    },
     async quiesce() { events.push("quiesce"); },
     async assertRunIdentity() { events.push("identity"); },
+    async applyReviewCandidatePatch() { events.push("apply-candidate"); },
+    async resetToReviewBase(baseSha, branch) { events.push(`reset:${baseSha}:${branch}`); },
     async commit() { events.push("commit"); return "commit1"; },
-    async push() { events.push("push"); remoteHead = "commit1"; },
+    async push(branch) {
+      events.push("push");
+      if (branch === "feature") remoteHead = "commit1";
+      else followUpHead = "commit1";
+    },
     async destroy() { events.push("destroy"); },
   };
   const receipts: Array<Record<string, unknown>> = [];
   const candidateRoot = join(tmpdir(), `shipwright-review-run-${randomUUID()}`);
   const effects: ReviewEffectReceipt[] = [];
   const records: ReviewFindingVerificationRecord[] = [];
+  let storedDeliveryPlan: ReviewAuthorizedDeliveryPlan | undefined;
   const effectJournalFactory = async (): Promise<ReviewEffectJournalStore> => ({
     async load() { return structuredClone(effects); },
-    async ensureDeliveryPlan(plan) { return structuredClone(plan); },
+    async ensureDeliveryPlan(plan) {
+      if (storedDeliveryPlan && JSON.stringify(storedDeliveryPlan) !== JSON.stringify(plan)) {
+        throw new Error("fixture delivery plan changed");
+      }
+      storedDeliveryPlan ??= structuredClone(plan);
+      return structuredClone(storedDeliveryPlan);
+    },
     async beginEffect(input) {
       const existing = effects.find((effect) => effect.effectId === input.effectId);
       if (existing) return structuredClone(existing);
@@ -173,7 +231,7 @@ function fixture(options: {
       },
     },
   };
-  return { deps, events, receipts, getReplyBody: () => replyBody };
+  return { deps, events, receipts, getReplyBody: () => replyBody, getDeliveryPlan: () => structuredClone(storedDeliveryPlan) };
 }
 
 const request = { pullRequestUrl: "https://github.com/acme/widget/pull/4", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 };
@@ -316,4 +374,58 @@ test("protected paths leave an untouched-gate repair unaffected", async () => {
   );
   expect(receipt.commitSha).toBe("commit1");
   expect(events).toContain("verify");
+});
+
+test("follow-up CLI requests derive and replay the retained candidate base", async () => {
+  const { deps, events, getDeliveryPlan } = fixture();
+  const cliArgs = parseReviewArgs([
+    request.pullRequestUrl,
+    "--verify", request.verifyCommand,
+    "--skill", "/tmp/fix-review-findings/SKILL.md",
+    "--publish",
+    "--delivery-mode", "follow-up-pr",
+  ]);
+  expect("followUpBaseSha" in cliArgs).toBe(false);
+
+  const firstReceipt = await runReviewAgent(cliArgs, deps);
+  expect(firstReceipt.followUpPullRequestUrl).toBe("https://github.com/acme/widget/pull/5");
+  expect(firstReceipt.candidateId).toBe("run-1");
+
+  deps.candidateLoader = {
+    async load(candidateId) {
+      return readReviewCandidate(reviewCandidatePath(deps.candidateRoot!, candidateId));
+    },
+  };
+  const resumedArgs = parseReviewArgs([
+    request.pullRequestUrl,
+    "--verify", request.verifyCommand,
+    "--skill", "/tmp/fix-review-findings/SKILL.md",
+    "--publish",
+    "--delivery-mode", "follow-up-pr",
+    "--candidate-id", firstReceipt.candidateId!,
+  ]);
+  const resumedReceipt = await runReviewAgent(resumedArgs, deps);
+
+  expect(resumedReceipt.followUpPullRequestUrl).toBe(firstReceipt.followUpPullRequestUrl);
+  expect(getDeliveryPlan()).toEqual(expect.objectContaining({
+    deliveryMode: "follow-up-pr",
+    followUpBaseSha: "head1",
+  }));
+  expect(events.filter((event) => event === "create-follow-up")).toHaveLength(1);
+  expect(events.filter((event) => event === "commit")).toHaveLength(1);
+  expect(events.filter((event) => event === "push")).toHaveLength(1);
+  expect(events).toContain("reset:head1:shipwright/review-run-1");
+});
+
+test("conflicting explicit follow-up base is rejected before publication", async () => {
+  const { deps, events } = fixture();
+  await expect(runReviewAgent({
+    ...request,
+    deliveryMode: "follow-up-pr",
+    followUpBaseSha: "f".repeat(40),
+  }, deps)).rejects.toThrow("follow-up patch base does not match the selected follow-up base SHA");
+  expect(events).not.toContain("reset:head1:shipwright/review-run-1");
+  expect(events).not.toContain("create-follow-up");
+  expect(events).not.toContain("commit");
+  expect(events).not.toContain("push");
 });
