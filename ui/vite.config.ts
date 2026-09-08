@@ -14,6 +14,12 @@ export default defineConfig({
       // shiki only runs in AssistantChat's useEffect — keep it out of the
       // CF Pages Functions bundle (25 MiB limit).
       ssrStubs: ["shiki"],
+      // native-file-lock.ts uses createRequire, which nft cannot infer.
+      // Nitro's traceDeps keeps the addon and its platform prebuilds in
+      // traced artifacts.
+      nitro: {
+        traceDeps: ["fs-native-extensions"],
+      },
     }),
   ],
 });
