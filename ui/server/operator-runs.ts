@@ -29,6 +29,7 @@ import {
   targetUrl,
   appendOperatorRunEvent,
   summarizeOperatorRunEvent,
+  reviewDeliveryModeSchema,
   type OperatorRunPhase,
   type OperatorRunReceipt,
   type OperatorRunRecord,
@@ -154,10 +155,22 @@ function sanitizeStoredRequest(
       }
     }
   }
-  const reviewScope =
-    mode === "review" && raw?.reviewScope !== undefined
-      ? reviewScopeSchema.safeParse(raw.reviewScope)
-      : undefined;
+  let reviewScope: StoredRequest["reviewScope"];
+  if (mode === "review" && raw?.reviewScope !== undefined) {
+    const parsed = reviewScopeSchema.safeParse(raw.reviewScope);
+    if (!parsed.success) {
+      throw new Error("persisted review scope is invalid");
+    }
+    reviewScope = parsed.data;
+  }
+  let deliveryMode: StoredRequest["deliveryMode"];
+  if (raw?.deliveryMode !== undefined) {
+    const parsed = reviewDeliveryModeSchema.safeParse(raw.deliveryMode);
+    if (!parsed.success) {
+      throw new Error("persisted delivery mode is invalid");
+    }
+    deliveryMode = parsed.data;
+  }
   const followUpBaseSha =
     typeof raw?.followUpBaseSha === "string" &&
     /^[0-9a-f]{40}$/.test(raw.followUpBaseSha)
@@ -175,10 +188,8 @@ function sanitizeStoredRequest(
     ...(typeof raw?.candidateId === "string" && raw.candidateId.trim()
       ? { candidateId: raw.candidateId.trim() }
       : {}),
-    ...(raw?.deliveryMode
-      ? { deliveryMode: raw.deliveryMode }
-      : {}),
-    ...(reviewScope?.success ? { reviewScope: reviewScope.data } : {}),
+    ...(deliveryMode ? { deliveryMode } : {}),
+    ...(reviewScope ? { reviewScope } : {}),
     ...(followUpBaseSha ? { followUpBaseSha } : {}),
   };
   // Never persist host skillPath on durable records.

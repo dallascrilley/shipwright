@@ -5,7 +5,7 @@ export interface ReviewCliArgs {
   verifyCommand: string;
   skillPath: string;
   publish: boolean;
-  deliveryMode: ReviewDeliveryMode;
+  deliveryMode?: ReviewDeliveryMode;
   candidateId?: string;
   timeoutMinutes: number;
 }
@@ -19,7 +19,7 @@ export function parseReviewArgs(argv: string[]): ReviewCliArgs {
   let verifyCommand: string | undefined;
   let skillPath: string | undefined;
   let publish = false;
-  let deliveryMode: ReviewDeliveryMode = "patch";
+  let deliveryMode: ReviewDeliveryMode | undefined;
   let candidateId: string | undefined;
   let timeoutMinutes = 30;
   for (let index = 1; index < argv.length; index += 1) {
@@ -57,7 +57,7 @@ export function parseReviewArgs(argv: string[]): ReviewCliArgs {
     verifyCommand,
     skillPath,
     publish,
-    deliveryMode,
+    ...(deliveryMode ? { deliveryMode } : {}),
     ...(candidateId ? { candidateId } : {}),
     timeoutMinutes,
   };

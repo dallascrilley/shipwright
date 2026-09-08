@@ -7,6 +7,7 @@ import {
   readFile,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -1331,13 +1332,17 @@ export async function purgeReviewArtifacts(
 
   await withNativeFileLock(reviewArtifactRootLock(root), async (assertRootHeld) => {
     const candidateRoot = join(root, "review-candidates");
-    let candidateEntries;
+    let candidateEntries: Dirent[] = [];
     try {
       candidateEntries = await readdir(candidateRoot, { withFileTypes: true });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    const candidateIds = new Set(
+      candidateEntries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name),
+    );
     const scans: CandidateArtifactScan[] = [];
     let unknownCandidateState = false;
     for (const entry of candidateEntries) {
@@ -1360,6 +1365,7 @@ export async function purgeReviewArtifacts(
         addRetainedCandidate(result, entry.name, "unreadable-candidate");
         continue;
       }
+      candidateIds.add(candidate.candidateId);
       const journalPath = join(root, "review-effects", `${candidate.candidateId}.json`);
       let journal: StoredJournal | undefined;
       let journalError = false;
@@ -1444,6 +1450,67 @@ export async function purgeReviewArtifacts(
           addRetainedCandidate(result, scan.candidateId, "changed-during-purge");
         }
         if (purged) result.purgedCandidateIds.push(scan.candidateId);
+      }
+    }
+
+    if (!options.dryRun) {
+      const effectRoot = join(root, "review-effects");
+      let effectEntries: Dirent[] = [];
+      try {
+        effectEntries = await readdir(effectRoot, { withFileTypes: true });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      for (const entry of effectEntries) {
+        if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+        const candidateId = entry.name.slice(0, -".json".length);
+        if (candidateIds.has(candidateId)) continue;
+        const journalPath = join(effectRoot, entry.name);
+        let journalStat;
+        try {
+          journalStat = await stat(journalPath);
+        } catch {
+          continue;
+        }
+        if (journalStat.mtimeMs > cutoffMs) {
+          addRetainedCandidate(result, candidateId, "within-retention-window");
+          continue;
+        }
+        try {
+          await withNativeFileLock(`${journalPath}.lock`, async (assertHeld) => {
+            let latestStat;
+            try {
+              latestStat = await stat(journalPath);
+            } catch {
+              return;
+            }
+            if (latestStat.mtimeMs > cutoffMs) {
+              addRetainedCandidate(result, candidateId, "within-retention-window");
+              return;
+            }
+            let journal: StoredJournal | undefined;
+            try {
+              journal = await readStoredJournalFile(journalPath);
+            } catch {
+              return;
+            }
+            if (journal === undefined) return;
+            if (hasUnresolvedReviewEffect(journal.effects)) {
+              addRetainedCandidate(
+                result,
+                journal.candidateId,
+                "unresolved-or-ambiguous-effect",
+              );
+              return;
+            }
+            await assertRootHeld();
+            await assertHeld();
+            await rm(journalPath, { force: true });
+            result.purgedEffectJournalIds.push(journal.candidateId);
+          });
+        } catch {
+          // Leave malformed or concurrently changing orphan journals in place.
+        }
       }
     }
 

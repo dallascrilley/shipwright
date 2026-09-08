@@ -187,10 +187,11 @@ one same-repository pull request head, projects an explicitly selected
 untrusted data, verifies changes independently, and requires one explicit
 outcome per unresolved thread. Host verification, not the model's proposal,
 decides whether a finding can be published. The CLI defaults to `patch`;
-`--publish` is the explicit gate required before any remote write, and
-`--candidate-id <id>` resumes an existing retained candidate and its effect
-journal instead of starting a new intake. `--delivery-mode` selects the
-delivery:
+`--publish` is the explicit gate required before any remote write. When
+`--publish` is used without an explicit `--delivery-mode`, the CLI selects
+`commit`. `--candidate-id <id>` resumes an existing retained candidate and
+its effect journal instead of starting a new intake. `--delivery-mode` selects
+the delivery:
 
 - `patch` (default) and `evidence-only` retain the candidate and verification
   evidence locally; neither writes commits, pushes, replies, or resolutions

@@ -16,7 +16,6 @@ import type {
 } from "../pipeline/repair-candidate.js";
 const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
-const MAX_CHANGED_BLOB_SCAN_BYTES = 4 * 1024 * 1024;
 export const SANDBOX_WORKSPACE = "/home/sandbox/workspace";
 export const SANDBOX_PI_NODE_MODULES = "/opt/shipwright/node_modules";
 export const SANDBOX_BUN_EXECUTABLE = "/usr/local/bin/bun";
@@ -25,6 +24,17 @@ export const AGENT_WORKSPACE = "/workspace";
 export const DEFAULT_SANDBOX_IMAGE =
   "rivetdev/sandbox-agent@sha256:640cfb725a94b8a47967e0c2ec153d3ab267244f517f700e8f82f1e4d55b2ea2";
 const execFileAsync = promisify(execFile);
+
+export function maxBufferForGitBlob(blobBytes: number): number {
+  if (
+    !Number.isSafeInteger(blobBytes)
+    || blobBytes < 0
+    || blobBytes >= Number.MAX_SAFE_INTEGER
+  ) {
+    throw new Error("Git blob size is outside the supported range");
+  }
+  return blobBytes + 1;
+}
 
 async function createHostWorkspaceDirectory(): Promise<string> {
   // AgentOS host-dir mounts on macOS/OrbStack fail against /var/folders temp roots.
@@ -37,6 +47,26 @@ async function createHostWorkspaceDirectory(): Promise<string> {
     return await realpath(await mkdtemp(join(tmpdir(), "shipwright-workspace-")));
   }
 }
+async function startSandboxClient(hostWorkspace: string): Promise<SandboxAgent> {
+  const containerUser = resolveSandboxContainerUser(
+    process.platform,
+    typeof process.getuid === "function" ? process.getuid() : undefined,
+    typeof process.getgid === "function" ? process.getgid() : undefined,
+    process.env.SHIPWRIGHT_DOCKER_MODE,
+  );
+  return SandboxAgent.start({
+    sandbox: docker({
+      image: resolveSandboxImage(process.env.SHIPWRIGHT_SANDBOX_IMAGE),
+      binds: [
+        `${hostWorkspace}:${SANDBOX_WORKSPACE}`,
+        `${resolvePiNodeModulesDirectory()}:${SANDBOX_PI_NODE_MODULES}:ro`,
+        `${resolveBunExecutable()}:${SANDBOX_BUN_EXECUTABLE}:ro`,
+      ],
+      createContainerOptions: containerUser ? { User: containerUser } : undefined,
+    }),
+  });
+}
+
 
 export interface CloneInput {
   owner: string;
@@ -153,23 +183,7 @@ export class SandboxWorkspace {
   static async start(): Promise<SandboxWorkspace> {
     const hostWorkspace = await createHostWorkspaceDirectory();
     try {
-      const containerUser = resolveSandboxContainerUser(
-        process.platform,
-        typeof process.getuid === "function" ? process.getuid() : undefined,
-        typeof process.getgid === "function" ? process.getgid() : undefined,
-        process.env.SHIPWRIGHT_DOCKER_MODE,
-      );
-      const client = await SandboxAgent.start({
-        sandbox: docker({
-          image: resolveSandboxImage(process.env.SHIPWRIGHT_SANDBOX_IMAGE),
-          binds: [
-            `${hostWorkspace}:${SANDBOX_WORKSPACE}`,
-            `${resolvePiNodeModulesDirectory()}:${SANDBOX_PI_NODE_MODULES}:ro`,
-            `${resolveBunExecutable()}:${SANDBOX_BUN_EXECUTABLE}:ro`,
-          ],
-          createContainerOptions: containerUser ? { User: containerUser } : undefined,
-        }),
-      });
+      const client = await startSandboxClient(hostWorkspace);
       return new SandboxWorkspace(client, hostWorkspace);
     } catch (error) {
       await rm(hostWorkspace, { recursive: true });
@@ -322,17 +336,50 @@ export class SandboxWorkspace {
   }
 
   /**
-   * Restore a host-owned commit object when a previous push acknowledgement was
-   * lost. The object must already exist locally; fetching is deliberately not
-   * attempted from this credential-free path.
+   * Restore a confirmed review commit. If workspace cleanup removed an
+   * unpushed commit object, recreate the commit from the retained candidate
+   * tree and return the replacement SHA for the effect journal.
    */
-  async restoreCommittedReview(commitSha: string, branch: string): Promise<void> {
-    if (!/^[0-9a-f]{40}$/.test(commitSha) || !/^[A-Za-z0-9._/-]+$/.test(branch)) {
-      throw new Error("review commit identity is invalid");
+  async restoreCommittedReview(input: {
+    commitSha: string;
+    branch: string;
+    baseSha: string;
+    expectedTreeSha: string;
+    message: string;
+  }): Promise<string> {
+    if (
+      !/^[0-9a-f]{40}$/.test(input.commitSha) ||
+      !/^[0-9a-f]{40}$/.test(input.baseSha) ||
+      !/^[0-9a-f]{40}$/.test(input.expectedTreeSha) ||
+      !/^[A-Za-z0-9._/-]+$/.test(input.branch) ||
+      !input.message.trim() ||
+      input.message.length > 512
+    ) {
+      throw new Error("review commit recovery input is invalid");
     }
-    await this.hostGit(["cat-file", "-e", `${commitSha}^{commit}`]);
-    await this.hostGit(["reset", "--hard", commitSha]);
-    await this.hostGit(["switch", "-C", branch]);
+    try {
+      await this.hostGit(["cat-file", "-e", `${input.commitSha}^{commit}`]);
+      const treeSha = (await this.hostGit(["show", "-s", "--format=%T", input.commitSha])).trim();
+      const parentSha = (await this.hostGit(["show", "-s", "--format=%P", input.commitSha])).trim();
+      if (treeSha !== input.expectedTreeSha || parentSha !== input.baseSha) {
+        throw new Error("confirmed review commit does not match the retained candidate");
+      }
+      await this.hostGit(["reset", "--hard", input.commitSha]);
+      await this.hostGit(["switch", "-C", input.branch]);
+      return input.commitSha;
+    } catch (error) {
+      if (error instanceof Error && error.message === "confirmed review commit does not match the retained candidate") {
+        throw error;
+      }
+      await this.assertRunIdentity(input.baseSha, input.branch);
+      const recreatedSha = await this.commit(input.message);
+      const treeSha = (await this.hostGit(["show", "-s", "--format=%T", recreatedSha])).trim();
+      const parentSha = (await this.hostGit(["show", "-s", "--format=%P", recreatedSha])).trim();
+      if (treeSha !== input.expectedTreeSha || parentSha !== input.baseSha) {
+        throw new Error("recreated review commit does not match the retained candidate");
+      }
+      return recreatedSha;
+    }
   }
 
   /**
@@ -417,9 +464,9 @@ export class SandboxWorkspace {
   }
 
   /**
-   * Run an operator-authored reproduction in two disposable host Git
-   * worktrees. The model sandbox is already quiesced before this method is
-   * called, so neither command can observe or modify the agent workspace.
+   * Run an operator-authored reproduction in two disposable worktrees inside a
+   * fresh sandbox. The agent sandbox is quiesced before host inspection, so
+   * plan execution gets a separate container over the same authorized clone.
    */
   async verifyReviewPlan(input: {
     baselineSha: string;
@@ -439,62 +486,96 @@ export class SandboxWorkspace {
       throw new Error("review verification plan execution input is invalid");
     }
     assertSecretSafeBytes(input.patch);
+    await this.quiesce();
+    await this.assertAuthorizedRepoConfig();
+    const planClient = await startSandboxClient(this.hostWorkspace);
     const suffix = randomUUID();
-    const baselineDirectory = `.shipwright-plan-baseline-${suffix}`;
-    const candidateDirectory = `.shipwright-plan-candidate-${suffix}`;
+    const baselineDirectory = `${SANDBOX_WORKSPACE}/.shipwright-plan-baseline-${suffix}`;
+    const candidateDirectory = `${SANDBOX_WORKSPACE}/.shipwright-plan-candidate-${suffix}`;
     const patchPath = `.shipwright-plan-patch-${suffix}.diff`;
     const patchAbsolutePath = join(this.hostWorkspace, patchPath);
-    await writeFile(patchAbsolutePath, input.patch, { mode: 0o600 });
+    const baselineHome = `/tmp/shipwright-plan-${suffix}-baseline-home`;
+    const candidateHome = `/tmp/shipwright-plan-${suffix}-candidate-home`;
+    const baselineTmp = `/tmp/shipwright-plan-${suffix}-baseline-tmp`;
+    const candidateTmp = `/tmp/shipwright-plan-${suffix}-candidate-tmp`;
     try {
-      await this.hostGit([
-        "worktree",
-        "add",
-        "--detach",
-        baselineDirectory,
-        input.baselineSha,
-      ]);
-      await this.hostGit([
-        "worktree",
-        "add",
-        "--detach",
-        candidateDirectory,
-        input.baselineSha,
-      ]);
-      await this.hostGit([
-        "-C",
-        candidateDirectory,
-        "apply",
-        "--binary",
-        "--whitespace=nowarn",
-        "--",
-        patchAbsolutePath,
-      ]);
+      await writeFile(patchAbsolutePath, input.patch, { mode: 0o600 });
+      await runSandboxCommandOrThrow(planClient, "review plan baseline worktree", {
+        command: "git",
+        args: ["worktree", "add", "--detach", baselineDirectory, input.baselineSha],
+        cwd: SANDBOX_WORKSPACE,
+      });
+      await runSandboxCommandOrThrow(planClient, "review plan candidate worktree", {
+        command: "git",
+        args: ["worktree", "add", "--detach", candidateDirectory, input.baselineSha],
+        cwd: SANDBOX_WORKSPACE,
+      });
+      if (input.patch.byteLength > 0) {
+        await runSandboxCommandOrThrow(planClient, "review plan candidate patch", {
+          command: "git",
+          args: [
+            "-C",
+            candidateDirectory,
+            "apply",
+            "--binary",
+            "--whitespace=nowarn",
+            "--",
+            `${SANDBOX_WORKSPACE}/${patchPath}`,
+          ],
+          cwd: SANDBOX_WORKSPACE,
+        });
+      }
+      await runSandboxCommandOrThrow(planClient, "review plan temporary directories", {
+        command: "mkdir",
+        args: ["-p", baselineHome, candidateHome, baselineTmp, candidateTmp],
+        cwd: "/",
+      });
       return {
-        baseline: await this.runReviewPlanCommand(
+        baseline: await runReviewPlanCommand(
+          planClient,
           input.command,
           baselineDirectory,
+          baselineHome,
+          baselineTmp,
           input.timeoutMs,
         ),
-        candidate: await this.runReviewPlanCommand(
+        candidate: await runReviewPlanCommand(
+          planClient,
           input.command,
           candidateDirectory,
+          candidateHome,
+          candidateTmp,
           input.timeoutMs,
         ),
       };
     } finally {
-      await this.hostGit([
-        "worktree",
-        "remove",
-        "--force",
-        baselineDirectory,
-      ]).catch(() => undefined);
-      await this.hostGit([
-        "worktree",
-        "remove",
-        "--force",
-        candidateDirectory,
-      ]).catch(() => undefined);
+      await planClient.runProcess({
+        command: "git",
+        args: ["worktree", "remove", "--force", baselineDirectory],
+        cwd: SANDBOX_WORKSPACE,
+        timeoutMs: DEFAULT_TIMEOUT_MS,
+        maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+      }).catch(() => undefined);
+      await planClient.runProcess({
+        command: "git",
+        args: ["worktree", "remove", "--force", candidateDirectory],
+        cwd: SANDBOX_WORKSPACE,
+        timeoutMs: DEFAULT_TIMEOUT_MS,
+        maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+      }).catch(() => undefined);
+      await planClient.runProcess({
+        command: "rm",
+        args: ["-rf", "--", baselineHome, candidateHome, baselineTmp, candidateTmp],
+        cwd: "/",
+        timeoutMs: DEFAULT_TIMEOUT_MS,
+        maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+      }).catch(() => undefined);
       await rm(patchAbsolutePath, { force: true });
+      try {
+        await planClient.destroySandbox();
+      } finally {
+        await planClient.dispose();
+      }
     }
   }
 
@@ -543,10 +624,14 @@ export class SandboxWorkspace {
           // A deleted path has no current blob to inspect.
           continue;
         }
+        const blobSize = Number.parseInt(
+          (await this.hostGit(["cat-file", "-s", `:${path}`], indexEnv)).trim(),
+          10,
+        );
         const content = await this.hostGitBytes(
           ["cat-file", "blob", `:${path}`],
           indexEnv,
-          MAX_CHANGED_BLOB_SCAN_BYTES,
+          maxBufferForGitBlob(blobSize),
         );
         assertSecretSafeBytes(content);
         changedBlobs.push({ path, content });
@@ -700,61 +785,6 @@ export class SandboxWorkspace {
     }
   }
 
-  private async runReviewPlanCommand(
-    command: string,
-    directory: string,
-    timeoutMs: number,
-  ): Promise<ReviewVerificationResult> {
-    const home = join(this.hostWorkspace, `${directory}-home`);
-    await mkdir(home, { recursive: true, mode: 0o700 });
-    const asText = (value: unknown): string =>
-      typeof value === "string"
-        ? value
-        : Buffer.isBuffer(value)
-          ? value.toString("utf8")
-          : "";
-    try {
-      const result = await execFileAsync("sh", ["-c", command], {
-        cwd: join(this.hostWorkspace, directory),
-        env: {
-          PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
-          HOME: home,
-          TMPDIR: tmpdir(),
-          ENV: "",
-          BASH_ENV: "",
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_CONFIG_GLOBAL: "/dev/null",
-        },
-        timeout: timeoutMs,
-        maxBuffer: DEFAULT_MAX_OUTPUT_BYTES,
-        encoding: "utf8",
-      });
-      return {
-        exitCode: 0,
-        stdout: asText(result.stdout),
-        stderr: asText(result.stderr),
-      };
-    } catch (error) {
-      const result = error as {
-        code?: number | string;
-        stdout?: unknown;
-        stderr?: unknown;
-        killed?: boolean;
-        signal?: string;
-      };
-      return {
-        exitCode: typeof result.code === "number" ? result.code : null,
-        stdout: asText(result.stdout),
-        stderr: asText(result.stderr),
-        timedOut: result.killed === true || result.signal === "SIGTERM",
-        ...(result.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
-          ? { stderrTruncated: true }
-          : {}),
-      };
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  }
 
   private async hostGitBytes(
     args: string[],
@@ -789,4 +819,57 @@ export class SandboxWorkspace {
     });
     return stdout;
   }
+}
+function asReviewPlanText(value: unknown): string {
+  return typeof value === "string"
+    ? value
+    : Buffer.isBuffer(value)
+      ? value.toString("utf8")
+      : "";
+}
+
+async function runSandboxCommandOrThrow(
+  client: Pick<SandboxAgent, "runProcess">,
+  label: string,
+  request: ProcessRunRequest,
+): Promise<ProcessRunResponse> {
+  return requireSuccessfulCommand(label, await client.runProcess({
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+    ...request,
+  }));
+}
+
+export async function runReviewPlanCommand(
+  client: Pick<SandboxAgent, "runProcess">,
+  command: string,
+  cwd: string,
+  home: string,
+  temporaryDirectory: string,
+  timeoutMs: number,
+): Promise<ReviewVerificationResult> {
+  const result = await client.runProcess({
+    command: "sh",
+    args: ["-c", command],
+    cwd,
+    env: {
+      PATH: "/usr/local/bin:/usr/bin:/bin",
+      HOME: home,
+      TMPDIR: temporaryDirectory,
+      ENV: "",
+      BASH_ENV: "",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+    },
+    timeoutMs,
+    maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+  });
+  return {
+    exitCode: result.exitCode ?? null,
+    stdout: asReviewPlanText(result.stdout),
+    stderr: asReviewPlanText(result.stderr),
+    timedOut: result.timedOut,
+    ...(result.stdoutTruncated ? { stdoutTruncated: true } : {}),
+    ...(result.stderrTruncated ? { stderrTruncated: true } : {}),
+  };
 }

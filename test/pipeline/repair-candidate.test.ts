@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -267,6 +267,33 @@ describe("review artifact retention", () => {
       });
       await journal.markAmbiguous({ effectId: "effect-ambiguous" });
 
+      const orphan = candidate({ candidateId: "candidate-orphan" });
+      const orphanJournalPath = join(
+        root,
+        "review-effects",
+        `${orphan.candidateId}.json`,
+      );
+      const orphanJournal = await FileReviewEffectJournalStore.open(
+        orphanJournalPath,
+        orphan,
+      );
+      await orphanJournal.beginEffect({
+        effectId: "effect-orphan",
+        kind: "push",
+        idempotencyKey: "push-orphan",
+      });
+      await orphanJournal.ackEffect({
+        effectId: "effect-orphan",
+        commitSha: HEAD_SHA,
+      });
+      await rm(join(root, "review-candidates", orphan.candidateId), {
+        recursive: true,
+        force: true,
+      });
+      const oldJournalTime = new Date("2026-07-20T00:00:00.000Z");
+      await utimes(orphanJournalPath, oldJournalTime, oldJournalTime);
+
+
       const recent = candidate({ candidateId: "candidate-recent", createdAt: now });
       await writeReviewCandidate(reviewCandidatePath(root, recent.candidateId), recent);
 
@@ -276,7 +303,7 @@ describe("review artifact retention", () => {
       });
       expect(result.purgedCandidateIds).toEqual(["candidate-1"]);
       expect(result.purgedVerificationRecordIds).toEqual(["record-1"]);
-      expect(result.purgedEffectJournalIds).toEqual([]);
+      expect(result.purgedEffectJournalIds).toEqual(["candidate-orphan"]);
       // Filesystem directory order is not part of the retention contract.
       expect([...result.retainedCandidates].sort((left, right) =>
         left.candidateId.localeCompare(right.candidateId),
@@ -295,6 +322,10 @@ describe("review artifact retention", () => {
         code: "ENOENT",
       });
       await expect(readFile(`${settledPath}.lock`, "utf8")).resolves.toBe("");
+      await expect(readFile(orphanJournalPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(readFile(`${orphanJournalPath}.lock`, "utf8")).resolves.toBe("");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

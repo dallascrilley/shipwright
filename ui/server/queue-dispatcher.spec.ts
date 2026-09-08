@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import type { AgentDraftInput } from "../shared/agent-definition";
 import {
@@ -430,6 +430,41 @@ describe("QueueDispatcher", () => {
 
     finishRun();
     await running;
+  });
+
+  test("aborts the runner when lease renewal fails", async () => {
+    const fixture = createFixture({
+      leaseDurationMs: 30,
+      globalConcurrency: 2,
+      perAgentConcurrency: 2,
+    });
+    const agent = createEnabledAgent(fixture);
+    const queued = enqueue(fixture, agent.agentId, "test:heartbeat-failure");
+    const running = fixture.dispatcher.dispatchNext(
+      "worker-a",
+      ({ signal }) => {
+        const { promise, reject } = Promise.withResolvers<never>();
+        signal.addEventListener(
+          "abort",
+          () => reject(signal.reason),
+          { once: true },
+        );
+        return promise;
+      },
+    );
+    const transaction = vi.spyOn(fixture.store, "transaction").mockImplementation(
+      () => {
+        throw new Error("durable store unavailable");
+      },
+    );
+    try {
+      await expect(running).resolves.toMatchObject({
+        executionId: queued.execution.executionId,
+        state: "running",
+      });
+    } finally {
+      transaction.mockRestore();
+    }
   });
 
   test("marks a running lease interrupted after restart and requires retry", async () => {

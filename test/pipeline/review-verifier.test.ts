@@ -15,8 +15,24 @@ import type { ReviewWorkspacePort } from "../../src/pipeline/review-run.js";
 const findingDigest = "d".repeat(64);
 const candidateSha = "b".repeat(40);
 
-function candidate(options: { noCode?: boolean } = {}): ReviewCandidate {
+function candidate(options: {
+  noCode?: boolean;
+  changedFiles?: string[];
+  findings?: ReviewCandidate["findings"];
+} = {}): ReviewCandidate {
   const noCode = options.noCode === true;
+  const changedFiles = options.changedFiles ?? (noCode ? [] : ["src/a.ts"]);
+  const findings = options.findings ?? [
+    {
+      findingId: "finding-1",
+      originalContentDigest: findingDigest,
+      proposedOutcome: "rejected",
+      summary: "guard the input",
+      evidence: "the input is unchecked",
+      reproduction: "run the reproducer",
+      affectedFiles: noCode ? [] : ["src/a.ts"],
+    },
+  ];
   return createReviewCandidate({
     candidateId: "candidate-1",
     authorizedBaseRef: "main",
@@ -26,19 +42,9 @@ function candidate(options: { noCode?: boolean } = {}): ReviewCandidate {
     resultingTreeSha: "c".repeat(40),
     patch: noCode
       ? new Uint8Array()
-      : new TextEncoder().encode("diff --git a/src/a.ts b/src/a.ts\n"),
-    changedFiles: noCode ? [] : ["src/a.ts"],
-    findings: [
-      {
-        findingId: "finding-1",
-        originalContentDigest: findingDigest,
-        proposedOutcome: "rejected",
-        summary: "guard the input",
-        evidence: "the input is unchecked",
-        reproduction: "run the reproducer",
-        affectedFiles: noCode ? [] : ["src/a.ts"],
-      },
-    ],
+      : new TextEncoder().encode(`diff --git a/${changedFiles[0]} b/${changedFiles[0]}\n`),
+    changedFiles,
+    findings,
     verification: {
       command: "bun test",
       exitCode: 0,
@@ -264,6 +270,48 @@ test("accepts a trusted no-code rejection only for an unchanged candidate", asyn
     independentVerdict: "pass",
   });
 });
+test("scopes no-code verification to the current finding", async () => {
+  const value = candidate({
+    changedFiles: ["src/b.ts"],
+    findings: [
+      {
+        findingId: "finding-1",
+        originalContentDigest: findingDigest,
+        proposedOutcome: "rejected",
+        summary: "guard the input",
+        evidence: "the input is unchecked",
+        reproduction: "run the reproducer",
+        affectedFiles: ["src/a.ts"],
+      },
+      {
+        findingId: "finding-2",
+        originalContentDigest: "e".repeat(64),
+        proposedOutcome: "fixed",
+        summary: "repair the output",
+        evidence: "the output is malformed",
+        reproduction: "run the output reproducer",
+        affectedFiles: ["src/b.ts"],
+      },
+    ],
+  });
+  const observed = {
+    baseline: result(0, "baseline-pass"),
+    candidate: result(0, "candidate-pass"),
+  };
+  const plan = planFor(value, observed, { adjudicatedOutcome: "rejected" });
+  const verifier = createHostReviewFindingVerifier(store([plan]));
+  const record = await verifier.verify({
+    candidate: value,
+    findingId: "finding-1",
+    workspace: workspace(async () => observed),
+    checks: checks(),
+  });
+  expect(record).toMatchObject({
+    observedOutcome: "rejected",
+    independentVerdict: "pass",
+  });
+});
+
 
 test("keeps a no-code rejection pending when the candidate contains a patch", async () => {
   const value = candidate();

@@ -7,6 +7,7 @@ import {
   computeReviewVerificationResultDigest,
   reviewCandidatePatch,
   type ReviewCandidate,
+  type ReviewFindingEvidence,
   type ReviewFindingVerificationRecord,
   type ReviewVerificationPlan,
   type ReviewVerificationPlanStore,
@@ -63,13 +64,14 @@ export function createHostReviewFindingVerifier(
         return undefined;
       }
 
-      return buildVerificationRecord(candidate, findingId, findingDigest, plan, observed, checks);
+      return buildVerificationRecord(candidate, finding, findingId, findingDigest, plan, observed, checks);
     },
   };
 }
 
 function buildVerificationRecord(
   candidate: ReviewCandidate,
+  finding: ReviewFindingEvidence,
   findingId: string,
   findingDigest: string,
   plan: ReviewVerificationPlan,
@@ -88,21 +90,23 @@ function buildVerificationRecord(
     baselineDigest === plan.baseline.resultDigest &&
     observed.candidate.exitCode === plan.candidate.expectedExitCode &&
     candidateResultDigest === plan.candidate.resultDigest;
+  const findingHasChanges = candidate.changedFiles.some((path) =>
+    finding.affectedFiles.includes(path),
+  );
   const outcomeObservationMatch =
     plan.adjudicatedOutcome === "fixed"
       ? exactObservationMatch &&
         observed.baseline.exitCode !== 0 &&
         observed.candidate.exitCode === 0 &&
         candidate.patchBytes > 0 &&
-        candidate.changedFiles.length > 0
+        findingHasChanges
       : plan.adjudicatedOutcome === "rejected" ||
           plan.adjudicatedOutcome === "already-addressed" ||
           plan.adjudicatedOutcome === "needs-human"
         ? exactObservationMatch &&
           observed.baseline.exitCode === 0 &&
           observed.candidate.exitCode === 0 &&
-          candidate.patchBytes === 0 &&
-          candidate.changedFiles.length === 0
+          !findingHasChanges
         : plan.adjudicatedOutcome === "deferred"
           ? exactObservationMatch &&
             plan.followUp?.status === "confirmed" &&

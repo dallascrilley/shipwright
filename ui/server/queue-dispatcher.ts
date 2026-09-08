@@ -304,13 +304,26 @@ export class QueueDispatcher {
       this.#controllers.delete(claim.execution.executionId);
       return this.get(claim.execution.executionId);
     }
-    const heartbeat = () => this.renewLease(
-      claim.execution.executionId,
-      claim.entry.lease!.leaseId,
-      owner,
-    );
+    const heartbeat = () => {
+      try {
+        return this.renewLease(
+          claim.execution.executionId,
+          claim.entry.lease!.leaseId,
+          owner,
+        );
+      } catch (error) {
+        controller.abort(
+          error instanceof Error
+            ? error
+            : new Error("Queue lease renewal failed."),
+        );
+        return false;
+      }
+    };
     const heartbeatTimer = setInterval(() => {
-      if (!heartbeat()) controller.abort(new Error("Queue lease ownership was lost."));
+      if (!heartbeat() && !controller.signal.aborted) {
+        controller.abort(new Error("Queue lease ownership was lost."));
+      }
     }, Math.max(10, Math.floor(this.options.leaseDurationMs / 3)));
     heartbeatTimer.unref?.();
     try {

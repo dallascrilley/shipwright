@@ -16,7 +16,7 @@ import {
 } from "../config/provider.js";
 import type { AuthorizedPullRequest } from "../github/app-client.js";
 import { parsePullRequestUrl } from "../github/pull-request-ref.js";
-import { findMarkedReply, reviewRunMarker, reviewThreadContentDigest, unresolvedCurrentThreads } from "../github/review-client.js";
+import { findMarkedReply, isGeneratedReviewReply, reviewRunMarker, reviewThreadContentDigest, unresolvedCurrentThreads } from "../github/review-client.js";
 import type { PullRequestRef, ReviewThread } from "../github/types.js";
 import { openOrReuseFollowUpPullRequest } from "../github/publisher.js";
 import type { ChangeInspection } from "../sandbox/runtime.js";
@@ -99,9 +99,14 @@ export interface ReviewWorkspacePort {
   quiesce(): Promise<void>;
   assertRunIdentity(headSha: string, branch: string): Promise<void>;
   commit(message: string): Promise<string>;
-  /** Required to reconcile a confirmed local commit before a lost push ack. */
-  restoreCommittedReview?(commitSha: string, branch: string): Promise<void>;
-  /** Required only when replaying a retained candidate. */
+  /** Reconcile a confirmed commit, recreating it from the retained candidate when needed. */
+  restoreCommittedReview?(input: {
+    commitSha: string;
+    branch: string;
+    baseSha: string;
+    expectedTreeSha: string;
+    message: string;
+  }): Promise<string>;
   applyReviewCandidatePatch?(patch: Uint8Array): Promise<void>;
   /** Required for follow-up PR delivery. */
   resetToReviewBase?(baseSha: string, branch: string): Promise<void>;
@@ -664,19 +669,28 @@ export async function runReviewAgent(
           idempotencyKey: commitEffectId,
         });
         if (priorCommitEffect) {
-          if (commitIntent.status === "confirmed" && commitIntent.commitSha) {
-            receipt.commitSha = commitIntent.commitSha;
-            if (!confirmedPushSha) {
-              if (!workspace.restoreCommittedReview) {
-                throw new Error("confirmed commit requires workspace commit reconciliation");
-              }
-              await workspace.restoreCommittedReview(
-                receipt.commitSha,
-                authorized.pullRequest.headBranch,
-              );
-            }
-          } else {
+          if (commitIntent.status !== "confirmed" || !commitIntent.commitSha) {
             throw new Error("review commit effect requires reconciliation");
+          }
+          if (confirmedPushSha) {
+            receipt.commitSha = commitIntent.commitSha;
+          } else {
+            if (!workspace.restoreCommittedReview) {
+              throw new Error("confirmed commit requires workspace commit reconciliation");
+            }
+            receipt.commitSha = await workspace.restoreCommittedReview({
+              commitSha: commitIntent.commitSha,
+              branch: authorized.pullRequest.headBranch,
+              baseSha: originalHeadSha,
+              expectedTreeSha: retainedCandidate.resultingTreeSha,
+              message: `fix: address review feedback (#${authorized.pullRequest.number})`,
+            });
+            if (receipt.commitSha !== commitIntent.commitSha) {
+              await effectJournal.ackEffect({
+                effectId: commitEffectId,
+                commitSha: receipt.commitSha,
+              });
+            }
           }
         } else {
           try {
@@ -743,6 +757,13 @@ export async function runReviewAgent(
       }
       await workspace.assertRunIdentity(selectedFollowUpBaseSha, followUpBranch);
       await revalidateRemoteReviewState(authorized, ref.number, originalHeadSha);
+      const confirmedFollowUpPushSha = effects.find(
+        (effect) =>
+          effect.effectId === `${operationId}:follow-up-push`
+          && effect.kind === "push"
+          && effect.status === "confirmed"
+          && effect.commitSha,
+      )?.commitSha;
       const commitEffectId = `${operationId}:follow-up-commit`;
       const priorCommitEffect = effects.find((effect) => effect.effectId === commitEffectId);
       const commitIntent = await effectJournal.beginEffect({
@@ -755,7 +776,26 @@ export async function runReviewAgent(
         if (commitIntent.status !== "confirmed" || !commitIntent.commitSha) {
           throw new Error("follow-up commit effect requires reconciliation");
         }
-        followUpCommitSha = commitIntent.commitSha;
+        if (confirmedFollowUpPushSha) {
+          followUpCommitSha = commitIntent.commitSha;
+        } else {
+          if (!workspace.restoreCommittedReview) {
+            throw new Error("confirmed follow-up commit requires workspace commit reconciliation");
+          }
+          followUpCommitSha = await workspace.restoreCommittedReview({
+            commitSha: commitIntent.commitSha,
+            branch: followUpBranch,
+            baseSha: selectedFollowUpBaseSha,
+            expectedTreeSha: retainedCandidate.resultingTreeSha,
+            message: `fix: carry review candidate ${retainedCandidate.candidateId}`,
+          });
+          if (followUpCommitSha !== commitIntent.commitSha) {
+            await effectJournal.ackEffect({
+              effectId: commitEffectId,
+              commitSha: followUpCommitSha,
+            });
+          }
+        }
       } else {
         try {
           followUpCommitSha = await workspace.commit(`fix: carry review candidate ${retainedCandidate.candidateId}`);
@@ -1140,7 +1180,7 @@ function buildThreadReply(
   runId: string,
   verifyCommand: string,
 ): string {
-  const source = thread.comments.find((comment) => !comment.body.includes("agentos-review-run:"))?.body ?? "Original review comment";
+  const source = thread.comments.find((comment) => !isGeneratedReviewReply(comment, thread.id))?.body ?? "Original review comment";
   const quote = source
     .replace(/<!--[\s\S]*?-->/g, " ")
     .replace(/\s+/g, " ")

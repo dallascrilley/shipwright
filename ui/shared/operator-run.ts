@@ -110,6 +110,13 @@ const ISSUE_URL_PATTERN =
 const PULL_REQUEST_URL_PATTERN =
   /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/([1-9]\d*)\/?$/;
 
+export const reviewDeliveryModeSchema = z.enum([
+  "patch",
+  "commit",
+  "follow-up-pr",
+  "evidence-only",
+]);
+
 export const operatorRunRequestSchema = z
   .object({
     mode: z.enum(["issue", "review"]).default("issue"),
@@ -123,7 +130,7 @@ export const operatorRunRequestSchema = z
     timeoutMinutes: z.number().int().min(1).max(60).default(30),
     fromRunId: z.string().trim().max(64).optional(),
     candidateId: z.string().trim().max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/).optional(),
-    deliveryMode: z.enum(["patch", "commit", "follow-up-pr", "evidence-only"]).optional(),
+    deliveryMode: reviewDeliveryModeSchema.optional(),
     reviewScope: reviewScopeSchema.optional(),
     followUpBaseSha: z.string().trim().regex(/^[0-9a-f]{40}$/).optional(),
     /** Advanced path: treat verifyCommand as raw; not persisted on durable records. */
