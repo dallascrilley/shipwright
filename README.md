@@ -185,15 +185,34 @@ criteria in [docs/runbooks/publish-stage-criteria.md](docs/runbooks/publish-stag
 one same-repository pull request head, projects an explicitly selected
 `fix-review-findings` skill into the sandbox, treats every review comment as
 untrusted data, verifies changes independently, and requires one explicit
-outcome per unresolved thread. Threads that are fixed, rejected, or concretely
-deferred get an idempotent reply and are resolved. Threads marked `needs-human`
-get a reply and stay open.
+outcome per unresolved thread. Host verification, not the model's proposal,
+decides whether a finding can be published. The CLI defaults to `patch`;
+`--publish` is the explicit gate required before any remote write, and
+`--candidate-id <id>` resumes an existing retained candidate and its effect
+journal instead of starting a new intake. `--delivery-mode` selects the
+delivery:
+
+- `patch` (default) and `evidence-only` retain the candidate and verification
+  evidence locally; neither writes commits, pushes, replies, or resolutions
+  remotely.
+- `commit` with `--publish` commits and pushes changed files to the authorized
+  pull request, then replies to and resolves host-verified findings;
+  `needs-human` findings stay open.
+- `follow-up-pr` with `--publish` commits and pushes the candidate on a
+  separate branch, then opens or reuses a follow-up pull request; it does not
+  reply to or resolve the original threads. The pipeline requires an explicit
+  selected follow-up base SHA, but this CLI does not currently expose that
+  input.
 
 ```sh
 bun run review-agent -- https://github.com/OWNER/REPO/pull/123 \
   --verify "bun test" \
-  --skill /absolute/path/to/fix-review-findings/SKILL.md
+  --skill /absolute/path/to/fix-review-findings/SKILL.md \
+  --publish --delivery-mode commit
 ```
+
+Add `--candidate-id <id>` to that command when resuming or recovering a
+retained candidate.
 
 **Operator console.** An [agent-native](https://www.npmjs.com/package/@agent-native/core)
 app under [`ui/`](ui/) (see [Provenance](#provenance)). Credentials stay

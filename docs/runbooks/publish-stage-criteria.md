@@ -100,6 +100,39 @@ Before raising stage:
 
 When stage **and** policy are `publish_allowed`, the same agent may push and reply/resolve under existing gates; failures must leave redacted receipts and must not retry-storm.
 
+## Review delivery and recovery
+
+The host retains a repair candidate under `review-candidates/` with the
+authorized base/head, patch, changed files, findings, verification metadata,
+and evidence-token references. Host verification records and plans are stored
+under `review-verifications/` and `review-verification-plans/`. The effect
+journal under `review-effects/` records the delivery plan, effect
+intent/confirmation state, and resume cursor. Use `--candidate-id <id>` to
+load these records for a resumed run; do not edit or remove them by hand.
+Publication uses host verification, not the model's proposal, as its closure
+authority.
+
+- `patch` (the CLI default) and `evidence-only` retain local evidence and make
+  no remote commit, push, reply, or resolution, even when `--publish` is set.
+- `commit` with `--publish` commits and pushes changed files to the authorized
+  pull request, then replies to and resolves host-verified findings.
+  `needs-human` findings remain open.
+- `follow-up-pr` with `--publish` commits and pushes the candidate on a
+  separate branch, then opens or reuses a follow-up pull request. It does not
+  reply to or resolve the original threads. The pipeline requires an explicit
+  selected follow-up base SHA; the current CLI does not expose that input.
+
+When a resumed run finds that a push response was lost, it acknowledges the
+push effect if the remote branch is already at the expected commit. If the
+remote state cannot prove the effect, the ambiguous journal entry stops the
+run rather than issuing an unsafe duplicate push. A lost reply is recovered
+similarly: an existing marked reply is matched and its URL is recorded in the
+journal; an ambiguous or confirmed effect without that matching reply stops
+for reconciliation instead of posting a duplicate. A follow-up PR is matched
+by its candidate ID and digest marker plus the expected branch and commit, so
+the existing marked PR is reused; a conflicting PR on that branch fails closed.
+
+
 ## Review artifact retention
 
 The Shipwright host owns cleanup of durable review candidates, verification
