@@ -60,11 +60,17 @@ for (const attack of ["branch", "head"] as const) {
         verify: async () => ({ exitCode: 0 }), quiesce: async () => {}, destroy: async () => {},
         inspectChanges: (sha) => actual.inspectChanges(sha),
         assertRunIdentity: (sha, branch) => actual.assertRunIdentity(sha, branch),
+        assertCommitIncluded: async () => {},
         commit: async (message) => { commits++; return actual.commit(message); },
         push: async (branch) => { pushes++; await git("push", "origin", branch); },
       };
       const failure = await runReviewAgent({ pullRequestUrl: authorized.pullRequest.url,
-        verifyCommand: "fixture-check", publish: true, timeoutMinutes: 1 }, {
+        verifyCommand: "fixture-check", publish: true, deliveryMode: "commit",
+        ownership: {
+          mode: "explicit-handoff", ownerId: "shipwright", fromOwnerId: "acme",
+          handoffId: "handoff-1", authorizedBy: "operator", source: "operator",
+        },
+        timeoutMinutes: 1 }, {
         execution: { runtime: "agentos", software: "pi", provider: "kimi", model: "fixture" },
         skill: { name: "fix-review-findings", content: "fixture", sha256: "abc123" },
         candidateRoot: join(root, "candidates"), authorize: async () => authorized,

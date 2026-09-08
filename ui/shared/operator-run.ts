@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { reviewScopeSchema } from "./agent-definition";
 
+import type { ReviewOwnershipAuthorization, ReviewRepairLifecycle } from "../../src/pipeline/repair-candidate";
 import type { RunExecution } from "../../src/pipeline/receipt";
 import { redactSecrets } from "../../src/pipeline/secret-safety";
 
@@ -117,6 +118,27 @@ export const reviewDeliveryModeSchema = z.enum([
   "evidence-only",
 ]);
 
+export const reviewOwnershipSchema = z.discriminatedUnion("mode", [
+  z.object({
+    mode: z.literal("local-owner"),
+    ownerId: z.string().trim().min(1).max(160),
+    source: z.enum(["operator", "linear"]),
+  }),
+  z.object({
+    mode: z.literal("explicit-handoff"),
+    ownerId: z.string().trim().min(1).max(160),
+    fromOwnerId: z.string().trim().min(1).max(160),
+    handoffId: z.string().trim().min(1).max(256),
+    authorizedBy: z.string().trim().min(1).max(160),
+    source: z.enum(["operator", "linear"]),
+  }),
+]);
+
+export const reviewFixGroupsSchema = z.array(z.object({
+  groupId: z.string().trim().min(1).max(160),
+  findingIds: z.array(z.string().trim().min(1).max(160)).min(1).max(512),
+})).max(512);
+
 export const operatorRunRequestSchema = z
   .object({
     mode: z.enum(["issue", "review"]).default("issue"),
@@ -131,6 +153,8 @@ export const operatorRunRequestSchema = z
     fromRunId: z.string().trim().max(64).optional(),
     candidateId: z.string().trim().max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/).optional(),
     deliveryMode: reviewDeliveryModeSchema.optional(),
+    ownership: reviewOwnershipSchema.optional(),
+    fixGroups: reviewFixGroupsSchema.optional(),
     reviewScope: reviewScopeSchema.optional(),
     followUpBaseSha: z.string().trim().regex(/^[0-9a-f]{40}$/).optional(),
     /** Advanced path: treat verifyCommand as raw; not persisted on durable records. */
@@ -142,6 +166,25 @@ export const operatorRunRequestSchema = z
         code: "custom",
         path: ["publishConfirmed"],
         message: "Publishing requires explicit confirmation.",
+      });
+    }
+    if (value.publish && value.mode === "review" && !value.ownership) {
+      context.addIssue({
+        code: "custom",
+        path: ["ownership"],
+        message: "Publishing review repairs requires ownership authorization.",
+      });
+    }
+    if (
+      value.publish
+      && value.mode === "review"
+      && value.deliveryMode === "commit"
+      && value.ownership?.mode !== "explicit-handoff"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["ownership"],
+        message: "Direct review commits require an explicit ownership handoff.",
       });
     }
     if (value.fromRunId) {
@@ -219,7 +262,19 @@ export interface OperatorRunReceipt {
     stdoutTail?: string;
     stderrTail?: string;
   };
+  lifecycle?: ReviewRepairLifecycle;
+  ownership?: ReviewOwnershipAuthorization;
+  integrationVerification?: {
+    baseSha: string;
+    headSha: string;
+    command: string;
+    exitCode: number | null;
+    passed: boolean;
+    stdoutTail?: string;
+    stderrTail?: string;
+  };
   commitSha?: string;
+  resultingHeadSha?: string;
   followUpPullRequestUrl?: string;
   pullRequestUrl?: string;
   deliveryMode?: "patch" | "commit" | "follow-up-pr" | "evidence-only";
@@ -228,6 +283,14 @@ export interface OperatorRunReceipt {
   skillSha256?: string;
   threadResults?: Array<{
     threadId: string;
+    source?: {
+      reviewer: string;
+      commentId: string;
+      commentUrl: string;
+      reviewIds: string[];
+    };
+    fixGroupId?: string;
+    fixCommitSha?: string;
     /** Model proposal, retained for audit but never closure authority. */
     outcome: string;
     proposedOutcome: string;
@@ -895,6 +958,7 @@ export function hydrateIntakeFromRecord(record: OperatorRunRecord): {
   advancedOpen: boolean;
   candidateId?: string;
   deliveryMode?: OperatorRunRequest["deliveryMode"];
+  ownership?: ReviewOwnershipAuthorization;
 } {
   const presetId = (record.request.presetId ?? "").trim();
   const useRawVerify = !presetId;
@@ -912,6 +976,9 @@ export function hydrateIntakeFromRecord(record: OperatorRunRecord): {
       : {}),
     ...(record.request.deliveryMode
       ? { deliveryMode: record.request.deliveryMode }
+      : {}),
+    ...(record.request.ownership
+      ? { ownership: record.request.ownership }
       : {}),
   };
 }

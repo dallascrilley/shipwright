@@ -122,6 +122,56 @@ describe("review candidate persistence", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  test("retains host source, shared fix groups, and immutable run provenance", () => {
+    const source = {
+      reviewer: "reviewer-1",
+      commentId: "comment-1",
+      commentUrl: "https://github.com/acme/widget/pull/1#discussion_r1",
+      reviewIds: ["review-1"],
+    };
+    const value = candidate({
+      findings: [
+        {
+          findingId: "thread-1",
+          proposedOutcome: "fixed",
+          summary: "One duplicate finding.",
+          evidence: "The shared repair covers this finding.",
+          reproduction: "Run the focused verification command.",
+          affectedFiles: ["assets/icon.bin"],
+          source,
+          fixGroupId: "shared-repair",
+        },
+        {
+          findingId: "thread-2",
+          proposedOutcome: "fixed",
+          summary: "Another duplicate finding.",
+          evidence: "The shared repair covers this finding too.",
+          reproduction: "Run the focused verification command.",
+          affectedFiles: ["assets/icon.bin"],
+          source: { ...source, commentId: "comment-2" },
+          fixGroupId: "shared-repair",
+        },
+      ],
+      fixGroups: [{ groupId: "shared-repair", findingIds: ["thread-1", "thread-2"] }],
+      provenance: { taskId: "WKS-2245", runId: "run-1", actor: "operator" },
+    });
+    expect(value.fixGroups).toEqual([
+      { groupId: "shared-repair", findingIds: ["thread-1", "thread-2"] },
+    ]);
+    expect(value.findings.map((finding) => finding.source?.commentId)).toEqual([
+      "comment-1",
+      "comment-2",
+    ]);
+    expect(value.provenance).toEqual({
+      taskId: "WKS-2245",
+      runId: "run-1",
+      actor: "operator",
+    });
+    expect(candidate({
+      ...value,
+      provenance: { ...value.provenance!, actor: "different-actor" },
+    }).candidateDigest).not.toBe(value.candidateDigest);
+  });
 
   test("rejects candidate path traversal and binds proof lookup to the opaque record id", async () => {
     expect(() => reviewCandidatePath("/tmp", "../outside")).toThrow(/identifier-safe/);
@@ -205,6 +255,14 @@ describe("review effect journal", () => {
       baseSha: BASE_SHA,
       headBranch: "repair/1",
       authorizedHeadSha: HEAD_SHA,
+      ownership: {
+        mode: "explicit-handoff" as const,
+        ownerId: "shipwright",
+        fromOwnerId: "octo-org",
+        handoffId: "handoff-1",
+        authorizedBy: "operator",
+        source: "operator" as const,
+      },
     };
     try {
       const journal = await FileReviewEffectJournalStore.open(path, value);
@@ -213,6 +271,7 @@ describe("review effect journal", () => {
       await expect(journal.ensureDeliveryPlan({
         ...plan,
         deliveryMode: "follow-up-pr",
+        followUpBaseBranch: "feature",
         followUpBaseSha: HEAD_SHA,
       })).rejects.toThrow("changed after authorization");
 

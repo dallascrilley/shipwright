@@ -103,37 +103,94 @@ When stage **and** policy are `publish_allowed`, the same agent may push and rep
 ## Review delivery and recovery
 
 The host retains a repair candidate under `review-candidates/` with the
-authorized base/head, patch, changed files, findings, verification metadata,
-and evidence-token references. Host verification records and plans are stored
+authorized base/head, patch, changed files, host-derived finding source,
+task/run/actor provenance, fix-group assignment, verification metadata, and
+evidence-token references. Host verification records and plans are stored
 under `review-verifications/` and `review-verification-plans/`. The effect
-journal under `review-effects/` records the delivery plan, effect
-intent/confirmation state, and resume cursor. Use `--candidate-id <id>` to
-load these records for a resumed run; do not edit or remove them by hand.
-Publication uses host verification, not the model's proposal, as its closure
-authority.
+journal under `review-effects/` records the ownership-bound delivery plan,
+effect intent/confirmation state, and resume cursor. Use `--candidate-id <id>`
+to load these records for a resumed run; do not edit or remove them by hand.
+Publication uses host verification, not the model's proposal or repair
+identity, as its closure authority.
 
 - `patch` (the CLI default) and `evidence-only` retain local evidence and make
   no remote commit, push, reply, or resolution, even when `--publish` is set.
-- `commit` with `--publish` commits and pushes changed files to the authorized
+- `follow-up-pr` is the default for a published review run. It requires
+  `--owner-id`, commits the candidate on a separate branch, and opens or
+  reuses a follow-up PR whose base is the original PR's head branch. It does
+  not reply to or resolve the original threads. The selected base SHA defaults
+  to the retained candidate's immutable authorized head; any supplied base
+  must match it. Replay uses the original PR head without an implicit rebase.
+- `commit` requires `--owner-id`, `--handoff-from-owner`, `--handoff-id`, and
+  `--authorized-by`. It commits and pushes changed files to the authorized
   pull request, then replies to and resolves host-verified findings.
   `needs-human` findings remain open.
-- `follow-up-pr` with `--publish` commits and pushes the candidate on a
-  separate branch, then opens or reuses a follow-up pull request. It does not
-  reply to or resolve the original threads. The selected base SHA defaults to
-  the retained candidate's immutable authorized head; any supplied base must
-  match it. Replay uses the original pull request's base branch without an
-  implicit rebase, and the effect journal binds the exact delivery plan.
 
-When a resumed run finds that a push response was lost, it acknowledges the
-push effect if the remote branch is already at the expected commit. If the
-remote state cannot prove the effect, the ambiguous journal entry stops the
-run rather than issuing an unsafe duplicate push. A lost reply is recovered
-similarly: an existing marked reply is matched and its URL is recorded in the
-journal; an ambiguous or confirmed effect without that matching reply stops
-for reconciliation instead of posting a duplicate. A follow-up PR is matched
-by its candidate ID and digest marker plus the expected branch and commit, so
-the existing marked PR is reused; a conflicting PR on that branch fails closed.
+Missing or conflicting ownership, stale candidate/review content, remote
+base/head movement, and effect-journal drift fail closed. A candidate with
+multiple independent fix groups must be delivered through separately scoped
+candidates; duplicate findings may share one explicitly host-assigned group
+and one commit. Every candidate commit is bound to its source findings in the
+receipt.
 
+Direct commit lifecycle is `proposed` → `integrated` → `verified`: after the
+push, the host proves the remote head contains the generated commit, runs the
+verification command in a fresh host workspace at that exact resulting head,
+and only then replies or resolves. A failed post-integration check leaves the
+original findings open. Follow-up lifecycle is `proposed` → `delivered`; the
+original branch and findings remain open until the follow-up is integrated by
+its normal owner.
+
+## Repair-publication rollout (staging only)
+
+This source change does not activate production, unattended publication, or
+any Hub2 workflow. Perform the following only against an explicitly selected
+allowlisted staging PR after the stage/policy gates above are satisfied.
+
+### Prerequisites
+
+- Exact deployed source revision and receipt directory recorded.
+- `dry_run` proof complete; verification command is known-good for the target.
+- Operator can identify the original PR owner and the candidate's exact
+  authorized head SHA.
+- Local-owner authorization is recorded for follow-up delivery, or a complete
+  explicit handoff is recorded for direct delivery.
+- Candidate scope is one bounded fix group; independent groups have separate
+  candidate IDs and runs.
+- No concurrent writer owns the original PR head; branch protections remain
+  enabled.
+
+### Activation
+
+1. Start with a dry-run or `patch` delivery and retain its candidate ID.
+2. Inspect the receipt's source, provenance, fix group, verification record,
+   authorized base/head, and changed files.
+3. For the safer route, publish with `--owner-id <original-owner>` and
+   `--delivery-mode follow-up-pr` (or omit the mode).
+4. Use direct `--delivery-mode commit` only with the complete explicit handoff
+   fields. Never infer ownership from a review comment or model output.
+5. Confirm the effect journal and receipt before treating delivery as complete.
+
+### Live validation
+
+For the selected staging PR, verify that the original head did not change for
+follow-up delivery, the follow-up PR targets the original head branch, its
+head equals the candidate commit, and the original findings remain open.
+For direct delivery, verify the receipt contains the exact resulting head,
+commit-inclusion proof, and a passing fresh-workspace integration check before
+confirming replies/resolutions. Re-run the same operation with a moved head or
+conflicting ownership in a safe fixture; it must stop without a new remote
+write. Record the run ID, candidate ID, exact SHAs, effect outcomes, and
+verification exit codes without recording credentials.
+
+### Rollback
+
+Set the deployment stage back to `disabled` (or `dry_run` to keep triggers but
+strip publish authority), restart the service, and disable the selected agent.
+Do not delete candidate/effect evidence. A delivered follow-up remains an
+ordinary PR for its owner to review or close. If a direct commit must be
+reversed, use the repository owner's normal reviewed revert process; Shipwright
+does not force-push or silently rewrite the original branch.
 
 ## Review artifact retention
 

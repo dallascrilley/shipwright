@@ -665,6 +665,17 @@ export class SandboxWorkspace {
       throw new Error("repository Git configuration changed after authorization");
     }
   }
+  async assertCommitIncluded(commitSha: string, headSha: string): Promise<void> {
+    if (!/^[0-9a-f]{40}$/.test(commitSha) || !/^[0-9a-f]{40}$/.test(headSha)) {
+      throw new Error("commit inclusion proof requires valid Git SHAs");
+    }
+    try {
+      await this.hostGit(["merge-base", "--is-ancestor", commitSha, headSha]);
+    } catch {
+      throw new Error("integration head does not contain the generated repair commit");
+    }
+  }
+
 
   async commit(message: string): Promise<string> {
     await this.hostGit(["-c", "core.hooksPath=/dev/null", "add", "--all"]);

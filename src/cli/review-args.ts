@@ -1,3 +1,4 @@
+import type { ReviewOwnershipAuthorization } from "../pipeline/repair-candidate.js";
 export type ReviewDeliveryMode = "patch" | "commit" | "follow-up-pr" | "evidence-only";
 
 export interface ReviewCliArgs {
@@ -7,11 +8,12 @@ export interface ReviewCliArgs {
   publish: boolean;
   deliveryMode?: ReviewDeliveryMode;
   candidateId?: string;
+  ownership?: ReviewOwnershipAuthorization;
   timeoutMinutes: number;
 }
 
 const USAGE =
-  "Usage: bun run review-agent -- <pull-request-url> --verify <command> --skill <SKILL.md> [--publish] [--candidate-id <id>] [--delivery-mode patch|commit|follow-up-pr|evidence-only] [--timeout-minutes <1-120>]";
+  "Usage: bun run review-agent -- <pull-request-url> --verify <command> --skill <SKILL.md> [--publish] [--candidate-id <id>] [--delivery-mode patch|commit|follow-up-pr|evidence-only] [--owner-id <owner>] [--handoff-from-owner <owner>] [--handoff-id <id>] [--authorized-by <actor>] [--timeout-minutes <1-120>]";
 
 export function parseReviewArgs(argv: string[]): ReviewCliArgs {
   const pullRequestUrl = argv[0];
@@ -21,6 +23,10 @@ export function parseReviewArgs(argv: string[]): ReviewCliArgs {
   let publish = false;
   let deliveryMode: ReviewDeliveryMode | undefined;
   let candidateId: string | undefined;
+  let ownerId: string | undefined;
+  let handoffFromOwnerId: string | undefined;
+  let handoffId: string | undefined;
+  let authorizedBy: string | undefined;
   let timeoutMinutes = 30;
   for (let index = 1; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -37,6 +43,22 @@ export function parseReviewArgs(argv: string[]): ReviewCliArgs {
         throw new Error(`invalid candidate id: ${value ?? "(missing)"}`);
       }
       candidateId = value;
+    } else if (arg === "--owner-id") {
+      const value = argv[++index]?.trim();
+      if (!value || value.length > 160) throw new Error(`invalid owner id: ${value ?? "(missing)"}`);
+      ownerId = value;
+    } else if (arg === "--handoff-from-owner") {
+      const value = argv[++index]?.trim();
+      if (!value || value.length > 160) throw new Error(`invalid handoff source owner: ${value ?? "(missing)"}`);
+      handoffFromOwnerId = value;
+    } else if (arg === "--handoff-id") {
+      const value = argv[++index]?.trim();
+      if (!value || value.length > 256) throw new Error(`invalid handoff id: ${value ?? "(missing)"}`);
+      handoffId = value;
+    } else if (arg === "--authorized-by") {
+      const value = argv[++index]?.trim();
+      if (!value || value.length > 160) throw new Error(`invalid authorizer: ${value ?? "(missing)"}`);
+      authorizedBy = value;
     } else if (arg === "--timeout-minutes") {
       const value = argv[++index];
       if (!value || !/^\d+$/.test(value)) {
@@ -49,6 +71,30 @@ export function parseReviewArgs(argv: string[]): ReviewCliArgs {
   }
   if (!verifyCommand?.trim()) throw new Error(`--verify is required\n${USAGE}`);
   if (!skillPath?.trim()) throw new Error(`--skill is required\n${USAGE}`);
+  const hasHandoffField = Boolean(handoffFromOwnerId || handoffId || authorizedBy);
+  let ownership: ReviewOwnershipAuthorization | undefined;
+  if (hasHandoffField) {
+    if (!ownerId || !handoffFromOwnerId || !handoffId || !authorizedBy) {
+      throw new Error("--owner-id, --handoff-from-owner, --handoff-id, and --authorized-by are required for an explicit handoff");
+    }
+    ownership = {
+      mode: "explicit-handoff",
+      ownerId,
+      fromOwnerId: handoffFromOwnerId,
+      handoffId,
+      authorizedBy,
+      source: "operator",
+    };
+  } else if (ownerId) {
+    ownership = { mode: "local-owner", ownerId, source: "operator" };
+  }
+  const selectedDeliveryMode = deliveryMode ?? (publish ? "follow-up-pr" : "patch");
+  if (publish && (selectedDeliveryMode === "commit" || selectedDeliveryMode === "follow-up-pr") && !ownership) {
+    throw new Error("publishing review repairs requires ownership authorization");
+  }
+  if (publish && selectedDeliveryMode === "commit" && ownership?.mode !== "explicit-handoff") {
+    throw new Error("direct review commit requires an explicit ownership handoff");
+  }
   if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > 120) {
     throw new Error("timeout must be an integer between 1 and 120 minutes");
   }
@@ -59,6 +105,7 @@ export function parseReviewArgs(argv: string[]): ReviewCliArgs {
     publish,
     ...(deliveryMode ? { deliveryMode } : {}),
     ...(candidateId ? { candidateId } : {}),
+    ...(ownership ? { ownership } : {}),
     timeoutMinutes,
   };
 }

@@ -32,6 +32,8 @@ import {
   type ReviewEffectJournalStore,
   type ReviewEffectReceipt,
   type ReviewFindingVerificationRecord,
+  type ReviewFixGroup,
+  type ReviewOwnershipAuthorization,
   type ReviewVerificationPlanStore,
   type ReviewVerificationResult,
 } from "./repair-candidate.js";
@@ -99,6 +101,8 @@ export interface ReviewWorkspacePort {
   quiesce(): Promise<void>;
   assertRunIdentity(headSha: string, branch: string): Promise<void>;
   commit(message: string): Promise<string>;
+  /** Proves a pushed integration head contains the exact generated commit. */
+  assertCommitIncluded?(commitSha: string, headSha: string): Promise<void>;
   /** Reconcile a confirmed commit, recreating it from the retained candidate when needed. */
   restoreCommittedReview?(input: {
     commitSha: string;
@@ -195,6 +199,12 @@ export interface ReviewRunRequest {
   reviewScope?: {
     findingIds: readonly string[];
   };
+  fixGroups?: readonly ReviewFixGroup[];
+  ownership?: ReviewOwnershipAuthorization;
+  provenance?: {
+    taskId: string;
+    actor: string;
+  };
   followUpBaseSha?: string;
   publish: boolean;
   deliveryMode?: ReviewDeliveryMode;
@@ -205,7 +215,7 @@ export async function runReviewAgent(
   deps: ReviewPipelineDependencies,
 ): Promise<ReviewRunReceipt> {
   const runId = deps.runId ?? randomBytes(8).toString("hex");
-  const deliveryMode = request.deliveryMode ?? (request.publish ? "commit" : "patch");
+  const deliveryMode = request.deliveryMode ?? (request.publish ? "follow-up-pr" : "patch");
   const receiptPath = join(
     deps.artifactRoot ?? ".artifacts/shipwright/review-receipts",
     runId,
@@ -216,6 +226,8 @@ export async function runReviewAgent(
     phase: "intake",
     pullRequestUrl: request.pullRequestUrl,
     deliveryMode,
+    lifecycle: "proposed",
+    ...(request.ownership ? { ownership: structuredClone(request.ownership) } : {}),
     ...(request.candidateId ? { candidateId: request.candidateId } : {}),
     execution: deps.execution,
     skill: { name: deps.skill.name, sha256: deps.skill.sha256 },
@@ -386,6 +398,32 @@ export async function runReviewAgent(
     }
     if (!retainedCandidate && deps.candidateRoot) {
       const patch = changes.patchData ?? new TextEncoder().encode(changes.patch);
+      const candidateFindings = outcomes.map((outcome) => {
+        const thread = threads.find((item) => item.id === outcome.threadId)!;
+        const sourceComment = thread.comments.find((comment) => !isGeneratedReviewReply(comment, thread.id));
+        return {
+          findingId: outcome.threadId,
+          originalContentDigest: reviewThreadContentDigest(thread),
+          proposedOutcome: outcome.outcome,
+          summary: outcome.summary,
+          evidence: outcome.evidence,
+          reproduction: outcome.followUp ?? "",
+          affectedFiles: [thread.path],
+          source: {
+            reviewer: sourceComment?.author ?? "unknown",
+            commentId: sourceComment?.id ?? thread.id,
+            commentUrl: sourceComment?.url ?? request.pullRequestUrl,
+            reviewIds: authorized.reviews.map((review) => review.id),
+          },
+          ...(outcome.repairIdentity ? { repairIdentity: outcome.repairIdentity } : {}),
+        };
+      });
+      const fixGroups = normalizeReviewFixGroups(request.fixGroups, candidateFindings.map((finding) => finding.findingId));
+      const candidateProvenance = {
+        taskId: request.provenance?.taskId ?? `${authorized.pullRequest.owner}/${authorized.pullRequest.repo}#${authorized.pullRequest.number}`,
+        runId,
+        actor: request.provenance?.actor ?? "shipwright",
+      };
       retainedCandidate = createReviewCandidate({
         candidateId: runId,
         authorizedBaseRef: `refs/heads/${authorized.pullRequest.baseBranch}`,
@@ -395,19 +433,12 @@ export async function runReviewAgent(
         resultingTreeSha: changes.resultingTreeSha ?? "",
         patch,
         changedFiles: changes.changedFiles,
-        findings: outcomes.map((outcome) => {
-          const thread = threads.find((item) => item.id === outcome.threadId)!;
-          return {
-            findingId: outcome.threadId,
-            originalContentDigest: reviewThreadContentDigest(thread),
-            proposedOutcome: outcome.outcome,
-            summary: outcome.summary,
-            evidence: outcome.evidence,
-            reproduction: outcome.followUp ?? "",
-            affectedFiles: [thread.path],
-            ...(outcome.repairIdentity ? { repairIdentity: outcome.repairIdentity } : {}),
-          };
-        }),
+        findings: candidateFindings.map((finding) => ({
+          ...finding,
+          fixGroupId: fixGroups.find((group) => group.findingIds.includes(finding.findingId))!.groupId,
+        })),
+        fixGroups,
+        provenance: candidateProvenance,
         verification: {
           command: request.verifyCommand,
           exitCode: receipt.verification.exitCode,
@@ -554,8 +585,11 @@ export async function runReviewAgent(
           ? { disposition: "needs-human" as const, status: "not-required" as const, reason: "model requested human review" }
           : { disposition: "pending" as const, status: "pending" as const, reason: "missing durable host verification" }
       );
+      const finding = retainedCandidate?.findings.find((item) => item.findingId === outcome.threadId);
       return {
         threadId: outcome.threadId,
+        ...(finding?.source ? { source: structuredClone(finding.source) } : {}),
+        ...(finding?.fixGroupId ? { fixGroupId: finding.fixGroupId } : {}),
         outcome: outcome.outcome,
         proposedOutcome: outcome.outcome,
         verifiedDisposition: verified.disposition,
@@ -584,6 +618,18 @@ export async function runReviewAgent(
     if (!retainedCandidate || !deps.candidateRoot || !effectJournal) {
       throw new Error("publication requires a durable review candidate and effect journal");
     }
+    if (deliveryMode === "commit" || deliveryMode === "follow-up-pr") {
+      assertReviewOwnership(request.ownership, deliveryMode, authorized.pullRequest.owner);
+    }
+    const selectedFindingIds = new Set(expectedThreadIds);
+    const selectedFixGroupCount = retainedCandidate.fixGroups
+      ? retainedCandidate.fixGroups.filter((group) =>
+        group.findingIds.some((findingId) => selectedFindingIds.has(findingId)),
+      ).length
+      : 1;
+    if (selectedFixGroupCount > 1) {
+      throw new Error("independent review fix groups require separately scoped candidates");
+    }
     const followUpBaseSha =
       deliveryMode === "follow-up-pr"
         ? request.followUpBaseSha ?? retainedCandidate.authorizedHeadSha
@@ -610,7 +656,13 @@ export async function runReviewAgent(
       baseSha: authorized.pullRequest.baseSha,
       headBranch: authorized.pullRequest.headBranch,
       authorizedHeadSha: originalHeadSha,
-      ...(followUpBaseSha !== undefined ? { followUpBaseSha } : {}),
+      ...(request.ownership ? { ownership: structuredClone(request.ownership) } : {}),
+      ...(deliveryMode === "follow-up-pr"
+        ? {
+            followUpBaseBranch: authorized.pullRequest.headBranch,
+            followUpBaseSha: followUpBaseSha!,
+          }
+        : {}),
     };
     const authorizedDeliveryPlan = await effectJournal.ensureDeliveryPlan(deliveryPlan);
 
@@ -658,7 +710,10 @@ export async function runReviewAgent(
           await effectJournal.ackEffect({ effectId: pushEffectId, commitSha: remoteHead });
         }
       }
-      if (changes.changedFiles.length > 0 && remoteHead === originalHeadSha) {
+      if (
+        changes.changedFiles.length > 0
+        && (remoteHead === originalHeadSha || remoteHead === confirmedCommitSha || remoteHead === confirmedPushSha)
+      ) {
         phase = receipt.phase = "publish";
         await emitProgress();
         const commitEffectId = `${operationId}:commit`;
@@ -735,6 +790,35 @@ export async function runReviewAgent(
         }
         const pushedHead = await authorized.repositoryClient.getBranchSha(authorized.pullRequest.headBranch);
         if (pushedHead !== receipt.commitSha) throw new Error("pushed pull request head does not match the generated commit");
+        if (!receipt.commitSha) throw new Error("direct review publication did not produce a commit");
+        if (!workspace.assertCommitIncluded) {
+          throw new Error("direct review publication lacks commit inclusion proof");
+        }
+        await workspace.assertCommitIncluded(receipt.commitSha, pushedHead);
+        receipt.lifecycle = "integrated";
+        const integration = await verifyIntegratedReviewHead({
+          authorized,
+          deps,
+          commitSha: receipt.commitSha,
+          headSha: pushedHead,
+          command: request.verifyCommand,
+          timeoutMs: request.timeoutMinutes * 60_000,
+        });
+        receipt.integrationVerification = {
+          baseSha: originalHeadSha,
+          headSha: pushedHead,
+          command: request.verifyCommand,
+          exitCode: integration.exitCode ?? null,
+          passed: integration.exitCode === 0,
+          ...(integration.stdout ? { stdoutTail: redactSecrets(truncateTail(integration.stdout)) } : {}),
+          ...(integration.stderr ? { stderrTail: redactSecrets(truncateTail(integration.stderr)) } : {}),
+        };
+        if (integration.exitCode !== 0) throw new Error("post-integration verification failed");
+        receipt.resultingHeadSha = pushedHead;
+        receipt.lifecycle = "verified";
+        for (const result of receipt.threadResults) {
+          result.fixCommitSha = receipt.commitSha;
+        }
         await emitProgress();
       }
     } else if (deliveryMode === "follow-up-pr") {
@@ -880,7 +964,7 @@ export async function runReviewAgent(
             repo: authorized.pullRequest.repo,
             title: `Follow-up for #${authorized.pullRequest.number}`,
             branch: followUpBranch,
-            baseBranch: authorized.pullRequest.baseBranch,
+            baseBranch: authorized.pullRequest.headBranch,
             commitSha: followUpCommitSha,
             candidateId: retainedCandidate.candidateId,
             candidateDigest: retainedCandidate.candidateDigest,
@@ -912,6 +996,10 @@ export async function runReviewAgent(
       if (!followUpUrl) throw new Error("follow-up pull request URL is unavailable for reconciliation");
       receipt.commitSha = followUpCommitSha;
       receipt.followUpPullRequestUrl = followUpUrl;
+      receipt.lifecycle = "delivered";
+      for (const result of receipt.threadResults) {
+        result.fixCommitSha = followUpCommitSha;
+      }
       // Follow-up publication never replies to or resolves the original
       // findings. The real follow-up PR is linked by the receipt/effect journal.
       receipt.remainingOpenThreadIds = expectedThreadIds;
@@ -1152,8 +1240,8 @@ async function revalidateConfirmedFollowUpPullRequest(
   const marker = `Shipwright-Candidate: ${candidateId} Digest: ${candidateDigest}`;
   if (
     current.state !== "open"
-    || current.baseBranch !== authorized.pullRequest.baseBranch
-    || current.baseSha !== authorized.pullRequest.baseSha
+    || current.baseBranch !== authorized.pullRequest.headBranch
+    || current.baseSha !== authorized.pullRequest.headSha
     || current.headBranch !== followUpBranch
     || current.headSha !== followUpCommitSha
     || current.headOwner.toLowerCase() !== authorized.pullRequest.owner.toLowerCase()
@@ -1214,4 +1302,79 @@ async function abortable<T>(operation: Promise<T>, signal?: AbortSignal): Promis
     signal.addEventListener("abort", abort, { once: true });
     operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
   });
+}
+
+function normalizeReviewFixGroups(
+  input: readonly ReviewFixGroup[] | undefined,
+  findingIds: readonly string[],
+): ReviewFixGroup[] {
+  if (!input) {
+    return [{
+      groupId: "candidate",
+      findingIds: [...findingIds],
+    }];
+  }
+  const known = new Set(findingIds);
+  const assigned = new Set<string>();
+  const groups = input.map((group) => ({
+    groupId: group.groupId,
+    findingIds: [...group.findingIds],
+  }));
+  for (const group of groups) {
+    if (!group.groupId.trim() || group.findingIds.length === 0) {
+      throw new Error("review fix groups must have bounded non-empty identifiers");
+    }
+    for (const findingId of group.findingIds) {
+      if (!known.has(findingId) || assigned.has(findingId)) {
+        throw new Error(`review fix groups do not partition selected findings: ${findingId}`);
+      }
+      assigned.add(findingId);
+    }
+  }
+  if (assigned.size !== known.size) throw new Error("review fix groups must cover selected findings");
+  return groups;
+}
+
+function assertReviewOwnership(
+  ownership: ReviewOwnershipAuthorization | undefined,
+  deliveryMode: ReviewDeliveryMode,
+  repositoryOwner: string,
+): void {
+  if (!ownership) throw new Error(`${deliveryMode} delivery requires explicit review ownership authorization`);
+  if (deliveryMode === "commit" && ownership.mode !== "explicit-handoff") {
+    throw new Error("direct review commit requires an explicit ownership handoff");
+  }
+  if (ownership.mode === "local-owner") {
+    if (ownership.ownerId.toLowerCase() !== repositoryOwner.toLowerCase()) {
+      throw new Error("review ownership does not match the pull request owner");
+    }
+  } else if (ownership.fromOwnerId.toLowerCase() !== repositoryOwner.toLowerCase()) {
+    throw new Error("review handoff source does not match the pull request owner");
+  }
+}
+
+async function verifyIntegratedReviewHead(input: {
+  authorized: AuthorizedPullRequest;
+  deps: ReviewPipelineDependencies;
+  commitSha: string;
+  headSha: string;
+  command: string;
+  timeoutMs: number;
+}): Promise<{ exitCode?: number | null; stdout?: string; stderr?: string }> {
+  const integrationWorkspace = await input.deps.createWorkspace();
+  try {
+    await input.authorized.withInstallationToken((token) =>
+      integrationWorkspace.clonePullRequest({
+        owner: input.authorized.pullRequest.owner,
+        repo: input.authorized.pullRequest.repo,
+        headBranch: input.authorized.pullRequest.headBranch,
+        headSha: input.headSha,
+        token,
+      }),
+    );
+    await integrationWorkspace.prepareForAgent();
+    return await integrationWorkspace.verify(input.command, input.timeoutMs);
+  } finally {
+    await integrationWorkspace.destroy();
+  }
 }

@@ -3,11 +3,25 @@ import { dirname } from "node:path";
 import type { RunExecution } from "./receipt.js";
 import { redactSecrets } from "./receipt.js";
 import type { ReviewOutcome } from "./review-outcomes.js";
+import type {
+  ReviewCandidateDeliveryMode,
+  ReviewOwnershipAuthorization,
+  ReviewRepairLifecycle,
+} from "./repair-candidate.js";
 
 export type ReviewRunPhase = "intake" | "workspace" | "agent" | "verify" | "policy" | "publish" | "threads" | "complete";
 
 export interface ReviewThreadResult {
   threadId: string;
+  /** Host-derived review source; retained for actor and comment traceability. */
+  source?: {
+    reviewer: string;
+    commentId: string;
+    commentUrl: string;
+    reviewIds: string[];
+  };
+  fixGroupId?: string;
+  fixCommitSha?: string;
   /** Model proposal, retained for audit but never used as closure authority. */
   outcome: ReviewOutcome["outcome"];
   proposedOutcome: ReviewOutcome["outcome"];
@@ -25,6 +39,7 @@ export interface ReviewThreadResult {
   resolved: boolean;
 }
 
+
 export interface ReviewRunReceipt {
   runId: string;
   phase: ReviewRunPhase;
@@ -36,7 +51,9 @@ export interface ReviewRunReceipt {
   headBranch?: string;
   candidateId?: string;
   candidateDigest?: string;
-  deliveryMode: "patch" | "commit" | "follow-up-pr" | "evidence-only";
+  lifecycle: ReviewRepairLifecycle;
+  ownership?: ReviewOwnershipAuthorization;
+  deliveryMode: ReviewCandidateDeliveryMode;
   changedFiles: string[];
   verification: {
     command: string;
@@ -45,7 +62,17 @@ export interface ReviewRunReceipt {
     stdoutTail?: string;
     stderrTail?: string;
   };
+  integrationVerification?: {
+    baseSha: string;
+    headSha: string;
+    command: string;
+    exitCode: number | null;
+    passed: boolean;
+    stdoutTail?: string;
+    stderrTail?: string;
+  };
   commitSha?: string;
+  resultingHeadSha?: string;
   followUpPullRequestUrl?: string;
   threadResults: ReviewThreadResult[];
   remainingOpenThreadIds: string[];

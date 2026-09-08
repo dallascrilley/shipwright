@@ -33,6 +33,7 @@ afterEach(async () => {
 function fixture(options: {
   changes?: string[];
   verifyExit?: number;
+  integrationVerifyExit?: number;
   movedHead?: boolean;
   outcome?: "fixed" | "rejected" | "needs-human";
   artifactMissing?: boolean;
@@ -41,6 +42,7 @@ function fixture(options: {
   const events: string[] = [];
   const changes = options.changes ?? ["src/a.ts"];
   const outcome = options.outcome ?? "fixed";
+  let verifyCalls = 0;
   let remoteHead = "head1";
   let currentCommit = "commit1";
   let followUpHead = "";
@@ -90,8 +92,8 @@ function fixture(options: {
           body: followUpPullRequest.body,
           state: "open",
           draft: false,
-          baseBranch: "main",
-          baseSha: "base1",
+          baseBranch: "feature",
+          baseSha: "head1",
           headBranch: "shipwright/review-run-1",
           headSha: followUpHead,
           headOwner: "acme",
@@ -131,7 +133,16 @@ function fixture(options: {
       }
       return JSON.stringify({ threads: [{ threadId: "thread-1", outcome, summary: "Handled", evidence: "src/a.ts:4" }] });
     },
-    async verify() { events.push("verify"); return { exitCode: options.verifyExit ?? 0 }; },
+    async verify() {
+      events.push("verify");
+      verifyCalls += 1;
+      return {
+        exitCode: verifyCalls > 1
+          ? options.integrationVerifyExit ?? 0
+          : options.verifyExit ?? 0,
+      };
+    },
+    async assertCommitIncluded() { events.push("included"); },
     async inspectChanges() {
       events.push("inspect");
       return {
@@ -259,7 +270,21 @@ function fixture(options: {
   };
 }
 
-const request = { pullRequestUrl: "https://github.com/acme/widget/pull/4", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 };
+const request = {
+  pullRequestUrl: "https://github.com/acme/widget/pull/4",
+  verifyCommand: "bun test",
+  publish: true,
+  deliveryMode: "commit" as const,
+  ownership: {
+    mode: "explicit-handoff" as const,
+    ownerId: "shipwright",
+    fromOwnerId: "acme",
+    handoffId: "handoff-1",
+    authorizedBy: "operator",
+    source: "operator" as const,
+  },
+  timeoutMinutes: 2,
+};
 
 test("verified changes push before replying and resolving", async () => {
   const { deps, events, getReplyBody } = fixture();
@@ -271,8 +296,50 @@ test("verified changes push before replying and resolving", async () => {
   expect(events.indexOf("reply")).toBeLessThan(events.indexOf("resolve"));
   expect(getReplyBody()).toContain("Please add a guard");
   expect(getReplyBody()).toContain("agentos-review-run:run-1");
-  expect(receipt.threadResults).toEqual([expect.objectContaining({ threadId: "thread-1", resolved: true })]);
-  expect(events.at(-1)).toBe("destroy");
+  const result = receipt.threadResults[0]!;
+  expect(result.threadId).toBe("thread-1");
+  expect(result.resolved).toBe(true);
+  expect(result.source).toEqual({
+    reviewer: "reviewer",
+    commentId: "comment-1",
+    commentUrl: "https://example/comment",
+    reviewIds: ["review-1"],
+  });
+  expect(result.fixGroupId).toBe("candidate");
+  expect(result.fixCommitSha).toBe("commit1");
+  expect(receipt.lifecycle).toBe("verified");
+});
+test("direct publication requires explicit ownership before any remote write", async () => {
+  const { deps, events } = fixture();
+  await expect(runReviewAgent({ ...request, ownership: undefined }, deps)).rejects.toThrow(
+    "explicit review ownership authorization",
+  );
+  expect(events).not.toContain("commit");
+  expect(events).not.toContain("push");
+  expect(events).not.toContain("reply");
+  expect(events).not.toContain("resolve");
+});
+
+test("post-integration verification gates review closure", async () => {
+  const { deps, events, receipts } = fixture({ integrationVerifyExit: 1 });
+  await expect(runReviewAgent(request, deps)).rejects.toThrow(
+    "post-integration verification failed",
+  );
+  expect(events).toContain("included");
+  expect(events).toContain("push");
+  expect(events).not.toContain("reply");
+  expect(events).not.toContain("resolve");
+  const failed = receipts.at(-1)!;
+  expect(failed.lifecycle).toBe("integrated");
+  expect(failed.errorMessage).toBe("post-integration verification failed");
+  const integration = failed.integrationVerification as {
+    baseSha?: string;
+    headSha?: string;
+    passed?: boolean;
+  };
+  expect(integration.baseSha).toBe("head1");
+  expect(integration.headSha).toBe("commit1");
+  expect(integration.passed).toBe(false);
 });
 test("recreates a confirmed commit when the unpushed workspace was destroyed", async () => {
   const fixtureValue = fixture();
@@ -300,17 +367,26 @@ test("recreates a confirmed commit when the unpushed workspace was destroyed", a
 });
 
 
-test("publish CLI defaults to commit delivery", async () => {
+test("publish CLI defaults to a guarded follow-up PR", async () => {
   const args = parseReviewArgs([
     request.pullRequestUrl,
     "--verify", request.verifyCommand,
     "--skill", "/skills/fix-review-findings/SKILL.md",
     "--publish",
+    "--owner-id", "acme",
   ]);
   const { deps, events } = fixture();
   const receipt = await runReviewAgent(args, deps);
-  expect(receipt.deliveryMode).toBe("commit");
+  expect(args.deliveryMode).toBeUndefined();
+  expect(args.ownership).toEqual({
+    mode: "local-owner",
+    ownerId: "acme",
+    source: "operator",
+  });
+  expect(receipt.deliveryMode).toBe("follow-up-pr");
+  expect(receipt.followUpPullRequestUrl).toBe("https://github.com/acme/widget/pull/5");
   expect(events).toContain("push");
+  expect(events).not.toContain("reply");
 });
 
 test("valid no-code rejection replies without committing", async () => {
@@ -447,12 +523,17 @@ test("follow-up CLI requests derive and replay the retained candidate base", asy
     "--skill", "/tmp/fix-review-findings/SKILL.md",
     "--publish",
     "--delivery-mode", "follow-up-pr",
+    "--owner-id", "acme",
   ]);
   expect("followUpBaseSha" in cliArgs).toBe(false);
 
   const firstReceipt = await runReviewAgent(cliArgs, deps);
   expect(firstReceipt.followUpPullRequestUrl).toBe("https://github.com/acme/widget/pull/5");
   expect(firstReceipt.candidateId).toBe("run-1");
+  expect(firstReceipt.lifecycle).toBe("delivered");
+  expect(firstReceipt.threadResults).toEqual([
+    expect.objectContaining({ threadId: "thread-1", resolved: false, fixCommitSha: expect.any(String) }),
+  ]);
 
   deps.candidateLoader = {
     async load(candidateId) {
@@ -465,6 +546,7 @@ test("follow-up CLI requests derive and replay the retained candidate base", asy
     "--skill", "/tmp/fix-review-findings/SKILL.md",
     "--publish",
     "--delivery-mode", "follow-up-pr",
+    "--owner-id", "acme",
     "--candidate-id", firstReceipt.candidateId!,
   ]);
   const resumedReceipt = await runReviewAgent(resumedArgs, deps);
@@ -472,7 +554,9 @@ test("follow-up CLI requests derive and replay the retained candidate base", asy
   expect(resumedReceipt.followUpPullRequestUrl).toBe(firstReceipt.followUpPullRequestUrl);
   expect(getDeliveryPlan()).toEqual(expect.objectContaining({
     deliveryMode: "follow-up-pr",
+    followUpBaseBranch: "feature",
     followUpBaseSha: "head1",
+    ownership: expect.objectContaining({ mode: "local-owner", ownerId: "acme" }),
   }));
   expect(events.filter((event) => event === "create-follow-up")).toHaveLength(1);
   expect(events.filter((event) => event === "commit")).toHaveLength(1);

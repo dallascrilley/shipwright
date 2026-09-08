@@ -159,6 +159,12 @@ export function OperatorConsole() {
   const [candidateId, setCandidateId] = useState("");
   const [deliveryMode, setDeliveryMode] =
     useState<NonNullable<OperatorRunRequest["deliveryMode"]>>("patch");
+  const [ownershipMode, setOwnershipMode] =
+    useState<"local-owner" | "explicit-handoff">("local-owner");
+  const [ownerId, setOwnerId] = useState("");
+  const [fromOwnerId, setFromOwnerId] = useState("");
+  const [handoffId, setHandoffId] = useState("");
+  const [authorizedBy, setAuthorizedBy] = useState("");
   const [presetId, setPresetId] = useState("");
   const [verifyCommand, setVerifyCommand] = useState(DEFAULT_VERIFY_COMMAND);
   const [timeoutMinutes, setTimeoutMinutes] = useState(30);
@@ -355,6 +361,23 @@ export function OperatorConsole() {
     setSkillId(draft.skillId);
     setCandidateId(draft.candidateId ?? "");
     setDeliveryMode(draft.deliveryMode ?? "patch");
+    setOwnershipMode(draft.ownership?.mode ?? "local-owner");
+    setOwnerId(draft.ownership?.ownerId ?? "");
+    setFromOwnerId(
+      draft.ownership?.mode === "explicit-handoff"
+        ? draft.ownership.fromOwnerId
+        : "",
+    );
+    setHandoffId(
+      draft.ownership?.mode === "explicit-handoff"
+        ? draft.ownership.handoffId
+        : "",
+    );
+    setAuthorizedBy(
+      draft.ownership?.mode === "explicit-handoff"
+        ? draft.ownership.authorizedBy
+        : "",
+    );
     setPresetId(draft.presetId);
     setVerifyCommand(draft.verifyCommand);
     setUseRawVerify(draft.useRawVerify);
@@ -399,6 +422,25 @@ export function OperatorConsole() {
     }
   }, [presetId, presets, recommendation, useRawVerify]);
 
+  function buildOwnership(): OperatorRunRequest["ownership"] {
+    if (mode !== "review" || !ownerId.trim()) return undefined;
+    if (ownershipMode === "local-owner") {
+      return {
+        mode: "local-owner",
+        ownerId: ownerId.trim(),
+        source: "operator",
+      };
+    }
+    return {
+      mode: "explicit-handoff",
+      ownerId: ownerId.trim(),
+      fromOwnerId: fromOwnerId.trim(),
+      handoffId: handoffId.trim(),
+      authorizedBy: authorizedBy.trim(),
+      source: "operator",
+    };
+  }
+
   function buildRequest(publish: boolean): OperatorRunRequest | null {
     if (canPreflight && preflightPending) {
       setFormError("Checking target authorization…");
@@ -410,6 +452,13 @@ export function OperatorConsole() {
     }
     const issueUrl = mode === "issue" ? targetInput.trim() : "";
     const pullRequestUrl = mode === "review" ? targetInput.trim() : "";
+    const ownership = buildOwnership();
+    const selectedDeliveryMode =
+      mode === "review"
+        ? publish && deliveryMode === "patch"
+          ? "follow-up-pr" as const
+          : deliveryMode
+        : undefined;
     const candidate = {
       mode,
       issueUrl,
@@ -418,12 +467,13 @@ export function OperatorConsole() {
       ...(mode === "review" && candidateId.trim()
         ? { candidateId: candidateId.trim() }
         : {}),
-      ...(mode === "review" ? { deliveryMode } : {}),
+      ...(selectedDeliveryMode ? { deliveryMode: selectedDeliveryMode } : {}),
       presetId: useRawVerify ? "" : presetId,
       useRawVerify,
       verifyCommand,
       timeoutMinutes,
       publish,
+      ...(ownership ? { ownership } : {}),
       publishConfirmed: publish,
     };
     const validation = operatorRunRequestSchema.safeParse(candidate);
@@ -527,6 +577,15 @@ export function OperatorConsole() {
       }
       if (action.type === "start_publish_run") {
         if (!record || record.runId !== action.runId) return;
+        if (
+          record.request.mode === "review"
+          && !record.request.ownership
+        ) {
+          setFormError(
+            "Load this run as a draft and provide ownership before publishing.",
+          );
+          return;
+        }
         if (liveStartBlocked) {
           setFormError(
             "Host prerequisites are not ready for live publish. Fix readiness first.",
@@ -570,13 +629,28 @@ export function OperatorConsole() {
     }
     try {
       if (publishSource) {
-        const started = (await startRun.mutateAsync({
+        const source = publishSource.request;
+        const sourceDeliveryMode =
+          source.mode === "review"
+            ? source.deliveryMode && source.deliveryMode !== "patch"
+              ? source.deliveryMode
+              : "follow-up-pr"
+            : undefined;
+        const validation = operatorRunRequestSchema.safeParse({
+          ...source,
           fromRunId: publishSource.runId,
-          verifyCommand: publishSource.request.verifyCommand,
           publish: true,
           publishConfirmed: true,
-          timeoutMinutes: publishSource.request.timeoutMinutes,
-        })) as OperatorRunRecord;
+          ...(sourceDeliveryMode ? { deliveryMode: sourceDeliveryMode } : {}),
+        });
+        if (!validation.success) {
+          setFormError(
+            validation.error.issues[0]?.message ??
+              "The retained run lacks publish authorization.",
+          );
+          return;
+        }
+        const started = (await startRun.mutateAsync(validation.data)) as OperatorRunRecord;
         setRunId(started.runId);
       setRecoveryDismissed(true);
       operatorSelectedRun.current = true;
@@ -938,11 +1012,95 @@ export function OperatorConsole() {
                     }
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none"
                   >
-                    <option value="patch">Patch only</option>
-                    <option value="commit">Commit on the original branch</option>
+                    <option value="patch">Patch only (dry-run)</option>
+                    <option value="commit">Commit on the original branch (handoff required)</option>
                     <option value="follow-up-pr">Open a follow-up PR</option>
                     <option value="evidence-only">Evidence only</option>
                   </select>
+                </div>
+                <div className="space-y-3 rounded-md bg-muted/30 p-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="ownership-mode">Publication ownership</Label>
+                    <select
+                      id="ownership-mode"
+                      value={ownershipMode}
+                      disabled={busy}
+                      onChange={(event) =>
+                        setOwnershipMode(
+                          event.target.value as
+                            | "local-owner"
+                            | "explicit-handoff",
+                        )
+                      }
+                      className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs outline-none"
+                    >
+                      <option value="local-owner">
+                        Local owner — follow-up PR
+                      </option>
+                      <option value="explicit-handoff">
+                        Explicit handoff — original branch
+                      </option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="review-owner-id">Owner identity</Label>
+                    <Input
+                      id="review-owner-id"
+                      value={ownerId}
+                      onChange={(event) => setOwnerId(event.target.value)}
+                      placeholder="GitHub owner or operator identity"
+                      autoComplete="off"
+                      disabled={busy}
+                    />
+                  </div>
+                  {ownershipMode === "explicit-handoff" ? (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="handoff-from-owner">
+                          Handoff from owner
+                        </Label>
+                        <Input
+                          id="handoff-from-owner"
+                          value={fromOwnerId}
+                          onChange={(event) =>
+                            setFromOwnerId(event.target.value)
+                          }
+                          placeholder="original owner"
+                          autoComplete="off"
+                          disabled={busy}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="handoff-id">Handoff record</Label>
+                        <Input
+                          id="handoff-id"
+                          value={handoffId}
+                          onChange={(event) => setHandoffId(event.target.value)}
+                          placeholder="ticket or handoff ID"
+                          autoComplete="off"
+                          disabled={busy}
+                        />
+                      </div>
+                      <div className="space-y-2 sm:col-span-2">
+                        <Label htmlFor="authorized-by">Authorized by</Label>
+                        <Input
+                          id="authorized-by"
+                          value={authorizedBy}
+                          onChange={(event) =>
+                            setAuthorizedBy(event.target.value)
+                          }
+                          placeholder="operator or authority"
+                          autoComplete="off"
+                          disabled={busy}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
+                  <p className="text-xs text-muted-foreground">
+                    Publication is fail-closed without ownership. Local-owner
+                    repairs use a separate follow-up branch; direct commits
+                    require the complete explicit handoff record.
+                  </p>
                 </div>
                 {candidateInspection ? (
                   <div className="space-y-2 rounded-md bg-muted/30 p-3 text-xs">

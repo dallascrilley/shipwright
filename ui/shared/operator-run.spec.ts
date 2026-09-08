@@ -90,6 +90,41 @@ describe("operatorRunRequestSchema", () => {
 
     expect(result.success).toBe(false);
   });
+  test("requires review ownership before publishing", () => {
+    const result = operatorRunRequestSchema.safeParse({
+      mode: "review",
+      pullRequestUrl: "https://github.com/dallascrilley/example/pull/9",
+      skillId: "fix-review-findings",
+      verifyCommand: "bun test",
+      publish: true,
+      publishConfirmed: true,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.some((issue) =>
+      issue.message.includes("ownership authorization"),
+    )).toBe(true);
+  });
+
+  test("requires an explicit handoff for direct review commits", () => {
+    const result = operatorRunRequestSchema.safeParse({
+      mode: "review",
+      pullRequestUrl: "https://github.com/dallascrilley/example/pull/9",
+      skillId: "fix-review-findings",
+      verifyCommand: "bun test",
+      publish: true,
+      publishConfirmed: true,
+      deliveryMode: "commit",
+      ownership: {
+        mode: "local-owner",
+        ownerId: "dallascrilley",
+        source: "operator",
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.some((issue) =>
+      issue.message.includes("explicit ownership handoff"),
+    )).toBe(true);
+  });
 
   test("rejects a non-canonical issue URL", () => {
     const result = operatorRunRequestSchema.safeParse({
