@@ -375,9 +375,6 @@ export async function runReviewAgent(
     const changes = await workspace.inspectChanges(originalHeadSha);
     receipt.changedFiles = changes.changedFiles;
     if (changes.changedFiles.length > 0) assertPublishableChange(changes, request.protectedPaths ?? []);
-    if (changes.changedFiles.length === 0 && outcomes.some((item) => item.outcome === "fixed")) {
-      throw new Error("fixed review outcomes require a repository change");
-    }
     let retainedCandidate = resumedCandidate;
     if (retainedCandidate && changes.resultingTreeSha && changes.resultingTreeSha !== retainedCandidate.resultingTreeSha) {
       throw new Error("retained candidate resulting tree does not match");
@@ -434,6 +431,7 @@ export async function runReviewAgent(
       requiredChecks: receipt.verification.passed ? "passed" as const : "failed" as const,
     };
     const checksDigest = computeReviewChecksDigest(checks);
+    const verificationRecordsByFinding = new Map<string, ReviewFindingVerificationRecord>();
     if (retainedCandidate && deps.candidateRoot && deps.verificationStore && deps.findingVerifier) {
       const tokens = [];
       for (const finding of retainedCandidate.findings) {
@@ -478,6 +476,7 @@ export async function runReviewAgent(
         if (record) {
           try {
             tokens.push(createReviewEvidenceToken(record));
+            verificationRecordsByFinding.set(finding.findingId, record);
           } catch {
             // A malformed or pending host record remains unresolved.
           }
@@ -514,6 +513,30 @@ export async function runReviewAgent(
     const resolvedByThread = new Map(
       resolvedOutcomes?.map((item) => [item.threadId, item]) ?? [],
     );
+    const effectiveOutcomes = new Map(
+      outcomes.map((outcome) => {
+        const resolved = resolvedByThread.get(outcome.threadId);
+        const disposition = resolved?.verified.disposition;
+        if (
+          !resolved
+          || resolved.verified.status === "pending"
+          || disposition === "pending"
+        ) {
+          return [outcome.threadId, outcome] as const;
+        }
+        const hostFollowUp = verificationRecordsByFinding.get(outcome.threadId)?.followUp?.remoteUrl;
+        return [outcome.threadId, {
+          ...outcome,
+          outcome: disposition,
+          ...(disposition === "deferred" && !outcome.followUp && hostFollowUp
+            ? { followUp: hostFollowUp }
+            : {}),
+        }] as const;
+      }),
+    );
+    if (changes.changedFiles.length === 0 && [...effectiveOutcomes.values()].some((item) => item.outcome === "fixed")) {
+      throw new Error("fixed review outcomes require a repository change");
+    }
     const pendingThreadIds = new Set(
       resolvedOutcomes
         ?.filter((item) => item.verified.status === "pending")
@@ -576,11 +599,15 @@ export async function runReviewAgent(
     await effectJournal.ensureDeliveryPlan(deliveryPlan);
 
 
-    const publishableOutcomes = outcomes.filter((outcome) => {
-      const resolved = resolvedByThread.get(outcome.threadId);
-      return resolved?.verified.status === "verified"
-        || resolved?.verified.status === "not-required";
-    });
+    const publishableOutcomes = outcomes
+      .map((outcome) => {
+        const resolved = resolvedByThread.get(outcome.threadId);
+        return resolved?.verified.status === "verified"
+          || resolved?.verified.status === "not-required"
+          ? effectiveOutcomes.get(outcome.threadId)
+          : undefined;
+      })
+      .filter((outcome): outcome is ReviewOutcome => outcome !== undefined);
     if (publishableOutcomes.length !== outcomes.length) {
       throw new Error("publication requires host-verified outcomes for every selected finding");
     }
@@ -695,7 +722,7 @@ export async function runReviewAgent(
       if (!workspace.resetToReviewBase || !workspace.applyReviewCandidatePatch) {
         throw new Error("follow-up-pr requires a workspace that can reset and replay a candidate");
       }
-      const followUpBranch = `shipwright/review-${retainedCandidate.candidateId}`;
+      const followUpBranch = followUpBranchFor(retainedCandidate);
       await workspace.resetToReviewBase(request.followUpBaseSha, followUpBranch);
       await workspace.applyReviewCandidatePatch(Buffer.from(retainedCandidate.patchBase64, "base64"));
       const followUpChanges = await workspace.inspectChanges(request.followUpBaseSha);
@@ -778,8 +805,8 @@ export async function runReviewAgent(
         idempotencyKey: followUpEffectId,
       });
       let followUpUrl: string | undefined;
-      if (priorFollowUpEffect) {
-        if (followUpIntent.status !== "confirmed" || !followUpIntent.remoteUrl) {
+      if (priorFollowUpEffect && followUpIntent.status === "confirmed") {
+        if (!followUpIntent.remoteUrl) {
           throw new Error("follow-up pull request effect requires reconciliation");
         }
         await revalidateConfirmedFollowUpPullRequest(
@@ -873,7 +900,11 @@ export async function runReviewAgent(
       let reply: { url: string };
       if (existingReply) {
         reply = existingReply;
-        if (replyIntent.status !== "confirmed") {
+        if (replyIntent.status === "confirmed") {
+          if (replyIntent.remoteUrl !== reply.url) {
+            throw new Error(`review reply effect has a conflicting confirmed URL: ${outcome.threadId}`);
+          }
+        } else {
           await effectJournal.ackEffect({ effectId: replyEffectId, remoteUrl: reply.url });
         }
       } else if (replyIntent.status === "confirmed" || replyIntent.status === "ambiguous") {
@@ -898,37 +929,55 @@ export async function runReviewAgent(
       const resolvedRecord = resolvedByThread.get(outcome.threadId);
       const mayResolve = resolvedRecord?.verified.status === "verified"
         || resolvedRecord?.verified.status === "not-required";
-      if (mayResolve && outcome.outcome !== "needs-human" && outcome.outcome !== "already-addressed" && !resolved) {
-        await revalidateRemoteReviewState(authorized, ref.number, currentExpectedHead);
+      if (mayResolve && outcome.outcome !== "needs-human") {
         const resolveEffectId = `${operationId}:resolve:${outcome.threadId}`;
         const priorResolveEffect = effects.find((effect) => effect.effectId === resolveEffectId);
-        const resolveIntent = await effectJournal.beginEffect({
-          effectId: resolveEffectId,
-          kind: "resolve",
-          idempotencyKey: resolveEffectId,
-        });
-        if (priorResolveEffect) {
+        if (resolved && priorResolveEffect) {
+          const resolveIntent = await effectJournal.beginEffect({
+            effectId: resolveEffectId,
+            kind: "resolve",
+            idempotencyKey: resolveEffectId,
+          });
           if (resolveIntent.status === "confirmed") {
-            resolved = true;
-          } else {
-            throw new Error(`review resolve effect requires reconciliation: ${outcome.threadId}`);
-          }
-        } else if (resolveIntent.status !== "intent") {
-          throw new Error(`review resolve effect requires reconciliation: ${outcome.threadId}`);
-        } else {
-          try {
-            resolved = (await authorized.repositoryClient.resolveReviewThread(outcome.threadId)).isResolved;
-            await effectJournal.ackEffect({ effectId: resolveEffectId, remoteId: outcome.threadId });
-          } catch (error) {
-            try {
-              await effectJournal.markAmbiguous({ effectId: resolveEffectId, detail: "resolve result was not confirmed" });
-            } catch {
-              // Effect bookkeeping cannot mask the original resolve result.
+            if (resolveIntent.remoteId !== outcome.threadId) {
+              throw new Error(`review resolve effect has a conflicting confirmed thread: ${outcome.threadId}`);
             }
-            throw error;
+          } else {
+            await effectJournal.ackEffect({ effectId: resolveEffectId, remoteId: outcome.threadId });
           }
+        } else if (!resolved) {
+          await revalidateRemoteReviewState(authorized, ref.number, currentExpectedHead);
+          const resolveIntent = await effectJournal.beginEffect({
+            effectId: resolveEffectId,
+            kind: "resolve",
+            idempotencyKey: resolveEffectId,
+          });
+          if (priorResolveEffect) {
+            if (resolveIntent.status === "confirmed") {
+              if (resolveIntent.remoteId !== outcome.threadId) {
+                throw new Error(`review resolve effect has a conflicting confirmed thread: ${outcome.threadId}`);
+              }
+              resolved = true;
+            } else {
+              throw new Error(`review resolve effect requires reconciliation: ${outcome.threadId}`);
+            }
+          } else if (resolveIntent.status !== "intent") {
+            throw new Error(`review resolve effect requires reconciliation: ${outcome.threadId}`);
+          } else {
+            try {
+              resolved = (await authorized.repositoryClient.resolveReviewThread(outcome.threadId)).isResolved;
+              await effectJournal.ackEffect({ effectId: resolveEffectId, remoteId: outcome.threadId });
+            } catch (error) {
+              try {
+                await effectJournal.markAmbiguous({ effectId: resolveEffectId, detail: "resolve result was not confirmed" });
+              } catch {
+                // Effect bookkeeping cannot mask the original resolve result.
+              }
+              throw error;
+            }
+          }
+          if (!resolved) throw new Error(`review thread did not resolve: ${outcome.threadId}`);
         }
-        if (!resolved) throw new Error(`review thread did not resolve: ${outcome.threadId}`);
       }
       const result = receipt.threadResults.find((item) => item.threadId === outcome.threadId);
       if (!result) throw new Error(`missing receipt result for review thread: ${outcome.threadId}`);
@@ -942,7 +991,12 @@ export async function runReviewAgent(
     for (const result of receipt.threadResults) {
       const final = finalById.get(result.threadId);
       if (!final) throw new Error(`review thread disappeared during reconciliation: ${result.threadId}`);
-      if (!pendingThreadIds.has(result.threadId) && result.outcome !== "needs-human" && result.outcome !== "already-addressed" && !final.isResolved) {
+      if (
+        result.verifiedDisposition !== "needs-human"
+        && result.verifiedDisposition !== "pending"
+        && result.verificationStatus !== "pending"
+        && !final.isResolved
+      ) {
         throw new Error(`review thread remains unresolved: ${result.threadId}`);
       }
     }
@@ -1010,6 +1064,19 @@ async function revalidateRemoteReviewState(
     throw new Error("pull request head moved after authorization");
   }
 }
+function followUpBranchFor(
+  candidate: Pick<ReviewCandidate, "candidateId" | "candidateDigest">,
+): string {
+  const candidateIdIsGitBranchSafe =
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/.test(candidate.candidateId)
+    && !candidate.candidateId.includes("..")
+    && !candidate.candidateId.endsWith(".")
+    && !candidate.candidateId.endsWith(".lock");
+  return `shipwright/review-${
+    candidateIdIsGitBranchSafe ? candidate.candidateId : candidate.candidateDigest
+  }`;
+}
+
 
 async function revalidateConfirmedFollowUpPullRequest(
   authorized: AuthorizedPullRequest,

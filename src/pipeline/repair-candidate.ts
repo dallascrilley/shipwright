@@ -687,6 +687,9 @@ function assertReviewVerificationRecordBounds(record: ReviewFindingVerificationR
 }
 
 export function assertReviewCandidate(candidate: ReviewCandidate): void {
+  if (!/^[0-9a-f]{64}$/.test(candidate.candidateDigest)) {
+    throw new Error("review candidate digest is invalid");
+  }
   if (candidate.schema !== REVIEW_CANDIDATE_SCHEMA) throw new Error("unsupported review candidate schema");
   assertSafeCandidateId(candidate.candidateId);
   if (candidate.patchBase64 !== Buffer.from(candidate.patchBase64, "base64").toString("base64")) {
@@ -1105,6 +1108,9 @@ export class FileReviewEffectJournalStore implements ReviewEffectJournalStore {
   async ensureDeliveryPlan(plan: ReviewAuthorizedDeliveryPlan): Promise<ReviewAuthorizedDeliveryPlan> {
     assertReviewDeliveryPlan(plan);
     return this.withExclusiveMutation((current) => {
+      if (plan.candidateDigest !== current.candidateDigest) {
+        throw new Error("review delivery plan belongs to a different candidate");
+      }
       if (current.deliveryPlan) {
         assertReviewDeliveryPlan(current.deliveryPlan);
         if (stableJson(current.deliveryPlan) !== stableJson(plan)) {
