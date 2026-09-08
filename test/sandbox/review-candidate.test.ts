@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { ProcessRunRequest } from "sandbox-agent";
@@ -9,8 +9,11 @@ import { SandboxWorkspace } from "../../src/sandbox/runtime.js";
 
 const exec = promisify(execFile);
 const liveTest = process.env.RUN_DOCKER_E2E === "1" ? test : test.skip;
+
 async function fixture(action: (workspace: SandboxWorkspace, directory: string, base: string, calls: () => number) => Promise<void>) {
-  const directory = await mkdtemp(join(tmpdir(), "shipwright-replay-test-"));
+  const workspaceRoot = join(homedir(), ".shipwright", "workspaces");
+  await mkdir(workspaceRoot, { recursive: true, mode: 0o700 });
+  const directory = await mkdtemp(join(workspaceRoot, "shipwright-replay-test-"));
   const git = (...args: string[]) => exec("git", args, { cwd: directory, env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } });
   let stopped = false;
   let processCalls = 0;
