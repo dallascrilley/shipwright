@@ -1,0 +1,18 @@
+schema_version: 1
+harness_contract_version: 3
+id: shipwright
+canonical_path: /Users/dallascrilley/Workspace/products/shipwright
+generated_state_root: /Users/dallascrilley/.local/state/agents/shipwright
+tracking:
+  system: linear
+linear:
+  team_id: 8b799053-907f-4ddf-a416-95a29140b475
+legacy:
+  beads:
+    state: absent
+    frozen_at: null
+    snapshot_receipt: null
+credentials:
+  references: []
+receipts:
+  root: /Users/dallascrilley/Backups/Receipts/shipwright
