@@ -55,6 +55,8 @@ import { type ReviewRunPhase, type ReviewRunReceipt, writeReviewReceipt } from "
  */
 export const PROVIDER_QUOTA_ERROR_CODE = PROVIDER_CAPACITY_ERROR_CODE;
 export const REVIEW_OUTCOME_MISSING_ERROR_CODE = "agent_outcome_missing";
+/** Host actor used when no task-owner provenance is available. */
+const UNATTRIBUTED_REVIEW_ACTOR = "shipwright";
 
 class ReviewOutcomeMissingError extends Error {
   constructor(message: string) {
@@ -103,6 +105,12 @@ export interface ReviewWorkspacePort {
   commit(message: string): Promise<string>;
   /** Proves a pushed integration head contains the exact generated commit. */
   assertCommitIncluded?(commitSha: string, headSha: string): Promise<void>;
+  /** Proves a later original PR head contains the retained candidate changes. */
+  assertReviewCandidateIntegrated?(input: {
+    headSha: string;
+    candidateTreeSha: string;
+    patch: Uint8Array;
+  }): Promise<void>;
   /** Reconcile a confirmed commit, recreating it from the retained candidate when needed. */
   restoreCommittedReview?(input: {
     commitSha: string;
@@ -203,6 +211,7 @@ export interface ReviewRunRequest {
   ownership?: ReviewOwnershipAuthorization;
   provenance?: {
     taskId: string;
+    /** Host-authored owner of the original local PR task. */
     actor: string;
   };
   followUpBaseSha?: string;
@@ -299,15 +308,39 @@ export async function runReviewAgent(
     const confirmedPushSha = effects.find(
       (effect) => effect.kind === "push" && effect.status === "confirmed" && effect.commitSha,
     )?.commitSha;
+    const confirmedFollowUpCommitSha = effects.find(
+      (effect) =>
+        effect.effectId === `${operationId}:follow-up-commit`
+        && effect.kind === "commit"
+        && effect.status === "confirmed"
+        && effect.commitSha,
+    )?.commitSha;
+    const confirmedFollowUpPullRequestUrl = effects.find(
+      (effect) =>
+        effect.effectId === `${operationId}:follow-up-pr`
+        && effect.kind === "follow-up-pr"
+        && effect.status === "confirmed"
+        && effect.remoteUrl,
+    )?.remoteUrl;
     const currentHeadSha = authorized.pullRequest.headSha;
+    const followUpIntegrationDetected = Boolean(
+      resumedCandidate
+      && deliveryMode === "follow-up-pr"
+      && confirmedFollowUpCommitSha
+      && confirmedFollowUpPullRequestUrl
+      && currentHeadSha !== originalHeadSha,
+    );
     const retainedHeadIsKnown = !resumedCandidate
       || currentHeadSha === originalHeadSha
       || currentHeadSha === confirmedCommitSha
-      || currentHeadSha === confirmedPushSha;
+      || currentHeadSha === confirmedPushSha
+      || followUpIntegrationDetected;
     if (!retainedHeadIsKnown) throw new Error("retained candidate pull request head moved");
-    const cloneHeadSha = resumedCandidate && (currentHeadSha === confirmedPushSha || currentHeadSha === confirmedCommitSha)
+    const cloneHeadSha = followUpIntegrationDetected
       ? currentHeadSha
-      : originalHeadSha;
+      : resumedCandidate && (currentHeadSha === confirmedPushSha || currentHeadSha === confirmedCommitSha)
+        ? currentHeadSha
+        : originalHeadSha;
 
     receipt.authorizedBaseSha = authorized.pullRequest.baseSha;
     receipt.authorizedHeadSha = originalHeadSha;
@@ -393,8 +426,22 @@ export async function runReviewAgent(
     receipt.changedFiles = changes.changedFiles;
     if (changes.changedFiles.length > 0) assertPublishableChange(changes, request.protectedPaths ?? []);
     let retainedCandidate = resumedCandidate;
-    if (retainedCandidate && changes.resultingTreeSha && changes.resultingTreeSha !== retainedCandidate.resultingTreeSha) {
+    if (retainedCandidate && changes.resultingTreeSha && changes.resultingTreeSha !== retainedCandidate.resultingTreeSha && !followUpIntegrationDetected) {
       throw new Error("retained candidate resulting tree does not match");
+    }
+    if (followUpIntegrationDetected) {
+      if (!workspace.assertReviewCandidateIntegrated) {
+        throw new Error("follow-up integration lacks candidate inclusion proof");
+      }
+      const workspaceChanges = await workspace.inspectChanges(currentHeadSha);
+      if (workspaceChanges.changedFiles.length > 0) {
+        throw new Error("follow-up integration workspace changed during verification");
+      }
+      await workspace.assertReviewCandidateIntegrated({
+        headSha: currentHeadSha,
+        candidateTreeSha: retainedCandidate!.resultingTreeSha,
+        patch: reviewCandidatePatch(retainedCandidate!),
+      });
     }
     if (!retainedCandidate && deps.candidateRoot) {
       const patch = changes.patchData ?? new TextEncoder().encode(changes.patch);
@@ -420,9 +467,14 @@ export async function runReviewAgent(
       });
       const fixGroups = normalizeReviewFixGroups(request.fixGroups, candidateFindings.map((finding) => finding.findingId));
       const candidateProvenance = {
-        taskId: request.provenance?.taskId ?? `${authorized.pullRequest.owner}/${authorized.pullRequest.repo}#${authorized.pullRequest.number}`,
+        taskId: request.provenance?.taskId ?? `run:${runId}`,
         runId,
-        actor: request.provenance?.actor ?? "shipwright",
+        actor:
+          request.provenance?.actor
+          ?? (request.ownership?.mode === "explicit-handoff"
+            ? request.ownership.fromOwnerId
+            : request.ownership?.ownerId)
+          ?? UNATTRIBUTED_REVIEW_ACTOR,
       };
       retainedCandidate = createReviewCandidate({
         candidateId: runId,
@@ -614,12 +666,22 @@ export async function runReviewAgent(
       await deps.writeReceipt(receiptPath, receipt);
       return receipt;
     }
-
     if (!retainedCandidate || !deps.candidateRoot || !effectJournal) {
       throw new Error("publication requires a durable review candidate and effect journal");
     }
     if (deliveryMode === "commit" || deliveryMode === "follow-up-pr") {
-      assertReviewOwnership(request.ownership, deliveryMode, authorized.pullRequest.owner);
+      const retainedCandidateOwnerId =
+        retainedCandidate.provenance?.actor === UNATTRIBUTED_REVIEW_ACTOR
+          ? undefined
+          : retainedCandidate.provenance?.actor;
+      const taskOwnerId =
+        retainedCandidateOwnerId
+        ?? request.provenance?.actor
+        ?? (request.ownership?.mode === "explicit-handoff"
+          ? request.ownership.fromOwnerId
+          : request.ownership?.ownerId)
+        ?? UNATTRIBUTED_REVIEW_ACTOR;
+      assertReviewOwnership(request.ownership, deliveryMode, taskOwnerId);
     }
     const selectedFindingIds = new Set(expectedThreadIds);
     const selectedFixGroupCount = retainedCandidate.fixGroups
@@ -627,7 +689,8 @@ export async function runReviewAgent(
         group.findingIds.some((findingId) => selectedFindingIds.has(findingId)),
       ).length
       : 1;
-    if (selectedFixGroupCount > 1) {
+    const candidateFixGroupCount = retainedCandidate.fixGroups?.length ?? 1;
+    if (selectedFixGroupCount > 1 || selectedFixGroupCount !== candidateFixGroupCount) {
       throw new Error("independent review fix groups require separately scoped candidates");
     }
     const followUpBaseSha =
@@ -679,7 +742,40 @@ export async function runReviewAgent(
     if (publishableOutcomes.length !== outcomes.length) {
       throw new Error("publication requires host-verified outcomes for every selected finding");
     }
-    if (deliveryMode === "commit") {
+    if (followUpIntegrationDetected) {
+      phase = receipt.phase = "publish";
+      await emitProgress();
+      await revalidateRemoteReviewState(authorized, ref.number, currentHeadSha);
+      if (!confirmedFollowUpCommitSha || !confirmedFollowUpPullRequestUrl) {
+        throw new Error("follow-up integration requires a confirmed delivered candidate");
+      }
+      receipt.commitSha = confirmedFollowUpCommitSha;
+      receipt.followUpPullRequestUrl = confirmedFollowUpPullRequestUrl;
+      receipt.resultingHeadSha = currentHeadSha;
+      receipt.lifecycle = "integrated";
+      const integration = await verifyIntegratedReviewHead({
+        authorized,
+        deps,
+        headSha: currentHeadSha,
+        command: request.verifyCommand,
+        timeoutMs: request.timeoutMinutes * 60_000,
+      });
+      receipt.integrationVerification = {
+        baseSha: originalHeadSha,
+        headSha: currentHeadSha,
+        command: request.verifyCommand,
+        exitCode: integration.exitCode ?? null,
+        passed: integration.exitCode === 0,
+        ...(integration.stdout ? { stdoutTail: redactSecrets(truncateTail(integration.stdout)) } : {}),
+        ...(integration.stderr ? { stderrTail: redactSecrets(truncateTail(integration.stderr)) } : {}),
+      };
+      if (integration.exitCode !== 0) throw new Error("post-integration verification failed");
+      receipt.lifecycle = "verified";
+      for (const result of receipt.threadResults) {
+        result.fixCommitSha = receipt.commitSha;
+      }
+      await emitProgress();
+    } else if (deliveryMode === "commit") {
       deps.signal?.throwIfAborted();
       await revalidateRemoteReviewState(
         authorized,
@@ -763,7 +859,13 @@ export async function runReviewAgent(
             throw error;
           }
         }
-        await revalidateRemoteReviewState(authorized, ref.number, originalHeadSha);
+        await revalidateRemoteReviewState(
+          authorized,
+          ref.number,
+          [originalHeadSha, receipt.commitSha].filter(
+            (head): head is string => Boolean(head),
+          ),
+        );
         const pushEffectId = `${operationId}:push`;
         const priorPushEffect = effects.find((effect) => effect.effectId === pushEffectId);
         const pushIntent = await effectJournal.beginEffect({
@@ -799,7 +901,6 @@ export async function runReviewAgent(
         const integration = await verifyIntegratedReviewHead({
           authorized,
           deps,
-          commitSha: receipt.commitSha,
           headSha: pushedHead,
           command: request.verifyCommand,
           timeoutMs: request.timeoutMinutes * 60_000,
@@ -1023,8 +1124,7 @@ export async function runReviewAgent(
     }
     for (const outcome of publishableOutcomes) {
       deps.signal?.throwIfAborted();
-      const currentExpectedHead = receipt.commitSha ?? originalHeadSha;
-      await revalidateRemoteReviewState(authorized, ref.number, currentExpectedHead);
+      const currentExpectedHead = receipt.resultingHeadSha ?? receipt.commitSha ?? originalHeadSha;
       const effectThreads = await authorized.repositoryClient.listReviewThreads(ref.number);
       const effectById = new Map(effectThreads.map((thread) => [thread.id, thread]));
       const originalThread = threads.find((thread) => thread.id === outcome.threadId)!;
@@ -1053,6 +1153,7 @@ export async function runReviewAgent(
       } else if (replyIntent.status === "confirmed" || replyIntent.status === "ambiguous") {
         throw new Error(`review reply effect requires reconciliation: ${outcome.threadId}`);
       } else {
+        await revalidateRemoteReviewState(authorized, ref.number, currentExpectedHead);
         try {
           reply = await authorized.repositoryClient.replyToReviewThread(
             outcome.threadId,
@@ -1309,10 +1410,10 @@ function normalizeReviewFixGroups(
   findingIds: readonly string[],
 ): ReviewFixGroup[] {
   if (!input) {
-    return [{
-      groupId: "candidate",
-      findingIds: [...findingIds],
-    }];
+    return findingIds.map((findingId) => ({
+      groupId: findingId,
+      findingIds: [findingId],
+    }));
   }
   const known = new Set(findingIds);
   const assigned = new Set<string>();
@@ -1338,25 +1439,24 @@ function normalizeReviewFixGroups(
 function assertReviewOwnership(
   ownership: ReviewOwnershipAuthorization | undefined,
   deliveryMode: ReviewDeliveryMode,
-  repositoryOwner: string,
+  taskOwnerId: string,
 ): void {
   if (!ownership) throw new Error(`${deliveryMode} delivery requires explicit review ownership authorization`);
   if (deliveryMode === "commit" && ownership.mode !== "explicit-handoff") {
     throw new Error("direct review commit requires an explicit ownership handoff");
   }
   if (ownership.mode === "local-owner") {
-    if (ownership.ownerId.toLowerCase() !== repositoryOwner.toLowerCase()) {
-      throw new Error("review ownership does not match the pull request owner");
+    if (ownership.ownerId.toLowerCase() !== taskOwnerId.toLowerCase()) {
+      throw new Error("review ownership does not match the host task owner");
     }
-  } else if (ownership.fromOwnerId.toLowerCase() !== repositoryOwner.toLowerCase()) {
-    throw new Error("review handoff source does not match the pull request owner");
+  } else if (ownership.fromOwnerId.toLowerCase() !== taskOwnerId.toLowerCase()) {
+    throw new Error("review handoff source does not match the host task owner");
   }
 }
 
 async function verifyIntegratedReviewHead(input: {
   authorized: AuthorizedPullRequest;
   deps: ReviewPipelineDependencies;
-  commitSha: string;
   headSha: string;
   command: string;
   timeoutMs: number;

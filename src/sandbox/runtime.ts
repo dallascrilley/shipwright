@@ -675,6 +675,53 @@ export class SandboxWorkspace {
       throw new Error("integration head does not contain the generated repair commit");
     }
   }
+  /**
+   * Prove that a later original PR head contains the retained candidate.
+   * Exact candidate trees cover squash merges; reverse application covers a
+   * candidate integrated into a later head with additional changes.
+   */
+  async assertReviewCandidateIntegrated(input: {
+    headSha: string;
+    candidateTreeSha: string;
+    patch: Uint8Array;
+  }): Promise<void> {
+    if (
+      !/^[0-9a-f]{40}$/.test(input.headSha)
+      || !/^[0-9a-f]{40}$/.test(input.candidateTreeSha)
+    ) {
+      throw new Error("review candidate integration proof requires valid Git SHAs");
+    }
+    assertSecretSafeBytes(input.patch);
+    await this.assertAuthorizedRepoConfig();
+    const actualHead = (await this.hostGit(["rev-parse", "HEAD"])).trim();
+    if (actualHead !== input.headSha) {
+      throw new Error("review candidate integration workspace head changed");
+    }
+    const actualTree = (await this.hostGit(["show", "-s", "--format=%T", input.headSha])).trim();
+    if (actualTree === input.candidateTreeSha) return;
+    if (input.patch.byteLength === 0) {
+      throw new Error("original PR head does not contain the delivered review candidate");
+    }
+    const relativePath = `.shipwright-review-integration-${randomUUID()}.diff`;
+    const hostPath = join(this.hostWorkspace, relativePath);
+    await writeFile(hostPath, input.patch, { mode: 0o600 });
+    try {
+      await this.hostGit([
+        "apply",
+        "--reverse",
+        "--check",
+        "--binary",
+        "--whitespace=nowarn",
+        "--",
+        relativePath,
+      ]);
+    } catch {
+      throw new Error("original PR head does not contain the delivered review candidate");
+    } finally {
+      await rm(hostPath, { force: true });
+    }
+  }
+
 
 
   async commit(message: string): Promise<string> {

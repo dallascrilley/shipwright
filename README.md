@@ -193,11 +193,12 @@ model-supplied identity as authority.
 
 The CLI defaults to `patch`; `--publish` is the explicit gate required before
 any remote write. A publish run without `--delivery-mode` selects the safer
-`follow-up-pr` route. Publish also requires ownership authorization:
-`--owner-id <owner>` establishes local ownership and routes the repair through a
-follow-up PR; direct `commit` delivery additionally requires the complete
-`--handoff-from-owner`, `--handoff-id`, and `--authorized-by` record. Missing or
-conflicting ownership fails closed.
+`follow-up-pr` route. Publish also requires ownership authorization. Ownership
+IDs are host-authored task identities, never the GitHub repository owner or a
+reviewer login: `--owner-id <task-owner>` establishes local ownership and routes
+the repair through a follow-up PR; direct `commit` delivery additionally
+requires `--handoff-from-owner <task-owner>`, `--handoff-id`, and
+`--authorized-by`. Missing or conflicting ownership fails closed.
 
 Candidate lifecycle is explicit in receipts: `proposed` → `delivered` for a
 follow-up PR, or `proposed` → `integrated` → `verified` for a direct commit.
@@ -206,26 +207,31 @@ PR head before any original finding is replied to or resolved. A failed
 integration check leaves findings open. Follow-up delivery leaves the original
 PR branch and findings unchanged; the follow-up targets that branch as its base,
 replays the immutable selected head SHA without an implicit rebase, and links
-all findings to the delivered candidate commit. Remote base/head movement,
-stale candidates, changed review content, and effect-journal drift stop the run
-instead of overwriting newer work.
+all findings to the delivered candidate commit. On a later owner-integrated
+candidate resume, the host proves the changed original head contains the
+candidate (including a squash or a later head with additional changes), runs
+fresh verification at that exact head, and only then closes the findings.
+Remote base/head movement, stale candidates, changed review content, and
+effect-journal drift stop the run instead of overwriting newer work.
 
-Independent fix groups must be delivered as separately scoped candidates; one
-candidate can explicitly group duplicate findings so they share one commit.
+Independent fix groups must be delivered as separately scoped candidates. When
+the host has no grouping instruction, each finding gets its own group and a
+multi-finding candidate is rejected for publication; one candidate can
+explicitly group duplicate findings so they share one commit.
 
 ```sh
-# Local owner: safe follow-up delivery
-bun run review-agent -- https://github.com/OWNER/REPO/pull/123 \
+# Local task owner: safe follow-up delivery
+bun run review-agent -- https://github.com/ORG/REPO/pull/123 \
   --verify "bun test" \
   --skill /absolute/path/to/fix-review-findings/SKILL.md \
-  --publish --owner-id OWNER
+  --publish --owner-id TASK-OWNER
 
 # Explicit handoff: direct delivery to the original PR branch
-bun run review-agent -- https://github.com/OWNER/REPO/pull/123 \
+bun run review-agent -- https://github.com/ORG/REPO/pull/123 \
   --verify "bun test" \
   --skill /absolute/path/to/fix-review-findings/SKILL.md \
   --publish --delivery-mode commit \
-  --owner-id OPERATOR --handoff-from-owner OWNER \
+  --owner-id OPERATOR --handoff-from-owner TASK-OWNER \
   --handoff-id HANDOFF-123 --authorized-by OPERATOR
 ```
 

@@ -38,26 +38,33 @@ function fixture(options: {
   outcome?: "fixed" | "rejected" | "needs-human";
   artifactMissing?: boolean;
   agentResponse?: string;
+  threadIds?: string[];
 } = {}) {
   const events: string[] = [];
   const changes = options.changes ?? ["src/a.ts"];
   const outcome = options.outcome ?? "fixed";
+  const threadIds = options.threadIds ?? ["thread-1"];
   let verifyCalls = 0;
   let remoteHead = "head1";
   let currentCommit = "commit1";
   let followUpHead = "";
   let followUpPullRequest: { number: number; url: string; title: string; body: string } | undefined;
-  let resolved = false;
+  const resolvedThreadIds = new Set<string>();
   let replyBody = "";
-  const thread = () => ({
-    id: "thread-1",
-    isResolved: resolved,
+  const thread = (id: string) => ({
+    id,
+    isResolved: resolvedThreadIds.has(id),
     isOutdated: false,
-    path: "src/a.ts",
+    path: id === "thread-1" ? "src/a.ts" : `src/${id}.ts`,
     line: 4,
     comments: [
-      { id: "comment-1", body: "Please add a guard", url: "https://example/comment", author: "reviewer" },
-      ...(replyBody
+      {
+        id: id === "thread-1" ? "comment-1" : `comment-${id}`,
+        body: id === "thread-1" ? "Please add a guard" : `Please add a guard for ${id}`,
+        url: id === "thread-1" ? "https://example/comment" : `https://example/${id}`,
+        author: "reviewer",
+      },
+      ...(replyBody && id === "thread-1"
         ? [{ id: "reply-1", body: replyBody, url: "https://example/reply", author: "bot" }]
         : []),
     ],
@@ -106,10 +113,10 @@ function fixture(options: {
         headSha: options.movedHead ? "moved" : remoteHead, headOwner: "acme", headRepo: "widget",
       };
     },
-    async listReviewThreads() { events.push("threads"); return [thread()]; },
+    async listReviewThreads() { events.push("threads"); return threadIds.map(thread); },
     async listReviews() { return []; },
     async replyToReviewThread(_id, body) { events.push("reply"); replyBody = body; return { url: "https://example/reply" }; },
-    async resolveReviewThread() { events.push("resolve"); resolved = true; return { isResolved: true }; },
+    async resolveReviewThread(id) { events.push("resolve"); resolvedThreadIds.add(id); return { isResolved: true }; },
     async addPullRequestComment() { throw new Error("unused"); },
   };
   const authorized: AuthorizedPullRequest = {
@@ -117,7 +124,7 @@ function fixture(options: {
       owner: "acme", repo: "widget", number: 4, url: "https://github.com/acme/widget/pull/4",
       title: "Change", body: "body", draft: false, baseBranch: "main", baseSha: "base1", headBranch: "feature", headSha: "head1", installationId: 1,
     },
-    reviewThreads: [thread()],
+    reviewThreads: threadIds.map(thread),
     reviews: [{ id: "review-1", state: "CHANGES_REQUESTED", body: "review", author: "reviewer" }],
     repositoryClient,
     async withInstallationToken(action) { return action("secret"); },
@@ -131,7 +138,14 @@ function fixture(options: {
       if (options.artifactMissing) {
         throw new Error("review outcome artifact failed: cat: .agentos-review-resolution.json: No such file or directory");
       }
-      return JSON.stringify({ threads: [{ threadId: "thread-1", outcome, summary: "Handled", evidence: "src/a.ts:4" }] });
+      return JSON.stringify({
+        threads: threadIds.map((threadId) => ({
+          threadId,
+          outcome,
+          summary: "Handled",
+          evidence: "src/a.ts:4",
+        })),
+      });
     },
     async verify() {
       events.push("verify");
@@ -143,8 +157,20 @@ function fixture(options: {
       };
     },
     async assertCommitIncluded() { events.push("included"); },
-    async inspectChanges() {
+    async assertReviewCandidateIntegrated({ headSha }) {
+      events.push(`candidate-integrated:${headSha}`);
+      if (headSha !== "head2") throw new Error("fixture candidate was not integrated");
+    },
+    async inspectChanges(baseSha) {
       events.push("inspect");
+      if (baseSha === "head2") {
+        return {
+          changedFiles: [],
+          patch: "",
+          patchBytes: 0,
+          resultingTreeSha: "tree2",
+        };
+      }
       return {
         changedFiles: changes,
         patch: changes.length ? "diff" : "",
@@ -215,7 +241,11 @@ function fixture(options: {
     execution: { runtime: "agentos", software: "pi", provider: "kimi", model: "kimi-for-coding" },
     skill: { name: "fix-review-findings", content: "skill", sha256: "abc123" },
     runId: "run-1",
-    async authorize() { events.push("authorize"); return authorized; },
+    async authorize() {
+      events.push("authorize");
+      if (!options.movedHead) authorized.pullRequest.headSha = remoteHead;
+      return authorized;
+    },
     async createWorkspace() { events.push("workspace"); return workspace; },
     async runAgent() { events.push("agent"); return options.agentResponse ?? "done"; },
     async writeReceipt(_path, receipt) {
@@ -305,7 +335,7 @@ test("verified changes push before replying and resolving", async () => {
     commentUrl: "https://example/comment",
     reviewIds: ["review-1"],
   });
-  expect(result.fixGroupId).toBe("candidate");
+  expect(result.fixGroupId).toBe("thread-1");
   expect(result.fixCommitSha).toBe("commit1");
   expect(receipt.lifecycle).toBe("verified");
 });
@@ -319,6 +349,57 @@ test("direct publication requires explicit ownership before any remote write", a
   expect(events).not.toContain("reply");
   expect(events).not.toContain("resolve");
 });
+
+test("binds publication ownership to host task provenance, not repository namespace", async () => {
+  const { deps } = fixture();
+  const receipt = await runReviewAgent({
+    ...request,
+    ownership: {
+      mode: "explicit-handoff",
+      ownerId: "local-operator",
+      fromOwnerId: "local-task-owner",
+      handoffId: "handoff-task-owner",
+      authorizedBy: "operator",
+      source: "operator",
+    },
+    provenance: { taskId: "WKS-2245", actor: "local-task-owner" },
+  }, deps);
+  expect(receipt.lifecycle).toBe("verified");
+});
+
+test("uses host-authored handoff owner instead of GitHub repository owner", async () => {
+  const { deps } = fixture();
+  const receipt = await runReviewAgent({
+    ...request,
+    ownership: {
+      ...request.ownership,
+      ownerId: "local-operator",
+      fromOwnerId: "local-task-owner",
+    },
+  }, deps);
+  expect(receipt.lifecycle).toBe("verified");
+});
+
+test("defaults independent findings to separate groups and refuses one combined delivery", async () => {
+  const { deps, events, receipts } = fixture({
+    threadIds: ["thread-1", "thread-2"],
+  });
+  await expect(runReviewAgent(request, deps)).rejects.toThrow(
+    "independent review fix groups require separately scoped candidates",
+  );
+  expect(events).not.toContain("commit");
+  expect(events).not.toContain("push");
+  expect(events).not.toContain("reply");
+  expect(events).not.toContain("resolve");
+  const failed = receipts.at(-1) as {
+    threadResults?: Array<{ fixGroupId?: string }>;
+  };
+  expect(failed.threadResults?.map((result) => result.fixGroupId)).toEqual([
+    "thread-1",
+    "thread-2",
+  ]);
+});
+
 
 test("post-integration verification gates review closure", async () => {
   const { deps, events, receipts } = fixture({ integrationVerifyExit: 1 });
@@ -340,6 +421,21 @@ test("post-integration verification gates review closure", async () => {
   expect(integration.baseSha).toBe("head1");
   expect(integration.headSha).toBe("commit1");
   expect(integration.passed).toBe(false);
+});
+
+test("head movement during integration verification prevents stale thread writes", async () => {
+  const fixtureValue = fixture();
+  const workspace = await fixtureValue.deps.createWorkspace();
+  const verify = workspace.verify.bind(workspace);
+  let calls = 0;
+  workspace.verify = async (...args) => {
+    const result = await verify(...args);
+    if (++calls === 2) fixtureValue.setRemoteHead("newer-owner-head");
+    return result;
+  };
+  await expect(runReviewAgent(request, fixtureValue.deps)).rejects.toThrow("head moved");
+  expect(fixtureValue.events).not.toContain("reply");
+  expect(fixtureValue.events).not.toContain("resolve");
 });
 test("recreates a confirmed commit when the unpushed workspace was destroyed", async () => {
   const fixtureValue = fixture();
@@ -364,6 +460,28 @@ test("recreates a confirmed commit when the unpushed workspace was destroyed", a
   expect(fixtureValue.events).toContain("restore:commit1");
   expect(resumedReceipt.commitSha).toBe("commit2");
   expect(fixtureValue.effects.find((effect) => effect.kind === "commit")?.commitSha).toBe("commit2");
+});
+test("replays an already integrated direct publication without moving the original head", async () => {
+  const fixtureValue = fixture();
+  const firstReceipt = await runReviewAgent(request, fixtureValue.deps);
+  fixtureValue.deps.candidateLoader = {
+    async load(candidateId) {
+      return readReviewCandidate(
+        reviewCandidatePath(fixtureValue.deps.candidateRoot!, candidateId),
+      );
+    },
+  };
+
+  const resumedReceipt = await runReviewAgent({
+    ...request,
+    candidateId: firstReceipt.candidateId,
+  }, fixtureValue.deps);
+
+  expect(resumedReceipt.lifecycle).toBe("verified");
+  expect(resumedReceipt.commitSha).toBe("commit1");
+  expect(fixtureValue.events.filter((event) => event === "commit")).toHaveLength(1);
+  expect(fixtureValue.events.filter((event) => event === "push")).toHaveLength(1);
+  expect(fixtureValue.events.filter((event) => event === "included")).toHaveLength(2);
 });
 
 
@@ -435,6 +553,34 @@ test("dry run verifies but performs no remote writes", async () => {
   expect(events).not.toContain("commit");
   expect(events).not.toContain("push");
   expect(events).not.toContain("reply");
+});
+test("binds an owner when publishing an unattributed retained candidate", async () => {
+  const fixtureValue = fixture();
+  const firstReceipt = await runReviewAgent({
+    ...request,
+    publish: false,
+    deliveryMode: "patch",
+    ownership: undefined,
+  }, fixtureValue.deps);
+  fixtureValue.deps.candidateLoader = {
+    async load(candidateId) {
+      return readReviewCandidate(
+        reviewCandidatePath(fixtureValue.deps.candidateRoot!, candidateId),
+      );
+    },
+  };
+  const resumedArgs = parseReviewArgs([
+    request.pullRequestUrl,
+    "--verify", request.verifyCommand,
+    "--skill", "/skills/fix-review-findings/SKILL.md",
+    "--publish",
+    "--delivery-mode", "follow-up-pr",
+    "--owner-id", "acme",
+    "--candidate-id", firstReceipt.candidateId!,
+  ]);
+  const resumedReceipt = await runReviewAgent(resumedArgs, fixtureValue.deps);
+  expect(resumedReceipt.lifecycle).toBe("delivered");
+  expect(resumedReceipt.followUpPullRequestUrl).toBe("https://github.com/acme/widget/pull/5");
 });
 
 test("missing outcome artifact surfaces the agent response and redacts secrets", async () => {
@@ -562,6 +708,44 @@ test("follow-up CLI requests derive and replay the retained candidate base", asy
   expect(events.filter((event) => event === "commit")).toHaveLength(1);
   expect(events.filter((event) => event === "push")).toHaveLength(1);
   expect(events).toContain("reset:head1:shipwright/review-run-1");
+});
+
+test("recognizes a squashed or modified owner integration before closing findings", async () => {
+  const fixtureValue = fixture();
+  const cliArgs = parseReviewArgs([
+    request.pullRequestUrl,
+    "--verify", request.verifyCommand,
+    "--skill", "/tmp/fix-review-findings/SKILL.md",
+    "--publish",
+    "--delivery-mode", "follow-up-pr",
+    "--owner-id", "acme",
+  ]);
+  const firstReceipt = await runReviewAgent(cliArgs, fixtureValue.deps);
+  fixtureValue.setRemoteHead("head2");
+  fixtureValue.deps.candidateLoader = {
+    async load(candidateId) {
+      return readReviewCandidate(
+        reviewCandidatePath(fixtureValue.deps.candidateRoot!, candidateId),
+      );
+    },
+  };
+
+  const resumedReceipt = await runReviewAgent({
+    ...cliArgs,
+    candidateId: firstReceipt.candidateId,
+  }, fixtureValue.deps);
+
+  expect(resumedReceipt.lifecycle).toBe("verified");
+  expect(resumedReceipt.resultingHeadSha).toBe("head2");
+  expect(resumedReceipt.integrationVerification).toEqual(expect.objectContaining({
+    headSha: "head2",
+    passed: true,
+  }));
+  expect(fixtureValue.events).toContain("candidate-integrated:head2");
+  expect(fixtureValue.events.filter((event) => event === "commit")).toHaveLength(1);
+  expect(fixtureValue.events.filter((event) => event === "push")).toHaveLength(1);
+  expect(fixtureValue.events.filter((event) => event === "reply")).toHaveLength(1);
+  expect(fixtureValue.events.filter((event) => event === "resolve")).toHaveLength(1);
 });
 
 test("conflicting explicit follow-up base is rejected before publication", async () => {

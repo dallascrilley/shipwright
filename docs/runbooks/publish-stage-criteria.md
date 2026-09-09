@@ -113,6 +113,12 @@ to load these records for a resumed run; do not edit or remove them by hand.
 Publication uses host verification, not the model's proposal or repair
 identity, as its closure authority.
 
+Ownership IDs are host-authored local task identities, not GitHub repository
+owners or reviewer logins. For follow-up delivery, `--owner-id` names the task
+owner. For an explicit handoff, `--handoff-from-owner` names that same task
+owner while `--owner-id` names the receiving operator. Candidate provenance
+uses this host-owned identity and never derives local ownership from PR metadata.
+
 - `patch` (the CLI default) and `evidence-only` retain local evidence and make
   no remote commit, push, reply, or resolution, even when `--publish` is set.
 - `follow-up-pr` is the default for a published review run. It requires
@@ -137,9 +143,11 @@ Direct commit lifecycle is `proposed` → `integrated` → `verified`: after the
 push, the host proves the remote head contains the generated commit, runs the
 verification command in a fresh host workspace at that exact resulting head,
 and only then replies or resolves. A failed post-integration check leaves the
-original findings open. Follow-up lifecycle is `proposed` → `delivered`; the
-original branch and findings remain open until the follow-up is integrated by
-its normal owner.
+original findings open. Follow-up lifecycle is `proposed` → `delivered`; a
+later candidate resume can recognize the original PR head after the owner
+integrates the candidate, including a squash or additional changes, prove that
+candidate inclusion with host Git, run fresh verification at the resulting head,
+and only then reply to and resolve the original findings.
 
 ## Repair-publication rollout (staging only)
 
