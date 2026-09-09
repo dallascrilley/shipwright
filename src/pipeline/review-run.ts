@@ -754,6 +754,16 @@ export async function runReviewAgent(
         : {}),
     };
     const authorizedDeliveryPlan = await effectJournal.ensureDeliveryPlan(deliveryPlan);
+    if (authorizedDeliveryPlan.selectedFindingIds === undefined) {
+      const retainedFindingIds = new Set(retainedCandidate.findings.map((finding) => finding.findingId));
+      const selectedFindingIds = new Set(expectedThreadIds);
+      if (
+        retainedFindingIds.size !== selectedFindingIds.size
+        || [...retainedFindingIds].some((findingId) => !selectedFindingIds.has(findingId))
+      ) {
+        throw new Error("legacy delivery plan cannot authorize a narrowed finding scope");
+      }
+    }
 
 
     let publishableOutcomes = outcomes

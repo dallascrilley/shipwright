@@ -205,7 +205,13 @@ function fixture(options: {
   const effectJournalFactory = async (): Promise<ReviewEffectJournalStore> => ({
     async load() { return structuredClone(effects); },
     async ensureDeliveryPlan(plan) {
-      if (storedDeliveryPlan && JSON.stringify(storedDeliveryPlan) !== JSON.stringify(plan)) {
+      const currentComparable = storedDeliveryPlan ? { ...storedDeliveryPlan } : undefined;
+      const requestedComparable = { ...plan };
+      if (currentComparable && currentComparable.selectedFindingIds === undefined) {
+        delete currentComparable.selectedFindingIds;
+        delete requestedComparable.selectedFindingIds;
+      }
+      if (storedDeliveryPlan && JSON.stringify(currentComparable) !== JSON.stringify(requestedComparable)) {
         throw new Error("fixture delivery plan changed");
       }
       storedDeliveryPlan ??= structuredClone(plan);
@@ -300,10 +306,14 @@ function fixture(options: {
   };
   return {
     deps,
+    candidateRoot,
     events,
     receipts,
     getReplyBody: () => replyBody,
     getDeliveryPlan: () => structuredClone(storedDeliveryPlan),
+    setDeliveryPlan: (plan: ReviewAuthorizedDeliveryPlan | undefined) => {
+      storedDeliveryPlan = plan ? structuredClone(plan) : undefined;
+    },
     setThreadIds: (ids: string[]) => {
       threadIds = ids;
       authorized.reviewThreads = ids.map(thread);
@@ -473,6 +483,45 @@ test("rejects scoped findings absent from a retained candidate", async () => {
       findingIds: ["thread-2"],
     },
   }, deps)).rejects.toThrow("absent from retained candidate");
+});
+
+test("rejects narrowed scopes when a legacy delivery plan lacks selection", async () => {
+  const { deps, candidateRoot, setDeliveryPlan, setThreadIds } = fixture({
+    threadIds: ["thread-1", "thread-2"],
+  });
+  await runReviewAgent({
+    ...request,
+    publish: false,
+    deliveryMode: "patch",
+    reviewScope: {
+      mode: "this-review",
+      reviewId: "review-1",
+      findingIds: ["thread-1", "thread-2"],
+    },
+  }, deps);
+  const retainedCandidate = await readReviewCandidate(reviewCandidatePath(candidateRoot, "run-1"));
+  setDeliveryPlan({
+    candidateDigest: retainedCandidate.candidateDigest,
+    deliveryMode: "commit",
+    owner: "acme",
+    repo: "widget",
+    pullRequestNumber: 4,
+    baseBranch: "main",
+    baseSha: "base1",
+    headBranch: "feature",
+    authorizedHeadSha: "head1",
+    ownership: request.ownership,
+  });
+  setThreadIds(["thread-1"]);
+  await expect(runReviewAgent({
+    ...request,
+    candidateId: "run-1",
+    reviewScope: {
+      mode: "this-review",
+      reviewId: "review-1",
+      findingIds: ["thread-1"],
+    },
+  }, deps)).rejects.toThrow("legacy delivery plan cannot authorize a narrowed finding scope");
 });
 
 
