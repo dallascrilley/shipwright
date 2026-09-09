@@ -468,6 +468,7 @@ export class SandboxWorkspace {
    */
   async verifyReviewPlan(input: {
     baselineSha: string;
+    verificationHeadSha?: string;
     patch: Uint8Array;
     command: string;
     timeoutMs: number;
@@ -477,6 +478,7 @@ export class SandboxWorkspace {
   }> {
     if (
       !/^[0-9a-f]{40}$/.test(input.baselineSha) ||
+      (input.verificationHeadSha !== undefined && !/^[0-9a-f]{40}$/.test(input.verificationHeadSha)) ||
       !input.command.trim() ||
       !Number.isInteger(input.timeoutMs) ||
       input.timeoutMs < 1
@@ -505,10 +507,10 @@ export class SandboxWorkspace {
       });
       await runSandboxCommandOrThrow(planClient, "review plan candidate worktree", {
         command: "git",
-        args: ["worktree", "add", "--detach", candidateDirectory, input.baselineSha],
+        args: ["worktree", "add", "--detach", candidateDirectory, input.verificationHeadSha ?? input.baselineSha],
         cwd: SANDBOX_WORKSPACE,
       });
-      if (input.patch.byteLength > 0) {
+      if (input.patch.byteLength > 0 && input.verificationHeadSha === undefined) {
         await runSandboxCommandOrThrow(planClient, "review plan candidate patch", {
           command: "git",
           args: [
@@ -675,51 +677,16 @@ export class SandboxWorkspace {
       throw new Error("integration head does not contain the generated repair commit");
     }
   }
-  /**
-   * Prove that a later original PR head contains the retained candidate.
-   * Exact candidate trees cover squash merges; reverse application covers a
-   * candidate integrated into a later head with additional changes.
-   */
-  async assertReviewCandidateIntegrated(input: {
-    headSha: string;
-    candidateTreeSha: string;
-    patch: Uint8Array;
-  }): Promise<void> {
-    if (
-      !/^[0-9a-f]{40}$/.test(input.headSha)
-      || !/^[0-9a-f]{40}$/.test(input.candidateTreeSha)
-    ) {
-      throw new Error("review candidate integration proof requires valid Git SHAs");
+  /** Lineage is necessary, not sufficient: finding behavior is re-proven at head. */
+  async assertReviewIntegrationLineage(baseSha: string, headSha: string): Promise<void> {
+    if (!/^[0-9a-f]{40}$/.test(baseSha) || !/^[0-9a-f]{40}$/.test(headSha)) {
+      throw new Error("review integration lineage requires valid Git SHAs");
     }
-    assertSecretSafeBytes(input.patch);
     await this.assertAuthorizedRepoConfig();
-    const actualHead = (await this.hostGit(["rev-parse", "HEAD"])).trim();
-    if (actualHead !== input.headSha) {
-      throw new Error("review candidate integration workspace head changed");
+    if ((await this.hostGit(["rev-parse", "HEAD"])).trim() !== headSha) {
+      throw new Error("review integration workspace head changed");
     }
-    const actualTree = (await this.hostGit(["show", "-s", "--format=%T", input.headSha])).trim();
-    if (actualTree === input.candidateTreeSha) return;
-    if (input.patch.byteLength === 0) {
-      throw new Error("original PR head does not contain the delivered review candidate");
-    }
-    const relativePath = `.shipwright-review-integration-${randomUUID()}.diff`;
-    const hostPath = join(this.hostWorkspace, relativePath);
-    await writeFile(hostPath, input.patch, { mode: 0o600 });
-    try {
-      await this.hostGit([
-        "apply",
-        "--reverse",
-        "--check",
-        "--binary",
-        "--whitespace=nowarn",
-        "--",
-        relativePath,
-      ]);
-    } catch {
-      throw new Error("original PR head does not contain the delivered review candidate");
-    } finally {
-      await rm(hostPath, { force: true });
-    }
+    await this.assertCommitIncluded(baseSha, headSha);
   }
 
 

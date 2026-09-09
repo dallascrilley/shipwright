@@ -27,12 +27,29 @@ export type ReviewCandidateDeliveryMode =
   | "commit"
   | "follow-up-pr"
   | "evidence-only";
+export type ReviewScopeMode = "this-review" | "all-current-findings";
+
+export interface ReviewScope {
+  mode: ReviewScopeMode;
+  reviewId?: string;
+  headSha?: string;
+  findingIds: string[];
+}
+
+export interface ReviewBaseFreshness {
+  baseBranch: string;
+  authorizedBaseSha: string;
+  observedBaseSha?: string;
+  status: "fresh" | "stale" | "unavailable";
+  integrationOwner: "original-pr-owner";
+}
 
 export type ReviewRepairLifecycle =
   | "proposed"
   | "delivered"
   | "integrated"
   | "verified";
+
 
 /** Host-authored ownership proof; model output can never mint this object. */
 export type ReviewOwnershipAuthorization =
@@ -143,6 +160,11 @@ export interface ReviewVerificationPlan {
   findingDigest: string;
   command: string;
   timeoutMs: number;
+  /** Operator-classified, independently reviewed behavioral assertion. */
+  reproduction: {
+    kind: "behavioral";
+    assertion: string;
+  };
   baseline: ReviewVerificationObservation;
   candidate: ReviewVerificationObservation;
   /** Host adjudication, never copied from the model proposal. */
@@ -181,7 +203,7 @@ export interface ReviewEffectReceipt {
   detail?: string;
 }
 
-/** Explicit host authorization for one candidate's delivery lifecycle. */
+/** Explicit host authorization for one candidate's selected delivery scope. */
 export interface ReviewAuthorizedDeliveryPlan {
   candidateDigest: string;
   deliveryMode: ReviewCandidateDeliveryMode;
@@ -192,6 +214,7 @@ export interface ReviewAuthorizedDeliveryPlan {
   baseSha: string;
   headBranch: string;
   authorizedHeadSha: string;
+  selectedFindingIds?: string[];
   ownership?: ReviewOwnershipAuthorization;
   followUpBaseBranch?: string;
   followUpBaseSha?: string;
@@ -326,7 +349,10 @@ export function computeReviewFindingDigest(finding: ReviewFindingEvidence): stri
 }
 
 export function computeReviewChecksDigest(
-  value: Pick<ReviewCandidateVerification, "command" | "exitCode" | "passed" | "requiredChecks">,
+  value: Pick<ReviewCandidateVerification, "command" | "exitCode" | "passed" | "requiredChecks"> & {
+    verificationBaseSha?: string;
+    verificationHeadSha?: string;
+  },
 ): string {
   return createHash("sha256").update(stableJson(value)).digest("hex");
 }
@@ -352,6 +378,7 @@ export function computeReviewVerificationContextDigest(input: {
   findingDigest: string;
   command: string;
   timeoutMs: number;
+  reproduction: ReviewVerificationPlan["reproduction"];
   baseline: ReviewVerificationObservation;
   candidate: ReviewVerificationObservation;
   adjudicatedOutcome: ReviewVerificationPlan["adjudicatedOutcome"];
@@ -365,6 +392,7 @@ export function computeReviewVerificationContextDigest(input: {
       findingDigest: input.findingDigest,
       command: input.command,
       timeoutMs: input.timeoutMs,
+      reproduction: input.reproduction,
       baseline: input.baseline,
       candidate: input.candidate,
       adjudicatedOutcome: input.adjudicatedOutcome,
@@ -395,6 +423,11 @@ function assertReviewVerificationPlanShape(plan: ReviewVerificationPlan): void {
     !validDigest(plan.findingDigest) ||
     typeof plan.command !== "string" ||
     !plan.command.trim() ||
+    !isRecord(plan.reproduction) ||
+    plan.reproduction.kind !== "behavioral" ||
+    typeof plan.reproduction.assertion !== "string" ||
+    !plan.reproduction.assertion.trim() ||
+    plan.reproduction.assertion.length > 4000 ||
     !Number.isInteger(plan.timeoutMs) ||
     plan.timeoutMs < 1 ||
     plan.timeoutMs > 10 * 60 * 1000 ||
@@ -403,6 +436,13 @@ function assertReviewVerificationPlanShape(plan: ReviewVerificationPlan): void {
     !isRecord(plan.independentReview)
   ) {
     throw new Error("review verification plan is invalid");
+  }
+  // Classification is host authority, not inferred from a model's command.
+  // Static-only commands and no-op shell chains cannot substantiate a behavioral declaration.
+  const commands = plan.command.split(/\s*(?:&&|;|\|\|)\s*/).map((command) => command.trim()).filter(Boolean);
+  const staticOnlyCommand = /^(?:(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?(?:lint|typecheck)(?:\s|$)|(?:tsc|eslint|prettier|biome|stylelint|markdownlint)(?:\s|$)|(?:true|:|echo|printf)(?:\s|$))/i;
+  if (commands.length === 0 || commands.every((command) => staticOnlyCommand.test(command))) {
+    throw new Error("static-only checks cannot verify a behavioral finding");
   }
   if (containsSecretLikeContent(stableJson(plan))) {
     throw new Error("review verification plan contains secret-shaped content");
@@ -474,6 +514,7 @@ function assertReviewVerificationPlanShape(plan: ReviewVerificationPlan): void {
     findingDigest: plan.findingDigest,
     command: plan.command,
     timeoutMs: plan.timeoutMs,
+    reproduction: plan.reproduction,
     baseline: {
       expectedExitCode: plan.baseline.expectedExitCode,
       resultDigest: plan.baseline.resultDigest,
@@ -1044,7 +1085,9 @@ function mergeCandidateState(existing: ReviewCandidate, incoming: ReviewCandidat
   }
   const tokens = [...existing.verificationRecords];
   for (const incomingToken of incoming.verificationRecords) {
-    const index = tokens.findIndex((token) => token.findingId === incomingToken.findingId);
+    const index = tokens.findIndex((token) =>
+      token.findingId === incomingToken.findingId && token.checksDigest === incomingToken.checksDigest,
+    );
     if (index < 0) tokens.push(incomingToken);
     else if (stableJson(tokens[index]) !== stableJson(incomingToken)) throw new Error(`review evidence token ${incomingToken.findingId} has conflicting results`);
   }
@@ -1078,6 +1121,16 @@ function assertReviewDeliveryPlan(plan: ReviewAuthorizedDeliveryPlan): void {
   assertBoundedText("review delivery plan base SHA", plan.baseSha, 128);
   assertBoundedText("review delivery plan head branch", plan.headBranch, 512);
   assertBoundedText("review delivery plan authorized head SHA", plan.authorizedHeadSha, 128);
+  if (plan.selectedFindingIds !== undefined) {
+    assertBoundedArray("review delivery plan selected findings", plan.selectedFindingIds, REVIEW_METADATA_ARRAY_LIMIT);
+    const uniqueFindingIds = new Set<string>();
+    for (const findingId of plan.selectedFindingIds) {
+      assertBoundedText("review delivery plan selected finding", findingId, 160);
+      if (uniqueFindingIds.has(findingId)) throw new Error("review delivery plan selected findings must be unique");
+      uniqueFindingIds.add(findingId);
+    }
+    if (uniqueFindingIds.size === 0) throw new Error("review delivery plan selected findings cannot be empty");
+  }
   if (plan.ownership) {
     if (plan.ownership.mode === "local-owner") {
       assertBoundedText("review ownership owner", plan.ownership.ownerId, 160);

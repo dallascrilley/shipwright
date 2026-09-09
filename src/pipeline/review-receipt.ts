@@ -4,9 +4,11 @@ import type { RunExecution } from "./receipt.js";
 import { redactSecrets } from "./receipt.js";
 import type { ReviewOutcome } from "./review-outcomes.js";
 import type {
+  ReviewBaseFreshness,
   ReviewCandidateDeliveryMode,
   ReviewOwnershipAuthorization,
   ReviewRepairLifecycle,
+  ReviewScope,
 } from "./repair-candidate.js";
 
 export type ReviewRunPhase = "intake" | "workspace" | "agent" | "verify" | "policy" | "publish" | "threads" | "complete";
@@ -51,6 +53,8 @@ export interface ReviewRunReceipt {
   headBranch?: string;
   candidateId?: string;
   candidateDigest?: string;
+  baseFreshness?: ReviewBaseFreshness;
+  reviewScope?: ReviewScope;
   lifecycle: ReviewRepairLifecycle;
   ownership?: ReviewOwnershipAuthorization;
   deliveryMode: ReviewCandidateDeliveryMode;

@@ -32,6 +32,12 @@ export function createHostReviewFindingVerifier(
       if (!finding || !findingDigest || !plans || !workspace.verifyReviewPlan) {
         return undefined;
       }
+      if (
+        (checks.verificationHeadSha === undefined) !== (checks.verificationBaseSha === undefined)
+        || (checks.verificationBaseSha !== undefined && checks.verificationBaseSha !== candidate.authorizedHeadSha)
+      ) {
+        return undefined;
+      }
 
       const plan = await plans.lookup({
         candidateDigest: candidate.candidateDigest,
@@ -56,6 +62,7 @@ export function createHostReviewFindingVerifier(
       try {
         observed = await workspace.verifyReviewPlan({
           baselineSha: candidate.authorizedHeadSha,
+          ...(checks.verificationHeadSha ? { verificationHeadSha: checks.verificationHeadSha } : {}),
           patch: reviewCandidatePatch(candidate),
           command: plan.command,
           timeoutMs: plan.timeoutMs,
@@ -81,6 +88,8 @@ function buildVerificationRecord(
     exitCode: number | null;
     passed: boolean;
     requiredChecks: "passed" | "failed" | "pending";
+    verificationBaseSha?: string;
+    verificationHeadSha?: string;
   },
 ): ReviewFindingVerificationRecord {
   const baselineDigest = computeReviewVerificationResultDigest(observed.baseline);
@@ -119,6 +128,7 @@ function buildVerificationRecord(
     command: plan.command,
     timeoutMs: plan.timeoutMs,
     baseline: plan.baseline,
+    reproduction: plan.reproduction,
     candidate: plan.candidate,
     adjudicatedOutcome: plan.adjudicatedOutcome,
     riskLevel: plan.riskLevel,
@@ -134,7 +144,7 @@ function buildVerificationRecord(
     checks.requiredChecks === "passed" &&
     reviewerPass;
   const recordId = `verification-${createHash("sha256")
-    .update(`${candidate.candidateDigest}:${findingId}:${plan.planId}`)
+    .update(`${candidate.candidateDigest}:${findingId}:${plan.planId}:${computeReviewChecksDigest(checks)}`)
     .digest("hex")
     .slice(0, 48)}`;
 
@@ -145,11 +155,13 @@ function buildVerificationRecord(
     findingId,
     findingDigest,
     checksDigest: computeReviewChecksDigest(checks),
+    ...(checks.verificationBaseSha ? { verificationBaseSha: checks.verificationBaseSha } : {}),
+    ...(checks.verificationHeadSha ? { verificationHeadSha: checks.verificationHeadSha } : {}),
     observedOutcome: independentlyVerified ? plan.adjudicatedOutcome : "pending",
     observedEvidence: independentlyVerified
       ? `Trusted plan ${plan.planId} matched baseline ${baselineDigest} and candidate ${candidateResultDigest} results.`
       : `Trusted plan ${plan.planId} did not produce an independently verified disposition.`,
-    observedReproduction: `Plan command ${plan.command}; baseline ${baselineDigest}; candidate ${candidateResultDigest}.`,
+    observedReproduction: `Behavior: ${plan.reproduction.assertion}; command ${plan.command}; baseline ${baselineDigest}; result ${candidateResultDigest}.`,
     observedAffectedFiles: [...candidate.changedFiles],
     requiredChecks: checks.requiredChecks,
     riskLevel: plan.riskLevel,

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import {
+  assertReviewVerificationPlan,
   computeReviewVerificationContextDigest,
   computeReviewVerificationResultDigest,
   createReviewCandidate,
@@ -80,6 +81,7 @@ function planFor(
     findingDigest,
     command: "node reproduce.mjs",
     timeoutMs: 30_000,
+    reproduction: { kind: "behavioral", assertion: "The reported input produces the expected result." },
     baseline: {
       expectedExitCode: observed.baseline.exitCode!,
       resultDigest: computeReviewVerificationResultDigest(observed.baseline),
@@ -101,6 +103,7 @@ function planFor(
       findingDigest: plan.findingDigest,
       command: plan.command,
       timeoutMs: plan.timeoutMs,
+      reproduction: plan.reproduction,
       baseline: plan.baseline,
       candidate: plan.candidate,
       adjudicatedOutcome: plan.adjudicatedOutcome,
@@ -194,6 +197,23 @@ test("ignores the model proposal and fixes only a trusted matching plan", async 
     findingDigest,
     candidateDigest: value.candidateDigest,
   });
+});
+
+test("rejects integrated proof whose recorded baseline differs from the executed baseline", async () => {
+  const value = candidate();
+  const observed = { baseline: result(1), candidate: result(0) };
+  const verifier = createHostReviewFindingVerifier(store([planFor(value, observed)]));
+  const record = await verifier.verify({
+    candidate: value,
+    findingId: "finding-1",
+    workspace: workspace(async () => observed),
+    checks: {
+      ...checks(),
+      verificationBaseSha: "e".repeat(40),
+      verificationHeadSha: "f".repeat(40),
+    },
+  });
+  expect(record).toBeUndefined();
 });
 
 test("keeps a forged reviewer freshness claim pending", async () => {
@@ -331,4 +351,15 @@ test("keeps a no-code rejection pending when the candidate contains a patch", as
     observedOutcome: "pending",
     independentVerdict: "pending",
   });
+});
+
+test("rejects static-only verification commands for behavioral plans", () => {
+  const value = candidate();
+  const observed = {
+    baseline: result(1, "baseline-failure"),
+    candidate: result(0, "candidate-success"),
+  };
+  const plan = planFor(value, observed);
+  plan.command = "bun run lint && echo done";
+  expect(() => assertReviewVerificationPlan(plan)).toThrow("static-only checks");
 });

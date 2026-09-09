@@ -38,6 +38,8 @@ export default defineAction({
       resultingTreeSha: candidate.resultingTreeSha,
       patchBytes: candidate.patchBytes,
       changedFiles: candidate.changedFiles,
+      fixGroups: candidate.fixGroups,
+      provenance: candidate.provenance,
       findings: candidate.findings,
       verification: candidate.verification,
       deliveryMode: candidate.deliveryMode,

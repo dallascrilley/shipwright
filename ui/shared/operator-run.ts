@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { reviewScopeSchema } from "./agent-definition";
 
-import type { ReviewOwnershipAuthorization, ReviewRepairLifecycle } from "../../src/pipeline/repair-candidate";
+import type {
+  ReviewBaseFreshness,
+  ReviewOwnershipAuthorization,
+  ReviewRepairLifecycle,
+  ReviewScope,
+} from "../../src/pipeline/repair-candidate";
 import type { RunExecution } from "../../src/pipeline/receipt";
 import { redactSecrets } from "../../src/pipeline/secret-safety";
 
@@ -253,6 +258,8 @@ export interface OperatorRunReceipt {
   baseSha?: string;
   authorizedBaseSha?: string;
   authorizedHeadSha?: string;
+  baseFreshness?: ReviewBaseFreshness;
+  reviewScope?: ReviewScope;
   branch?: string;
   changedFiles: string[];
   verification: {
@@ -946,7 +953,6 @@ export function resolveOperatorRunLineage(
   };
 }
 
-/** Client-side intake hydration from a historical record. Never starts a run. */
 export function hydrateIntakeFromRecord(record: OperatorRunRecord): {
   targetInput: string;
   mode: OperatorRunKind;
@@ -959,6 +965,8 @@ export function hydrateIntakeFromRecord(record: OperatorRunRecord): {
   candidateId?: string;
   deliveryMode?: OperatorRunRequest["deliveryMode"];
   ownership?: ReviewOwnershipAuthorization;
+  reviewScope?: OperatorRunRequest["reviewScope"];
+  fixGroups?: OperatorRunRequest["fixGroups"];
 } {
   const presetId = (record.request.presetId ?? "").trim();
   const useRawVerify = !presetId;
@@ -979,6 +987,12 @@ export function hydrateIntakeFromRecord(record: OperatorRunRecord): {
       : {}),
     ...(record.request.ownership
       ? { ownership: record.request.ownership }
+      : {}),
+    ...(record.request.reviewScope
+      ? { reviewScope: record.request.reviewScope }
+      : {}),
+    ...(record.request.fixGroups
+      ? { fixGroups: record.request.fixGroups }
       : {}),
   };
 }

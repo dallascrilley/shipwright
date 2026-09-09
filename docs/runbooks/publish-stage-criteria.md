@@ -137,17 +137,26 @@ base/head movement, and effect-journal drift fail closed. A candidate with
 multiple independent fix groups must be delivered through separately scoped
 candidates; duplicate findings may share one explicitly host-assigned group
 and one commit. Every candidate commit is bound to its source findings in the
-receipt.
+receipt. Scope a run with repeated `--finding-id` plus either `--review-id` or
+the preflight-pinned `--review-head-sha`; the effect journal records the
+selected finding IDs so a resume cannot widen the delivery.
 
 Direct commit lifecycle is `proposed` → `integrated` → `verified`: after the
 push, the host proves the remote head contains the generated commit, runs the
-verification command in a fresh host workspace at that exact resulting head,
-and only then replies or resolves. A failed post-integration check leaves the
-original findings open. Follow-up lifecycle is `proposed` → `delivered`; a
-later candidate resume can recognize the original PR head after the owner
-integrates the candidate, including a squash or additional changes, prove that
-candidate inclusion with host Git, run fresh verification at the resulting head,
-and only then reply to and resolve the original findings.
+whole verification command in a fresh host workspace at that exact resulting
+head, and re-runs each selected finding's host-owned behavioral proof there.
+Only a complete set of passing finding proofs permits replies or resolutions.
+A failed post-integration check or finding proof leaves the original findings
+open. Follow-up lifecycle is `proposed` → `delivered`; a later candidate resume
+can recognize the original PR head after the owner integrates the candidate,
+including a squash or additional changes, prove original-head ancestry with
+host Git, run fresh whole and per-finding verification at the resulting head,
+and only then reply to and resolve the original findings. Textual patch
+equality is not required for an owner-modified repair.
+
+Every receipt reports authorized base freshness (`fresh`, `stale`, or
+`unavailable`) and names `original-pr-owner` as integration owner. Shipwright
+does not refresh the PR's Current base or merge the original owner's branch.
 
 ## Repair-publication rollout (staging only)
 

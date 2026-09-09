@@ -69,6 +69,43 @@ test("accepts only explicit native delivery modes", () => {
   ])).toThrow("invalid delivery mode");
 });
 
+test("parses a scoped review with duplicate grouping", () => {
+  const parsed = parseReviewArgs([
+    "https://github.com/acme/widget/pull/4",
+    "--verify", "bun test",
+    "--skill", "/skill",
+    "--finding-id", "thread-1",
+    "--finding-id", "thread-2",
+    "--review-head-sha", "a".repeat(40),
+    "--fix-group", "shared=thread-1,thread-2",
+  ]);
+  expect(parsed.reviewScope).toEqual({
+    mode: "all-current-findings",
+    headSha: "a".repeat(40),
+    findingIds: ["thread-1", "thread-2"],
+  });
+  expect(parsed.fixGroups).toEqual([
+    { groupId: "shared", findingIds: ["thread-1", "thread-2"] },
+  ]);
+});
+
+test("requires an explicit scope authority for selected findings", () => {
+  expect(() => parseReviewArgs([
+    "https://github.com/acme/widget/pull/4",
+    "--verify", "bun test",
+    "--skill", "/skill",
+    "--finding-id", "thread-1",
+  ])).toThrow("scoped findings require");
+  expect(() => parseReviewArgs([
+    "https://github.com/acme/widget/pull/4",
+    "--verify", "bun test",
+    "--skill", "/skill",
+    "--finding-id", "thread-1",
+    "--review-id", "review-1",
+    "--review-head-sha", "a".repeat(40),
+  ])).toThrow("mutually exclusive");
+});
+
 test("requires verification and skill paths", () => {
   expect(() => parseReviewArgs(["https://github.com/acme/widget/pull/4", "--verify", "bun test"])).toThrow("--skill");
   expect(() => parseReviewArgs(["https://github.com/acme/widget/pull/4", "--skill", "/skill"])).toThrow("--verify");

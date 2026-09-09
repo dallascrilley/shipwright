@@ -105,7 +105,7 @@ for (const attack of ["branch", "head"] as const) {
   });
 }
 
-test("host Git proves retained candidates on squash and later owner heads", async () => {
+test("host Git checks integration lineage without claiming behavioral correctness", async () => {
   const root = await mkdtemp(join(tmpdir(), "shipwright-candidate-integration-"));
   const directory = join(root, "repo");
   const patchPath = join(root, "candidate.diff");
@@ -128,7 +128,6 @@ test("host Git proves retained candidates on squash and later owner heads", asyn
 
     await writeFile(join(directory, "content.txt"), "repaired\n");
     const candidate = await actual.inspectChanges(baseSha);
-    const candidateTreeSha = candidate.resultingTreeSha!;
     const patch = candidate.patchData!;
     await actual.commit("candidate");
 
@@ -138,28 +137,19 @@ test("host Git proves retained candidates on squash and later owner heads", asyn
     await git("add", "content.txt");
     await git("-c", "user.name=Owner", "-c", "user.email=owner@example.invalid", "commit", "-qm", "squash integration");
     const squashHeadSha = await git("rev-parse", "HEAD");
-    await actual.assertReviewCandidateIntegrated({
-      headSha: squashHeadSha,
-      candidateTreeSha,
-      patch,
-    });
+    await actual.assertReviewIntegrationLineage(baseSha, squashHeadSha);
 
     await writeFile(join(directory, "owner-change.txt"), "additional owner change\n");
     await git("add", "owner-change.txt");
     await git("-c", "user.name=Owner", "-c", "user.email=owner@example.invalid", "commit", "-qm", "owner follow-up");
     const extendedHeadSha = await git("rev-parse", "HEAD");
-    await actual.assertReviewCandidateIntegrated({
-      headSha: extendedHeadSha,
-      candidateTreeSha,
-      patch,
-    });
+    await actual.assertReviewIntegrationLineage(baseSha, extendedHeadSha);
 
     await git("reset", "--hard", baseSha);
-    await expect(actual.assertReviewCandidateIntegrated({
-      headSha: baseSha,
-      candidateTreeSha,
-      patch,
-    })).rejects.toThrow("original PR head does not contain the delivered review candidate");
+    await expect(actual.assertReviewIntegrationLineage(
+      squashHeadSha,
+      baseSha,
+    )).rejects.toThrow("integration head does not contain the generated repair commit");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

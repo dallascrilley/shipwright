@@ -34,11 +34,14 @@ function fixture(options: {
   changes?: string[];
   verifyExit?: number;
   integrationVerifyExit?: number;
+  integrationFindingOutcome?: "fixed" | "rejected" | "needs-human" | "pending";
   movedHead?: boolean;
   outcome?: "fixed" | "rejected" | "needs-human";
   artifactMissing?: boolean;
   agentResponse?: string;
   threadIds?: string[];
+  baseHeadSha?: string;
+  baseSha?: string;
 } = {}) {
   const events: string[] = [];
   const changes = options.changes ?? ["src/a.ts"];
@@ -75,7 +78,7 @@ function fixture(options: {
     async getBranchSha(branch) {
       events.push("remote-head");
       if (branch === "feature") return options.movedHead ? "moved" : remoteHead;
-      return followUpHead;
+      return options.baseHeadSha ?? followUpHead;
     },
     async listPullRequests() {
       return followUpPullRequest
@@ -109,7 +112,7 @@ function fixture(options: {
       }
       return {
         title: "Change", body: "body", state: "open", draft: false,
-        baseBranch: "main", baseSha: "base1", headBranch: "feature",
+        baseBranch: "main", baseSha: options.baseSha ?? "base1", headBranch: "feature",
         headSha: options.movedHead ? "moved" : remoteHead, headOwner: "acme", headRepo: "widget",
       };
     },
@@ -122,7 +125,7 @@ function fixture(options: {
   const authorized: AuthorizedPullRequest = {
     pullRequest: {
       owner: "acme", repo: "widget", number: 4, url: "https://github.com/acme/widget/pull/4",
-      title: "Change", body: "body", draft: false, baseBranch: "main", baseSha: "base1", headBranch: "feature", headSha: "head1", installationId: 1,
+      title: "Change", body: "body", draft: false, baseBranch: "main", baseSha: options.baseSha ?? "base1", headBranch: "feature", headSha: "head1", installationId: 1,
     },
     reviewThreads: threadIds.map(thread),
     reviews: [{ id: "review-1", state: "CHANGES_REQUESTED", body: "review", author: "reviewer" }],
@@ -157,7 +160,7 @@ function fixture(options: {
       };
     },
     async assertCommitIncluded() { events.push("included"); },
-    async assertReviewCandidateIntegrated({ headSha }) {
+    async assertReviewIntegrationLineage(_baseSha, headSha) {
       events.push(`candidate-integrated:${headSha}`);
       if (headSha !== "head2") throw new Error("fixture candidate was not integrated");
     },
@@ -271,12 +274,14 @@ function fixture(options: {
         const finding = candidate.findings.find((item) => item.findingId === findingId)!;
         return {
           schema: "shipwright-review-verification/v1",
-          recordId: `record-${candidate.candidateId}-${findingId}`,
+          recordId: `record-${candidate.candidateId}-${findingId}-${computeReviewChecksDigest(checks).slice(0, 12)}`,
           candidateDigest: candidate.candidateDigest,
           findingId,
           findingDigest: finding.originalContentDigest!,
+          observedOutcome: checks.verificationHeadSha
+            ? options.integrationFindingOutcome ?? outcome
+            : outcome,
           checksDigest: computeReviewChecksDigest(checks),
-          observedOutcome: outcome,
           observedEvidence: "Host fixture verification",
           observedReproduction: "Host fixture reproduction",
           observedAffectedFiles: [...candidate.changedFiles],
@@ -339,6 +344,19 @@ test("verified changes push before replying and resolving", async () => {
   expect(result.fixCommitSha).toBe("commit1");
   expect(receipt.lifecycle).toBe("verified");
 });
+
+test("records base freshness and assigns integration to the original PR owner", async () => {
+  const fullBaseSha = "a".repeat(40);
+  const { deps } = fixture({ baseHeadSha: fullBaseSha, baseSha: fullBaseSha });
+  const receipt = await runReviewAgent(request, deps);
+  expect(receipt.baseFreshness).toEqual({
+    baseBranch: "main",
+    authorizedBaseSha: fullBaseSha,
+    observedBaseSha: fullBaseSha,
+    status: "fresh",
+    integrationOwner: "original-pr-owner",
+  });
+});
 test("direct publication requires explicit ownership before any remote write", async () => {
   const { deps, events } = fixture();
   await expect(runReviewAgent({ ...request, ownership: undefined }, deps)).rejects.toThrow(
@@ -400,6 +418,25 @@ test("defaults independent findings to separate groups and refuses one combined 
   ]);
 });
 
+test("delivers one complete duplicate group from a scoped candidate", async () => {
+  const { deps, getDeliveryPlan } = fixture({
+    threadIds: ["thread-1", "thread-2"],
+  });
+  const receipt = await runReviewAgent({
+    ...request,
+    reviewScope: {
+      mode: "this-review",
+      reviewId: "review-1",
+      findingIds: ["thread-1", "thread-2"],
+    },
+    fixGroups: [{ groupId: "shared-repair", findingIds: ["thread-1", "thread-2"] }],
+  }, deps);
+  expect(receipt.lifecycle).toBe("verified");
+  expect(getDeliveryPlan()).toEqual(expect.objectContaining({
+    selectedFindingIds: ["thread-1", "thread-2"],
+  }));
+});
+
 
 test("post-integration verification gates review closure", async () => {
   const { deps, events, receipts } = fixture({ integrationVerifyExit: 1 });
@@ -421,6 +458,18 @@ test("post-integration verification gates review closure", async () => {
   expect(integration.baseSha).toBe("head1");
   expect(integration.headSha).toBe("commit1");
   expect(integration.passed).toBe(false);
+});
+
+test("integrated finding proof failure keeps original threads open", async () => {
+  const { deps, events, receipts } = fixture({ integrationFindingOutcome: "pending" });
+  await expect(runReviewAgent(request, deps)).rejects.toThrow(
+    "integrated review requires host-verified outcomes",
+  );
+  expect(events).toContain("included");
+  expect(events).toContain("push");
+  expect(events).not.toContain("reply");
+  expect(events).not.toContain("resolve");
+  expect(receipts.at(-1)?.lifecycle).toBe("integrated");
 });
 
 test("head movement during integration verification prevents stale thread writes", async () => {

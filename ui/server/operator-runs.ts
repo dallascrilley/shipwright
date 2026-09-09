@@ -723,6 +723,8 @@ function toOperatorReviewReceipt(
     baseSha: receipt.authorizedBaseSha,
     authorizedBaseSha: receipt.authorizedBaseSha,
     authorizedHeadSha: receipt.authorizedHeadSha,
+    ...(receipt.baseFreshness ? { baseFreshness: receipt.baseFreshness } : {}),
+    ...(receipt.reviewScope ? { reviewScope: receipt.reviewScope } : {}),
     branch: receipt.headBranch,
     changedFiles: receipt.changedFiles,
     verification: receipt.verification,
