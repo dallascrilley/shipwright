@@ -40,13 +40,14 @@ function fixture(options: {
   artifactMissing?: boolean;
   agentResponse?: string;
   threadIds?: string[];
+  reviewIdsByThread?: Record<string, string[]>;
   baseHeadSha?: string;
   baseSha?: string;
 } = {}) {
   const events: string[] = [];
   const changes = options.changes ?? ["src/a.ts"];
   const outcome = options.outcome ?? "fixed";
-  const threadIds = options.threadIds ?? ["thread-1"];
+  let threadIds = options.threadIds ?? ["thread-1"];
   let verifyCalls = 0;
   let remoteHead = "head1";
   let currentCommit = "commit1";
@@ -60,6 +61,7 @@ function fixture(options: {
     isOutdated: false,
     path: id === "thread-1" ? "src/a.ts" : `src/${id}.ts`,
     line: 4,
+    reviewIds: options.reviewIdsByThread?.[id] ?? ["review-1"],
     comments: [
       {
         id: id === "thread-1" ? "comment-1" : `comment-${id}`,
@@ -256,6 +258,9 @@ function fixture(options: {
       receipts.push(structuredClone(receipt) as unknown as Record<string, unknown>);
     },
     candidateRoot,
+    candidateLoader: {
+      load: (candidateId) => readReviewCandidate(reviewCandidatePath(candidateRoot, candidateId)),
+    },
     effectJournalFactory,
     verificationStore: {
       async put(record) { records.push(structuredClone(record)); },
@@ -299,6 +304,10 @@ function fixture(options: {
     receipts,
     getReplyBody: () => replyBody,
     getDeliveryPlan: () => structuredClone(storedDeliveryPlan),
+    setThreadIds: (ids: string[]) => {
+      threadIds = ids;
+      authorized.reviewThreads = ids.map(thread);
+    },
     effects,
     setRemoteHead: (head: string) => { remoteHead = head; },
     setCurrentCommit: (commit: string) => { currentCommit = commit; },
@@ -435,6 +444,35 @@ test("delivers one complete duplicate group from a scoped candidate", async () =
   expect(getDeliveryPlan()).toEqual(expect.objectContaining({
     selectedFindingIds: ["thread-1", "thread-2"],
   }));
+});
+
+test("rejects a finding that is not a member of the selected review", async () => {
+  const { deps } = fixture({
+    reviewIdsByThread: { "thread-1": ["review-2"] },
+  });
+  await expect(runReviewAgent({
+    ...request,
+    reviewScope: {
+      mode: "this-review",
+      reviewId: "review-1",
+      findingIds: ["thread-1"],
+    },
+  }, deps)).rejects.toThrow("not from review review-1");
+});
+
+test("rejects scoped findings absent from a retained candidate", async () => {
+  const { deps, setThreadIds } = fixture();
+  await runReviewAgent(request, deps);
+  setThreadIds(["thread-1", "thread-2"]);
+  await expect(runReviewAgent({
+    ...request,
+    candidateId: "run-1",
+    reviewScope: {
+      mode: "this-review",
+      reviewId: "review-1",
+      findingIds: ["thread-2"],
+    },
+  }, deps)).rejects.toThrow("absent from retained candidate");
 });
 
 

@@ -23,7 +23,7 @@ const USAGE =
 
 function parseSafeId(value: string | undefined, label: string, maxLength = 160): string {
   const trimmed = value?.trim();
-  if (!trimmed || trimmed.length > maxLength || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(trimmed)) {
+  if (!trimmed || trimmed.length > maxLength || !/^[A-Za-z0-9][A-Za-z0-9._:_-]{0,159}$/.test(trimmed)) {
     throw new Error(`invalid ${label}: ${value ?? "(missing)"}`);
   }
   return trimmed;

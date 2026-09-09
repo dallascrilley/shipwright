@@ -407,6 +407,7 @@ export function createOctokitTransport(config: GitHubConfig): GitHubTransport {
                     body: string;
                     url: string;
                     author: { login: string } | null;
+                    pullRequestReview: { id: string } | null;
                   }> };
                 }>;
                 pageInfo: { hasNextPage: boolean; endCursor: string | null };
@@ -417,7 +418,7 @@ export function createOctokitTransport(config: GitHubConfig): GitHubTransport {
                   reviewThreads(first: 100, after: $after) {
                     nodes {
                       id isResolved isOutdated path line
-                      comments(first: 100) { nodes { id body url author { login } } }
+                      comments(first: 100) { nodes { id body url author { login } pullRequestReview { id } } }
                     }
                     pageInfo { hasNextPage endCursor }
                   }
@@ -428,6 +429,9 @@ export function createOctokitTransport(config: GitHubConfig): GitHubTransport {
             if (!pullRequest) throw new Error("pull request was not found");
             threads.push(...pullRequest.reviewThreads.nodes.map((thread) => ({
               ...thread,
+              reviewIds: [...new Set(thread.comments.nodes
+                .map((comment) => comment.pullRequestReview?.id)
+                .filter((reviewId): reviewId is string => reviewId !== undefined))],
               comments: thread.comments.nodes.map((comment) => ({
                 id: comment.id,
                 body: comment.body,

@@ -293,6 +293,40 @@ describe("review effect journal", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  test("resumes legacy delivery plans without selected finding IDs", async () => {
+    const value = candidate();
+    const root = await mkdtemp(join(tmpdir(), "shipwright-effects-legacy-"));
+    const path = join(root, "effects.json");
+    const plan = {
+      candidateDigest: value.candidateDigest,
+      deliveryMode: "evidence-only" as const,
+      owner: "octo-org",
+      repo: "shipwright",
+      pullRequestNumber: 1,
+      baseBranch: "main",
+      baseSha: BASE_SHA,
+      headBranch: "repair/1",
+      authorizedHeadSha: HEAD_SHA,
+    };
+    try {
+      await writeFile(path, JSON.stringify({
+        schema: "shipwright-review-effects/v1",
+        candidateId: value.candidateId,
+        candidateDigest: value.candidateDigest,
+        deliveryPlan: plan,
+        effects: [],
+        resumeCursor: 0,
+      }));
+      const journal = await FileReviewEffectJournalStore.open(path, value);
+      await expect(journal.ensureDeliveryPlan({
+        ...plan,
+        selectedFindingIds: ["thread-1"],
+      })).resolves.toEqual(plan);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
 });
 
 describe("review artifact retention", () => {

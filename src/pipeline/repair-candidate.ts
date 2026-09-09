@@ -161,7 +161,7 @@ export interface ReviewVerificationPlan {
   command: string;
   timeoutMs: number;
   /** Operator-classified, independently reviewed behavioral assertion. */
-  reproduction: {
+  reproduction?: {
     kind: "behavioral";
     assertion: string;
   };
@@ -378,7 +378,7 @@ export function computeReviewVerificationContextDigest(input: {
   findingDigest: string;
   command: string;
   timeoutMs: number;
-  reproduction: ReviewVerificationPlan["reproduction"];
+  reproduction?: ReviewVerificationPlan["reproduction"];
   baseline: ReviewVerificationObservation;
   candidate: ReviewVerificationObservation;
   adjudicatedOutcome: ReviewVerificationPlan["adjudicatedOutcome"];
@@ -413,6 +413,13 @@ function assertReviewVerificationPlanShape(plan: ReviewVerificationPlan): void {
   const validId = (value: unknown): value is string =>
     typeof value === "string" &&
     /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(value);
+  const validReproduction =
+    plan.reproduction === undefined ||
+    (isRecord(plan.reproduction) &&
+      plan.reproduction.kind === "behavioral" &&
+      typeof plan.reproduction.assertion === "string" &&
+      Boolean(plan.reproduction.assertion.trim()) &&
+      plan.reproduction.assertion.length <= 4000);
   if (
     !isRecord(plan) ||
     plan.schema !== "shipwright-review-verification-plan/v1" ||
@@ -423,11 +430,7 @@ function assertReviewVerificationPlanShape(plan: ReviewVerificationPlan): void {
     !validDigest(plan.findingDigest) ||
     typeof plan.command !== "string" ||
     !plan.command.trim() ||
-    !isRecord(plan.reproduction) ||
-    plan.reproduction.kind !== "behavioral" ||
-    typeof plan.reproduction.assertion !== "string" ||
-    !plan.reproduction.assertion.trim() ||
-    plan.reproduction.assertion.length > 4000 ||
+    !validReproduction ||
     !Number.isInteger(plan.timeoutMs) ||
     plan.timeoutMs < 1 ||
     plan.timeoutMs > 10 * 60 * 1000 ||
@@ -440,7 +443,7 @@ function assertReviewVerificationPlanShape(plan: ReviewVerificationPlan): void {
   // Classification is host authority, not inferred from a model's command.
   // Static-only commands and no-op shell chains cannot substantiate a behavioral declaration.
   const commands = plan.command.split(/\s*(?:&&|;|\|\|)\s*/).map((command) => command.trim()).filter(Boolean);
-  const staticOnlyCommand = /^(?:(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?(?:lint|typecheck)(?:\s|$)|(?:tsc|eslint|prettier|biome|stylelint|markdownlint)(?:\s|$)|(?:true|:|echo|printf)(?:\s|$))/i;
+  const staticOnlyCommand = /^(?:(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?(?:lint|typecheck)(?:\s|$)|(?:tsc|eslint|prettier|biome|stylelint|markdownlint)(?:\s|$)|(?:pwd|false|true|:|echo|printf)(?:\s|$))/i;
   if (commands.length === 0 || commands.every((command) => staticOnlyCommand.test(command))) {
     throw new Error("static-only checks cannot verify a behavioral finding");
   }
@@ -1208,6 +1211,20 @@ function parseStoredJournal(
 
 
 }
+function reviewDeliveryPlansMatch(
+  current: ReviewAuthorizedDeliveryPlan,
+  requested: ReviewAuthorizedDeliveryPlan,
+): boolean {
+  if (current.selectedFindingIds === undefined) {
+    const legacy = { ...current };
+    delete legacy.selectedFindingIds;
+    const next = { ...requested };
+    delete next.selectedFindingIds;
+    return stableJson(legacy) === stableJson(next);
+  }
+  return stableJson(current) === stableJson(requested);
+}
+
 /** File-backed journal with durable intent-before-effect and idempotent effect IDs. */
 export class FileReviewEffectJournalStore implements ReviewEffectJournalStore {
   #state: StoredJournal;
@@ -1288,7 +1305,7 @@ export class FileReviewEffectJournalStore implements ReviewEffectJournalStore {
       }
       if (current.deliveryPlan) {
         assertReviewDeliveryPlan(current.deliveryPlan);
-        if (stableJson(current.deliveryPlan) !== stableJson(plan)) {
+        if (!reviewDeliveryPlansMatch(current.deliveryPlan, plan)) {
           throw new Error("review delivery plan changed after authorization");
         }
         return { next: current, result: structuredClone(current.deliveryPlan), persist: false };

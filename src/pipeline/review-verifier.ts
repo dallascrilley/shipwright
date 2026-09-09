@@ -161,7 +161,7 @@ function buildVerificationRecord(
     observedEvidence: independentlyVerified
       ? `Trusted plan ${plan.planId} matched baseline ${baselineDigest} and candidate ${candidateResultDigest} results.`
       : `Trusted plan ${plan.planId} did not produce an independently verified disposition.`,
-    observedReproduction: `Behavior: ${plan.reproduction.assertion}; command ${plan.command}; baseline ${baselineDigest}; result ${candidateResultDigest}.`,
+    observedReproduction: `Behavior: ${plan.reproduction?.assertion ?? "legacy command-bound reproduction"}; command ${plan.command}; baseline ${baselineDigest}; result ${candidateResultDigest}.`,
     observedAffectedFiles: [...candidate.changedFiles],
     requiredChecks: checks.requiredChecks,
     riskLevel: plan.riskLevel,

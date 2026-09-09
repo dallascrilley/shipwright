@@ -360,6 +360,34 @@ test("rejects static-only verification commands for behavioral plans", () => {
     candidate: result(0, "candidate-success"),
   };
   const plan = planFor(value, observed);
-  plan.command = "bun run lint && echo done";
-  expect(() => assertReviewVerificationPlan(plan)).toThrow("static-only checks");
+  for (const command of ["bun run lint && echo done", "pwd", "false || true"]) {
+    plan.command = command;
+    expect(() => assertReviewVerificationPlan(plan)).toThrow("static-only checks");
+  }
+});
+
+test("accepts legacy v1 verification plans without behavioral assertions", () => {
+  const value = candidate();
+  const observed = {
+    baseline: result(1, "baseline-failure"),
+    candidate: result(0, "candidate-success"),
+  };
+  const plan = planFor(value, observed);
+  delete plan.reproduction;
+  plan.independentReview = {
+    ...plan.independentReview,
+    contextDigest: computeReviewVerificationContextDigest({
+      candidateDigest: plan.candidateDigest,
+      findingId: plan.findingId,
+      findingDigest: plan.findingDigest,
+      command: plan.command,
+      timeoutMs: plan.timeoutMs,
+      baseline: plan.baseline,
+      candidate: plan.candidate,
+      adjudicatedOutcome: plan.adjudicatedOutcome,
+      riskLevel: plan.riskLevel,
+      reviewerId: plan.independentReview.reviewerId,
+    }),
+  };
+  expect(() => assertReviewVerificationPlan(plan)).not.toThrow();
 });

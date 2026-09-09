@@ -291,6 +291,13 @@ export async function runReviewAgent(
         throw new Error(`review scope finding disappeared: ${missing.join(", ")}`);
       }
     }
+    if (resumedCandidate && scopedFindingSet) {
+      const retainedFindingIds = new Set(resumedCandidate.findings.map((finding) => finding.findingId));
+      const missing = [...scopedFindingSet].filter((findingId) => !retainedFindingIds.has(findingId));
+      if (missing.length > 0) {
+        throw new Error(`review scope finding is absent from retained candidate: ${missing.join(", ")}`);
+      }
+    }
     const scopedThreads = scopedFindingSet
       ? allThreads.filter((thread) => scopedFindingSet.has(thread.id))
       : allThreads;
@@ -309,7 +316,7 @@ export async function runReviewAgent(
       : unresolvedCurrentThreads(scopedThreads);
     const expectedThreadIds = threads.map((thread) => thread.id);
     const originalHeadSha = resumedCandidate?.authorizedHeadSha ?? authorized.pullRequest.headSha;
-    assertReviewScope(request.reviewScope, authorized, originalHeadSha);
+    assertReviewScope(request.reviewScope, authorized, originalHeadSha, threads);
     const confirmedCommitSha = effects.find(
       (effect) => effect.kind === "commit" && effect.status === "confirmed" && effect.commitSha,
     )?.commitSha;
@@ -464,7 +471,7 @@ export async function runReviewAgent(
             reviewer: sourceComment?.author ?? "unknown",
             commentId: sourceComment?.id ?? thread.id,
             commentUrl: sourceComment?.url ?? request.pullRequestUrl,
-            reviewIds: authorized.reviews.map((review) => review.id),
+            reviewIds: thread.reviewIds ?? authorized.reviews.map((review) => review.id),
           },
           ...(outcome.repairIdentity ? { repairIdentity: outcome.repairIdentity } : {}),
         };
@@ -1677,6 +1684,7 @@ function assertReviewScope(
   scope: ReviewScope | undefined,
   authorized: AuthorizedPullRequest,
   originalHeadSha: string,
+  selectedThreads: readonly ReviewThread[],
 ): void {
   if (!scope) return;
   if (scope.findingIds.length === 0) throw new Error("review scope must select at least one finding");
@@ -1686,6 +1694,16 @@ function assertReviewScope(
   if (scope.mode === "this-review") {
     if (!scope.reviewId || !authorized.reviews.some((review) => review.id === scope.reviewId)) {
       throw new Error("review scope review identifier is not authorized");
+    }
+    for (const findingId of scope.findingIds) {
+      const thread = selectedThreads.find((candidate) => candidate.id === findingId);
+      if (!thread) throw new Error(`review scope finding is not selected: ${findingId}`);
+      if (thread.reviewIds === undefined) {
+        throw new Error(`review scope thread review membership is unavailable: ${findingId}`);
+      }
+      if (!thread.reviewIds.includes(scope.reviewId)) {
+        throw new Error(`review scope finding is not from review ${scope.reviewId}: ${findingId}`);
+      }
     }
     if (scope.headSha !== undefined) throw new Error("this-review scope cannot include a head SHA");
   } else if (scope.mode === "all-current-findings") {

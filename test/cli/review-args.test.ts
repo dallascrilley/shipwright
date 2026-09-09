@@ -89,6 +89,21 @@ test("parses a scoped review with duplicate grouping", () => {
   ]);
 });
 
+test("accepts opaque GitHub node IDs containing underscores", () => {
+  const parsed = parseReviewArgs([
+    "https://github.com/acme/widget/pull/4",
+    "--verify", "bun test",
+    "--skill", "/skill",
+    "--finding-id", "PRRT_kwDOExample_1",
+    "--review-id", "PRR_kwDOExample_1",
+  ]);
+  expect(parsed.reviewScope).toEqual({
+    mode: "this-review",
+    reviewId: "PRR_kwDOExample_1",
+    findingIds: ["PRRT_kwDOExample_1"],
+  });
+});
+
 test("requires an explicit scope authority for selected findings", () => {
   expect(() => parseReviewArgs([
     "https://github.com/acme/widget/pull/4",

@@ -49,6 +49,8 @@ export interface ReviewThread {
   isOutdated: boolean;
   path: string;
   line: number | null;
+  /** Review IDs derived from the thread's review comments. */
+  reviewIds?: string[];
   comments: ReviewComment[];
 }
 
