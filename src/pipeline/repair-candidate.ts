@@ -413,6 +413,9 @@ function assertReviewVerificationPlanShape(plan: ReviewVerificationPlan): void {
   const validId = (value: unknown): value is string =>
     typeof value === "string" &&
     /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(value);
+  if (!isRecord(plan)) {
+    throw new Error("review verification plan is invalid");
+  }
   const validReproduction =
     plan.reproduction === undefined ||
     (isRecord(plan.reproduction) &&
@@ -421,7 +424,6 @@ function assertReviewVerificationPlanShape(plan: ReviewVerificationPlan): void {
       Boolean(plan.reproduction.assertion.trim()) &&
       plan.reproduction.assertion.length <= 4000);
   if (
-    !isRecord(plan) ||
     plan.schema !== "shipwright-review-verification-plan/v1" ||
     !validId(plan.planId) ||
     !validDigest(plan.candidateDigest) ||

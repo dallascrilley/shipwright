@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
+  FileReviewVerificationPlanStore,
   assertReviewVerificationPlan,
   computeReviewVerificationContextDigest,
   computeReviewVerificationResultDigest,
@@ -390,4 +394,23 @@ test("accepts legacy v1 verification plans without behavioral assertions", () =>
     }),
   };
   expect(() => assertReviewVerificationPlan(plan)).not.toThrow();
+});
+
+test("rejects malformed persisted verification plans with a validation error", async () => {
+  const root = await mkdtemp(join(tmpdir(), "shipwright-verification-plan-"));
+  const candidateDigest = "a".repeat(64);
+  const findingDigest = "b".repeat(64);
+  const path = join(root, "review-verification-plans", candidateDigest, `${findingDigest}.json`);
+  try {
+    await mkdir(join(root, "review-verification-plans", candidateDigest), { recursive: true });
+    await writeFile(path, "null");
+    const store = new FileReviewVerificationPlanStore(root);
+    await expect(store.lookup({
+      candidateDigest,
+      findingId: "finding-1",
+      findingDigest,
+    })).rejects.toThrow("review verification plan is invalid");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
