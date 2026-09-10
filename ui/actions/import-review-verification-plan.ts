@@ -35,6 +35,10 @@ const verificationPlanSchema = z
     findingDigest: digestSchema,
     command: z.string().trim().min(1).max(4_000),
     timeoutMs: z.number().int().min(1).max(10 * 60 * 1000),
+    reproduction: z.object({
+      kind: z.literal("behavioral"),
+      assertion: z.string().trim().min(1).max(4_000),
+    }).strict(),
     baseline: z
       .object({
         expectedExitCode: z.number().int(),

@@ -33,29 +33,43 @@ afterEach(async () => {
 function fixture(options: {
   changes?: string[];
   verifyExit?: number;
+  integrationVerifyExit?: number;
+  integrationFindingOutcome?: "fixed" | "rejected" | "needs-human" | "pending";
   movedHead?: boolean;
   outcome?: "fixed" | "rejected" | "needs-human";
   artifactMissing?: boolean;
   agentResponse?: string;
+  threadIds?: string[];
+  reviewIdsByThread?: Record<string, string[]>;
+  baseHeadSha?: string;
+  baseSha?: string;
 } = {}) {
   const events: string[] = [];
   const changes = options.changes ?? ["src/a.ts"];
   const outcome = options.outcome ?? "fixed";
+  let threadIds = options.threadIds ?? ["thread-1"];
+  let verifyCalls = 0;
   let remoteHead = "head1";
   let currentCommit = "commit1";
   let followUpHead = "";
   let followUpPullRequest: { number: number; url: string; title: string; body: string } | undefined;
-  let resolved = false;
+  const resolvedThreadIds = new Set<string>();
   let replyBody = "";
-  const thread = () => ({
-    id: "thread-1",
-    isResolved: resolved,
+  const thread = (id: string) => ({
+    id,
+    isResolved: resolvedThreadIds.has(id),
     isOutdated: false,
-    path: "src/a.ts",
+    path: id === "thread-1" ? "src/a.ts" : `src/${id}.ts`,
     line: 4,
+    reviewIds: options.reviewIdsByThread?.[id] ?? ["review-1"],
     comments: [
-      { id: "comment-1", body: "Please add a guard", url: "https://example/comment", author: "reviewer" },
-      ...(replyBody
+      {
+        id: id === "thread-1" ? "comment-1" : `comment-${id}`,
+        body: id === "thread-1" ? "Please add a guard" : `Please add a guard for ${id}`,
+        url: id === "thread-1" ? "https://example/comment" : `https://example/${id}`,
+        author: "reviewer",
+      },
+      ...(replyBody && id === "thread-1"
         ? [{ id: "reply-1", body: replyBody, url: "https://example/reply", author: "bot" }]
         : []),
     ],
@@ -66,7 +80,7 @@ function fixture(options: {
     async getBranchSha(branch) {
       events.push("remote-head");
       if (branch === "feature") return options.movedHead ? "moved" : remoteHead;
-      return followUpHead;
+      return options.baseHeadSha ?? followUpHead;
     },
     async listPullRequests() {
       return followUpPullRequest
@@ -90,8 +104,8 @@ function fixture(options: {
           body: followUpPullRequest.body,
           state: "open",
           draft: false,
-          baseBranch: "main",
-          baseSha: "base1",
+          baseBranch: "feature",
+          baseSha: "head1",
           headBranch: "shipwright/review-run-1",
           headSha: followUpHead,
           headOwner: "acme",
@@ -100,22 +114,22 @@ function fixture(options: {
       }
       return {
         title: "Change", body: "body", state: "open", draft: false,
-        baseBranch: "main", baseSha: "base1", headBranch: "feature",
+        baseBranch: "main", baseSha: options.baseSha ?? "base1", headBranch: "feature",
         headSha: options.movedHead ? "moved" : remoteHead, headOwner: "acme", headRepo: "widget",
       };
     },
-    async listReviewThreads() { events.push("threads"); return [thread()]; },
+    async listReviewThreads() { events.push("threads"); return threadIds.map(thread); },
     async listReviews() { return []; },
     async replyToReviewThread(_id, body) { events.push("reply"); replyBody = body; return { url: "https://example/reply" }; },
-    async resolveReviewThread() { events.push("resolve"); resolved = true; return { isResolved: true }; },
+    async resolveReviewThread(id) { events.push("resolve"); resolvedThreadIds.add(id); return { isResolved: true }; },
     async addPullRequestComment() { throw new Error("unused"); },
   };
   const authorized: AuthorizedPullRequest = {
     pullRequest: {
       owner: "acme", repo: "widget", number: 4, url: "https://github.com/acme/widget/pull/4",
-      title: "Change", body: "body", draft: false, baseBranch: "main", baseSha: "base1", headBranch: "feature", headSha: "head1", installationId: 1,
+      title: "Change", body: "body", draft: false, baseBranch: "main", baseSha: options.baseSha ?? "base1", headBranch: "feature", headSha: "head1", installationId: 1,
     },
-    reviewThreads: [thread()],
+    reviewThreads: threadIds.map(thread),
     reviews: [{ id: "review-1", state: "CHANGES_REQUESTED", body: "review", author: "reviewer" }],
     repositoryClient,
     async withInstallationToken(action) { return action("secret"); },
@@ -129,11 +143,39 @@ function fixture(options: {
       if (options.artifactMissing) {
         throw new Error("review outcome artifact failed: cat: .agentos-review-resolution.json: No such file or directory");
       }
-      return JSON.stringify({ threads: [{ threadId: "thread-1", outcome, summary: "Handled", evidence: "src/a.ts:4" }] });
+      return JSON.stringify({
+        threads: threadIds.map((threadId) => ({
+          threadId,
+          outcome,
+          summary: "Handled",
+          evidence: "src/a.ts:4",
+        })),
+      });
     },
-    async verify() { events.push("verify"); return { exitCode: options.verifyExit ?? 0 }; },
-    async inspectChanges() {
+    async verify() {
+      events.push("verify");
+      verifyCalls += 1;
+      return {
+        exitCode: verifyCalls > 1
+          ? options.integrationVerifyExit ?? 0
+          : options.verifyExit ?? 0,
+      };
+    },
+    async assertCommitIncluded() { events.push("included"); },
+    async assertReviewIntegrationLineage(_baseSha, headSha) {
+      events.push(`candidate-integrated:${headSha}`);
+      if (headSha !== "head2") throw new Error("fixture candidate was not integrated");
+    },
+    async inspectChanges(baseSha) {
       events.push("inspect");
+      if (baseSha === "head2") {
+        return {
+          changedFiles: [],
+          patch: "",
+          patchBytes: 0,
+          resultingTreeSha: "tree2",
+        };
+      }
       return {
         changedFiles: changes,
         patch: changes.length ? "diff" : "",
@@ -163,7 +205,13 @@ function fixture(options: {
   const effectJournalFactory = async (): Promise<ReviewEffectJournalStore> => ({
     async load() { return structuredClone(effects); },
     async ensureDeliveryPlan(plan) {
-      if (storedDeliveryPlan && JSON.stringify(storedDeliveryPlan) !== JSON.stringify(plan)) {
+      const currentComparable = storedDeliveryPlan ? { ...storedDeliveryPlan } : undefined;
+      const requestedComparable = { ...plan };
+      if (currentComparable && currentComparable.selectedFindingIds === undefined) {
+        delete currentComparable.selectedFindingIds;
+        delete requestedComparable.selectedFindingIds;
+      }
+      if (storedDeliveryPlan && JSON.stringify(currentComparable) !== JSON.stringify(requestedComparable)) {
         throw new Error("fixture delivery plan changed");
       }
       storedDeliveryPlan ??= structuredClone(plan);
@@ -204,7 +252,11 @@ function fixture(options: {
     execution: { runtime: "agentos", software: "pi", provider: "kimi", model: "kimi-for-coding" },
     skill: { name: "fix-review-findings", content: "skill", sha256: "abc123" },
     runId: "run-1",
-    async authorize() { events.push("authorize"); return authorized; },
+    async authorize() {
+      events.push("authorize");
+      if (!options.movedHead) authorized.pullRequest.headSha = remoteHead;
+      return authorized;
+    },
     async createWorkspace() { events.push("workspace"); return workspace; },
     async runAgent() { events.push("agent"); return options.agentResponse ?? "done"; },
     async writeReceipt(_path, receipt) {
@@ -212,6 +264,9 @@ function fixture(options: {
       receipts.push(structuredClone(receipt) as unknown as Record<string, unknown>);
     },
     candidateRoot,
+    candidateLoader: {
+      load: (candidateId) => readReviewCandidate(reviewCandidatePath(candidateRoot, candidateId)),
+    },
     effectJournalFactory,
     verificationStore: {
       async put(record) { records.push(structuredClone(record)); },
@@ -230,12 +285,14 @@ function fixture(options: {
         const finding = candidate.findings.find((item) => item.findingId === findingId)!;
         return {
           schema: "shipwright-review-verification/v1",
-          recordId: `record-${candidate.candidateId}-${findingId}`,
+          recordId: `record-${candidate.candidateId}-${findingId}-${computeReviewChecksDigest(checks).slice(0, 12)}`,
           candidateDigest: candidate.candidateDigest,
           findingId,
           findingDigest: finding.originalContentDigest!,
+          observedOutcome: checks.verificationHeadSha
+            ? options.integrationFindingOutcome ?? outcome
+            : outcome,
           checksDigest: computeReviewChecksDigest(checks),
-          observedOutcome: outcome,
           observedEvidence: "Host fixture verification",
           observedReproduction: "Host fixture reproduction",
           observedAffectedFiles: [...candidate.changedFiles],
@@ -249,17 +306,39 @@ function fixture(options: {
   };
   return {
     deps,
+    candidateRoot,
     events,
     receipts,
     getReplyBody: () => replyBody,
     getDeliveryPlan: () => structuredClone(storedDeliveryPlan),
+    setDeliveryPlan: (plan: ReviewAuthorizedDeliveryPlan | undefined) => {
+      storedDeliveryPlan = plan ? structuredClone(plan) : undefined;
+    },
+    setThreadIds: (ids: string[]) => {
+      threadIds = ids;
+      authorized.reviewThreads = ids.map(thread);
+    },
     effects,
     setRemoteHead: (head: string) => { remoteHead = head; },
     setCurrentCommit: (commit: string) => { currentCommit = commit; },
   };
 }
 
-const request = { pullRequestUrl: "https://github.com/acme/widget/pull/4", verifyCommand: "bun test", publish: true, timeoutMinutes: 2 };
+const request = {
+  pullRequestUrl: "https://github.com/acme/widget/pull/4",
+  verifyCommand: "bun test",
+  publish: true,
+  deliveryMode: "commit" as const,
+  ownership: {
+    mode: "explicit-handoff" as const,
+    ownerId: "shipwright",
+    fromOwnerId: "acme",
+    handoffId: "handoff-1",
+    authorizedBy: "operator",
+    source: "operator" as const,
+  },
+  timeoutMinutes: 2,
+};
 
 test("verified changes push before replying and resolving", async () => {
   const { deps, events, getReplyBody } = fixture();
@@ -271,8 +350,228 @@ test("verified changes push before replying and resolving", async () => {
   expect(events.indexOf("reply")).toBeLessThan(events.indexOf("resolve"));
   expect(getReplyBody()).toContain("Please add a guard");
   expect(getReplyBody()).toContain("agentos-review-run:run-1");
-  expect(receipt.threadResults).toEqual([expect.objectContaining({ threadId: "thread-1", resolved: true })]);
-  expect(events.at(-1)).toBe("destroy");
+  const result = receipt.threadResults[0]!;
+  expect(result.threadId).toBe("thread-1");
+  expect(result.resolved).toBe(true);
+  expect(result.source).toEqual({
+    reviewer: "reviewer",
+    commentId: "comment-1",
+    commentUrl: "https://example/comment",
+    reviewIds: ["review-1"],
+  });
+  expect(result.fixGroupId).toBe("thread-1");
+  expect(result.fixCommitSha).toBe("commit1");
+  expect(receipt.lifecycle).toBe("verified");
+});
+
+test("records base freshness and assigns integration to the original PR owner", async () => {
+  const fullBaseSha = "a".repeat(40);
+  const { deps } = fixture({ baseHeadSha: fullBaseSha, baseSha: fullBaseSha });
+  const receipt = await runReviewAgent(request, deps);
+  expect(receipt.baseFreshness).toEqual({
+    baseBranch: "main",
+    authorizedBaseSha: fullBaseSha,
+    observedBaseSha: fullBaseSha,
+    status: "fresh",
+    integrationOwner: "original-pr-owner",
+  });
+});
+test("direct publication requires explicit ownership before any remote write", async () => {
+  const { deps, events } = fixture();
+  await expect(runReviewAgent({ ...request, ownership: undefined }, deps)).rejects.toThrow(
+    "explicit review ownership authorization",
+  );
+  expect(events).not.toContain("commit");
+  expect(events).not.toContain("push");
+  expect(events).not.toContain("reply");
+  expect(events).not.toContain("resolve");
+});
+
+test("binds publication ownership to host task provenance, not repository namespace", async () => {
+  const { deps } = fixture();
+  const receipt = await runReviewAgent({
+    ...request,
+    ownership: {
+      mode: "explicit-handoff",
+      ownerId: "local-operator",
+      fromOwnerId: "local-task-owner",
+      handoffId: "handoff-task-owner",
+      authorizedBy: "operator",
+      source: "operator",
+    },
+    provenance: { taskId: "WKS-2245", actor: "local-task-owner" },
+  }, deps);
+  expect(receipt.lifecycle).toBe("verified");
+});
+
+test("uses host-authored handoff owner instead of GitHub repository owner", async () => {
+  const { deps } = fixture();
+  const receipt = await runReviewAgent({
+    ...request,
+    ownership: {
+      ...request.ownership,
+      ownerId: "local-operator",
+      fromOwnerId: "local-task-owner",
+    },
+  }, deps);
+  expect(receipt.lifecycle).toBe("verified");
+});
+
+test("defaults independent findings to separate groups and refuses one combined delivery", async () => {
+  const { deps, events, receipts } = fixture({
+    threadIds: ["thread-1", "thread-2"],
+  });
+  await expect(runReviewAgent(request, deps)).rejects.toThrow(
+    "independent review fix groups require separately scoped candidates",
+  );
+  expect(events).not.toContain("commit");
+  expect(events).not.toContain("push");
+  expect(events).not.toContain("reply");
+  expect(events).not.toContain("resolve");
+  const failed = receipts.at(-1) as {
+    threadResults?: Array<{ fixGroupId?: string }>;
+  };
+  expect(failed.threadResults?.map((result) => result.fixGroupId)).toEqual([
+    "thread-1",
+    "thread-2",
+  ]);
+});
+
+test("delivers one complete duplicate group from a scoped candidate", async () => {
+  const { deps, getDeliveryPlan } = fixture({
+    threadIds: ["thread-1", "thread-2"],
+  });
+  const receipt = await runReviewAgent({
+    ...request,
+    reviewScope: {
+      mode: "this-review",
+      reviewId: "review-1",
+      findingIds: ["thread-1", "thread-2"],
+    },
+    fixGroups: [{ groupId: "shared-repair", findingIds: ["thread-1", "thread-2"] }],
+  }, deps);
+  expect(receipt.lifecycle).toBe("verified");
+  expect(getDeliveryPlan()).toEqual(expect.objectContaining({
+    selectedFindingIds: ["thread-1", "thread-2"],
+  }));
+});
+
+test("rejects a finding that is not a member of the selected review", async () => {
+  const { deps } = fixture({
+    reviewIdsByThread: { "thread-1": ["review-2"] },
+  });
+  await expect(runReviewAgent({
+    ...request,
+    reviewScope: {
+      mode: "this-review",
+      reviewId: "review-1",
+      findingIds: ["thread-1"],
+    },
+  }, deps)).rejects.toThrow("not from review review-1");
+});
+
+test("rejects scoped findings absent from a retained candidate", async () => {
+  const { deps, setThreadIds } = fixture();
+  await runReviewAgent(request, deps);
+  setThreadIds(["thread-1", "thread-2"]);
+  await expect(runReviewAgent({
+    ...request,
+    candidateId: "run-1",
+    reviewScope: {
+      mode: "this-review",
+      reviewId: "review-1",
+      findingIds: ["thread-2"],
+    },
+  }, deps)).rejects.toThrow("absent from retained candidate");
+});
+
+test("rejects narrowed scopes when a legacy delivery plan lacks selection", async () => {
+  const { deps, candidateRoot, setDeliveryPlan, setThreadIds } = fixture({
+    threadIds: ["thread-1", "thread-2"],
+  });
+  await runReviewAgent({
+    ...request,
+    publish: false,
+    deliveryMode: "patch",
+    reviewScope: {
+      mode: "this-review",
+      reviewId: "review-1",
+      findingIds: ["thread-1", "thread-2"],
+    },
+  }, deps);
+  const retainedCandidate = await readReviewCandidate(reviewCandidatePath(candidateRoot, "run-1"));
+  setDeliveryPlan({
+    candidateDigest: retainedCandidate.candidateDigest,
+    deliveryMode: "commit",
+    owner: "acme",
+    repo: "widget",
+    pullRequestNumber: 4,
+    baseBranch: "main",
+    baseSha: "base1",
+    headBranch: "feature",
+    authorizedHeadSha: "head1",
+    ownership: request.ownership,
+  });
+  setThreadIds(["thread-1"]);
+  await expect(runReviewAgent({
+    ...request,
+    candidateId: "run-1",
+    reviewScope: {
+      mode: "this-review",
+      reviewId: "review-1",
+      findingIds: ["thread-1"],
+    },
+  }, deps)).rejects.toThrow("legacy delivery plan cannot authorize a narrowed finding scope");
+});
+
+
+test("post-integration verification gates review closure", async () => {
+  const { deps, events, receipts } = fixture({ integrationVerifyExit: 1 });
+  await expect(runReviewAgent(request, deps)).rejects.toThrow(
+    "post-integration verification failed",
+  );
+  expect(events).toContain("included");
+  expect(events).toContain("push");
+  expect(events).not.toContain("reply");
+  expect(events).not.toContain("resolve");
+  const failed = receipts.at(-1)!;
+  expect(failed.lifecycle).toBe("integrated");
+  expect(failed.errorMessage).toBe("post-integration verification failed");
+  const integration = failed.integrationVerification as {
+    baseSha?: string;
+    headSha?: string;
+    passed?: boolean;
+  };
+  expect(integration.baseSha).toBe("head1");
+  expect(integration.headSha).toBe("commit1");
+  expect(integration.passed).toBe(false);
+});
+
+test("integrated finding proof failure keeps original threads open", async () => {
+  const { deps, events, receipts } = fixture({ integrationFindingOutcome: "pending" });
+  await expect(runReviewAgent(request, deps)).rejects.toThrow(
+    "integrated review requires host-verified outcomes",
+  );
+  expect(events).toContain("included");
+  expect(events).toContain("push");
+  expect(events).not.toContain("reply");
+  expect(events).not.toContain("resolve");
+  expect(receipts.at(-1)?.lifecycle).toBe("integrated");
+});
+
+test("head movement during integration verification prevents stale thread writes", async () => {
+  const fixtureValue = fixture();
+  const workspace = await fixtureValue.deps.createWorkspace();
+  const verify = workspace.verify.bind(workspace);
+  let calls = 0;
+  workspace.verify = async (...args) => {
+    const result = await verify(...args);
+    if (++calls === 2) fixtureValue.setRemoteHead("newer-owner-head");
+    return result;
+  };
+  await expect(runReviewAgent(request, fixtureValue.deps)).rejects.toThrow("head moved");
+  expect(fixtureValue.events).not.toContain("reply");
+  expect(fixtureValue.events).not.toContain("resolve");
 });
 test("recreates a confirmed commit when the unpushed workspace was destroyed", async () => {
   const fixtureValue = fixture();
@@ -298,19 +597,50 @@ test("recreates a confirmed commit when the unpushed workspace was destroyed", a
   expect(resumedReceipt.commitSha).toBe("commit2");
   expect(fixtureValue.effects.find((effect) => effect.kind === "commit")?.commitSha).toBe("commit2");
 });
+test("replays an already integrated direct publication without moving the original head", async () => {
+  const fixtureValue = fixture();
+  const firstReceipt = await runReviewAgent(request, fixtureValue.deps);
+  fixtureValue.deps.candidateLoader = {
+    async load(candidateId) {
+      return readReviewCandidate(
+        reviewCandidatePath(fixtureValue.deps.candidateRoot!, candidateId),
+      );
+    },
+  };
+
+  const resumedReceipt = await runReviewAgent({
+    ...request,
+    candidateId: firstReceipt.candidateId,
+  }, fixtureValue.deps);
+
+  expect(resumedReceipt.lifecycle).toBe("verified");
+  expect(resumedReceipt.commitSha).toBe("commit1");
+  expect(fixtureValue.events.filter((event) => event === "commit")).toHaveLength(1);
+  expect(fixtureValue.events.filter((event) => event === "push")).toHaveLength(1);
+  expect(fixtureValue.events.filter((event) => event === "included")).toHaveLength(2);
+});
 
 
-test("publish CLI defaults to commit delivery", async () => {
+test("publish CLI defaults to a guarded follow-up PR", async () => {
   const args = parseReviewArgs([
     request.pullRequestUrl,
     "--verify", request.verifyCommand,
     "--skill", "/skills/fix-review-findings/SKILL.md",
     "--publish",
+    "--owner-id", "acme",
   ]);
   const { deps, events } = fixture();
   const receipt = await runReviewAgent(args, deps);
-  expect(receipt.deliveryMode).toBe("commit");
+  expect(args.deliveryMode).toBeUndefined();
+  expect(args.ownership).toEqual({
+    mode: "local-owner",
+    ownerId: "acme",
+    source: "operator",
+  });
+  expect(receipt.deliveryMode).toBe("follow-up-pr");
+  expect(receipt.followUpPullRequestUrl).toBe("https://github.com/acme/widget/pull/5");
   expect(events).toContain("push");
+  expect(events).not.toContain("reply");
 });
 
 test("valid no-code rejection replies without committing", async () => {
@@ -359,6 +689,34 @@ test("dry run verifies but performs no remote writes", async () => {
   expect(events).not.toContain("commit");
   expect(events).not.toContain("push");
   expect(events).not.toContain("reply");
+});
+test("binds an owner when publishing an unattributed retained candidate", async () => {
+  const fixtureValue = fixture();
+  const firstReceipt = await runReviewAgent({
+    ...request,
+    publish: false,
+    deliveryMode: "patch",
+    ownership: undefined,
+  }, fixtureValue.deps);
+  fixtureValue.deps.candidateLoader = {
+    async load(candidateId) {
+      return readReviewCandidate(
+        reviewCandidatePath(fixtureValue.deps.candidateRoot!, candidateId),
+      );
+    },
+  };
+  const resumedArgs = parseReviewArgs([
+    request.pullRequestUrl,
+    "--verify", request.verifyCommand,
+    "--skill", "/skills/fix-review-findings/SKILL.md",
+    "--publish",
+    "--delivery-mode", "follow-up-pr",
+    "--owner-id", "acme",
+    "--candidate-id", firstReceipt.candidateId!,
+  ]);
+  const resumedReceipt = await runReviewAgent(resumedArgs, fixtureValue.deps);
+  expect(resumedReceipt.lifecycle).toBe("delivered");
+  expect(resumedReceipt.followUpPullRequestUrl).toBe("https://github.com/acme/widget/pull/5");
 });
 
 test("missing outcome artifact surfaces the agent response and redacts secrets", async () => {
@@ -447,12 +805,17 @@ test("follow-up CLI requests derive and replay the retained candidate base", asy
     "--skill", "/tmp/fix-review-findings/SKILL.md",
     "--publish",
     "--delivery-mode", "follow-up-pr",
+    "--owner-id", "acme",
   ]);
   expect("followUpBaseSha" in cliArgs).toBe(false);
 
   const firstReceipt = await runReviewAgent(cliArgs, deps);
   expect(firstReceipt.followUpPullRequestUrl).toBe("https://github.com/acme/widget/pull/5");
   expect(firstReceipt.candidateId).toBe("run-1");
+  expect(firstReceipt.lifecycle).toBe("delivered");
+  expect(firstReceipt.threadResults).toEqual([
+    expect.objectContaining({ threadId: "thread-1", resolved: false, fixCommitSha: expect.any(String) }),
+  ]);
 
   deps.candidateLoader = {
     async load(candidateId) {
@@ -465,6 +828,7 @@ test("follow-up CLI requests derive and replay the retained candidate base", asy
     "--skill", "/tmp/fix-review-findings/SKILL.md",
     "--publish",
     "--delivery-mode", "follow-up-pr",
+    "--owner-id", "acme",
     "--candidate-id", firstReceipt.candidateId!,
   ]);
   const resumedReceipt = await runReviewAgent(resumedArgs, deps);
@@ -472,12 +836,52 @@ test("follow-up CLI requests derive and replay the retained candidate base", asy
   expect(resumedReceipt.followUpPullRequestUrl).toBe(firstReceipt.followUpPullRequestUrl);
   expect(getDeliveryPlan()).toEqual(expect.objectContaining({
     deliveryMode: "follow-up-pr",
+    followUpBaseBranch: "feature",
     followUpBaseSha: "head1",
+    ownership: expect.objectContaining({ mode: "local-owner", ownerId: "acme" }),
   }));
   expect(events.filter((event) => event === "create-follow-up")).toHaveLength(1);
   expect(events.filter((event) => event === "commit")).toHaveLength(1);
   expect(events.filter((event) => event === "push")).toHaveLength(1);
   expect(events).toContain("reset:head1:shipwright/review-run-1");
+});
+
+test("recognizes a squashed or modified owner integration before closing findings", async () => {
+  const fixtureValue = fixture();
+  const cliArgs = parseReviewArgs([
+    request.pullRequestUrl,
+    "--verify", request.verifyCommand,
+    "--skill", "/tmp/fix-review-findings/SKILL.md",
+    "--publish",
+    "--delivery-mode", "follow-up-pr",
+    "--owner-id", "acme",
+  ]);
+  const firstReceipt = await runReviewAgent(cliArgs, fixtureValue.deps);
+  fixtureValue.setRemoteHead("head2");
+  fixtureValue.deps.candidateLoader = {
+    async load(candidateId) {
+      return readReviewCandidate(
+        reviewCandidatePath(fixtureValue.deps.candidateRoot!, candidateId),
+      );
+    },
+  };
+
+  const resumedReceipt = await runReviewAgent({
+    ...cliArgs,
+    candidateId: firstReceipt.candidateId,
+  }, fixtureValue.deps);
+
+  expect(resumedReceipt.lifecycle).toBe("verified");
+  expect(resumedReceipt.resultingHeadSha).toBe("head2");
+  expect(resumedReceipt.integrationVerification).toEqual(expect.objectContaining({
+    headSha: "head2",
+    passed: true,
+  }));
+  expect(fixtureValue.events).toContain("candidate-integrated:head2");
+  expect(fixtureValue.events.filter((event) => event === "commit")).toHaveLength(1);
+  expect(fixtureValue.events.filter((event) => event === "push")).toHaveLength(1);
+  expect(fixtureValue.events.filter((event) => event === "reply")).toHaveLength(1);
+  expect(fixtureValue.events.filter((event) => event === "resolve")).toHaveLength(1);
 });
 
 test("conflicting explicit follow-up base is rejected before publication", async () => {

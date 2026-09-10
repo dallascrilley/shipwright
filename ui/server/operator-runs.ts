@@ -30,6 +30,8 @@ import {
   appendOperatorRunEvent,
   summarizeOperatorRunEvent,
   reviewDeliveryModeSchema,
+  reviewFixGroupsSchema,
+  reviewOwnershipSchema,
   type OperatorRunPhase,
   type OperatorRunReceipt,
   type OperatorRunRecord,
@@ -163,6 +165,18 @@ function sanitizeStoredRequest(
     }
     reviewScope = parsed.data;
   }
+  let ownership: StoredRequest["ownership"];
+  if (mode === "review" && raw?.ownership !== undefined) {
+    const parsed = reviewOwnershipSchema.safeParse(raw.ownership);
+    if (!parsed.success) throw new Error("persisted review ownership is invalid");
+    ownership = parsed.data;
+  }
+  let fixGroups: StoredRequest["fixGroups"];
+  if (mode === "review" && raw?.fixGroups !== undefined) {
+    const parsed = reviewFixGroupsSchema.safeParse(raw.fixGroups);
+    if (!parsed.success) throw new Error("persisted review fix groups are invalid");
+    fixGroups = parsed.data;
+  }
   let deliveryMode: StoredRequest["deliveryMode"];
   if (raw?.deliveryMode !== undefined) {
     const parsed = reviewDeliveryModeSchema.safeParse(raw.deliveryMode);
@@ -191,6 +205,8 @@ function sanitizeStoredRequest(
     ...(deliveryMode ? { deliveryMode } : {}),
     ...(reviewScope ? { reviewScope } : {}),
     ...(followUpBaseSha ? { followUpBaseSha } : {}),
+    ...(ownership ? { ownership } : {}),
+    ...(fixGroups ? { fixGroups } : {}),
   };
   // Never persist host skillPath on durable records.
   return { request, operatorHint, mutated };
@@ -333,6 +349,8 @@ export class OperatorRunRegistry {
       ...(input.candidateId ? { candidateId: input.candidateId } : {}),
       ...(input.deliveryMode ? { deliveryMode: input.deliveryMode } : {}),
       ...(input.reviewScope ? { reviewScope: input.reviewScope } : {}),
+      ...(input.ownership ? { ownership: input.ownership } : {}),
+      ...(input.fixGroups ? { fixGroups: input.fixGroups } : {}),
       ...(input.followUpBaseSha ? { followUpBaseSha: input.followUpBaseSha } : {}),
     };
 
@@ -358,6 +376,8 @@ export class OperatorRunRegistry {
       if (input.deliveryMode !== undefined) base.deliveryMode = input.deliveryMode;
       if (input.reviewScope !== undefined) base.reviewScope = input.reviewScope;
       if (input.followUpBaseSha !== undefined) base.followUpBaseSha = input.followUpBaseSha;
+      if (input.ownership !== undefined) base.ownership = input.ownership;
+      if (input.fixGroups !== undefined) base.fixGroups = input.fixGroups;
       // publishConfirmed enforced by schema when publish true
     }
 
@@ -413,6 +433,8 @@ export class OperatorRunRegistry {
       ...(base.candidateId ? { candidateId: base.candidateId } : {}),
       ...(base.deliveryMode ? { deliveryMode: base.deliveryMode } : {}),
       ...(base.reviewScope ? { reviewScope: base.reviewScope } : {}),
+      ...(base.ownership ? { ownership: base.ownership } : {}),
+      ...(base.fixGroups ? { fixGroups: base.fixGroups } : {}),
       ...(base.followUpBaseSha ? { followUpBaseSha: base.followUpBaseSha } : {}),
     };
 
@@ -701,9 +723,15 @@ function toOperatorReviewReceipt(
     baseSha: receipt.authorizedBaseSha,
     authorizedBaseSha: receipt.authorizedBaseSha,
     authorizedHeadSha: receipt.authorizedHeadSha,
+    ...(receipt.baseFreshness ? { baseFreshness: receipt.baseFreshness } : {}),
+    ...(receipt.reviewScope ? { reviewScope: receipt.reviewScope } : {}),
     branch: receipt.headBranch,
     changedFiles: receipt.changedFiles,
     verification: receipt.verification,
+    ...(receipt.lifecycle ? { lifecycle: receipt.lifecycle } : {}),
+    ...(receipt.ownership ? { ownership: receipt.ownership } : {}),
+    ...(receipt.integrationVerification ? { integrationVerification: receipt.integrationVerification } : {}),
+    ...(receipt.resultingHeadSha ? { resultingHeadSha: receipt.resultingHeadSha } : {}),
     commitSha: receipt.commitSha,
     followUpPullRequestUrl: receipt.followUpPullRequestUrl,
     pullRequestUrl: receipt.pullRequestUrl,
@@ -745,6 +773,8 @@ export async function executeOperatorPipeline(
         ...(request.deliveryMode ? { deliveryMode: request.deliveryMode } : {}),
         ...(request.reviewScope ? { reviewScope: request.reviewScope } : {}),
         ...(request.followUpBaseSha ? { followUpBaseSha: request.followUpBaseSha } : {}),
+        ...(request.ownership ? { ownership: request.ownership } : {}),
+        ...(request.fixGroups ? { fixGroups: request.fixGroups } : {}),
       },
       createReviewPipelineDependencies(skill.path, {
         runId,

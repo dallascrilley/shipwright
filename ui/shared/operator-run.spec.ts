@@ -90,6 +90,41 @@ describe("operatorRunRequestSchema", () => {
 
     expect(result.success).toBe(false);
   });
+  test("requires review ownership before publishing", () => {
+    const result = operatorRunRequestSchema.safeParse({
+      mode: "review",
+      pullRequestUrl: "https://github.com/dallascrilley/example/pull/9",
+      skillId: "fix-review-findings",
+      verifyCommand: "bun test",
+      publish: true,
+      publishConfirmed: true,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.some((issue) =>
+      issue.message.includes("ownership authorization"),
+    )).toBe(true);
+  });
+
+  test("requires an explicit handoff for direct review commits", () => {
+    const result = operatorRunRequestSchema.safeParse({
+      mode: "review",
+      pullRequestUrl: "https://github.com/dallascrilley/example/pull/9",
+      skillId: "fix-review-findings",
+      verifyCommand: "bun test",
+      publish: true,
+      publishConfirmed: true,
+      deliveryMode: "commit",
+      ownership: {
+        mode: "local-owner",
+        ownerId: "dallascrilley",
+        source: "operator",
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.some((issue) =>
+      issue.message.includes("explicit ownership handoff"),
+    )).toBe(true);
+  });
 
   test("rejects a non-canonical issue URL", () => {
     const result = operatorRunRequestSchema.safeParse({
@@ -116,6 +151,41 @@ describe("operatorRunRequestSchema", () => {
     expect(valid.mode).toBe("review");
     expect(valid.skillId).toBe("fix-review-findings");
     expect(valid.pullRequestUrl).toContain("/pull/9");
+  });
+  test("accepts scoped duplicate repair groups", () => {
+    const result = operatorRunRequestSchema.parse({
+      mode: "review",
+      pullRequestUrl: "https://github.com/dallascrilley/example/pull/9",
+      skillId: "fix-review-findings",
+      verifyCommand: "bun test",
+      reviewScope: {
+        mode: "all-current-findings",
+        headSha: "a".repeat(40),
+        findingIds: ["thread-1", "thread-2"],
+      },
+      fixGroups: [
+        { groupId: "shared-repair", findingIds: ["thread-1", "thread-2"] },
+      ],
+    });
+    expect(result.reviewScope?.findingIds).toEqual(["thread-1", "thread-2"]);
+    expect(result.fixGroups).toEqual([
+      { groupId: "shared-repair", findingIds: ["thread-1", "thread-2"] },
+    ]);
+  });
+
+  test("rejects duplicate finding IDs in a scoped repair", () => {
+    const result = operatorRunRequestSchema.safeParse({
+      mode: "review",
+      pullRequestUrl: "https://github.com/dallascrilley/example/pull/9",
+      skillId: "fix-review-findings",
+      verifyCommand: "bun test",
+      reviewScope: {
+        mode: "this-review",
+        reviewId: "review-1",
+        findingIds: ["thread-1", "thread-1"],
+      },
+    });
+    expect(result.success).toBe(false);
   });
 
   test("strips review skillPath at the console boundary", () => {

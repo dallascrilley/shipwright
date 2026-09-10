@@ -28,10 +28,14 @@ import {
   reviewCandidatePath,
   writeReviewCandidate,
   type ReviewAuthorizedDeliveryPlan,
+  type ReviewBaseFreshness,
   type ReviewCandidate,
   type ReviewEffectJournalStore,
   type ReviewEffectReceipt,
   type ReviewFindingVerificationRecord,
+  type ReviewFixGroup,
+  type ReviewOwnershipAuthorization,
+  type ReviewScope,
   type ReviewVerificationPlanStore,
   type ReviewVerificationResult,
 } from "./repair-candidate.js";
@@ -53,6 +57,8 @@ import { type ReviewRunPhase, type ReviewRunReceipt, writeReviewReceipt } from "
  */
 export const PROVIDER_QUOTA_ERROR_CODE = PROVIDER_CAPACITY_ERROR_CODE;
 export const REVIEW_OUTCOME_MISSING_ERROR_CODE = "agent_outcome_missing";
+/** Host actor used when no task-owner provenance is available. */
+const UNATTRIBUTED_REVIEW_ACTOR = "shipwright";
 
 class ReviewOutcomeMissingError extends Error {
   constructor(message: string) {
@@ -83,6 +89,7 @@ export interface ReviewWorkspacePort {
   /** Runs a host-owned reproduction against baseline and replayed candidate. */
   verifyReviewPlan?(input: {
     baselineSha: string;
+    verificationHeadSha?: string;
     patch: Uint8Array;
     command: string;
     timeoutMs: number;
@@ -99,6 +106,10 @@ export interface ReviewWorkspacePort {
   quiesce(): Promise<void>;
   assertRunIdentity(headSha: string, branch: string): Promise<void>;
   commit(message: string): Promise<string>;
+  /** Proves a pushed integration head contains the exact generated commit. */
+  assertCommitIncluded?(commitSha: string, headSha: string): Promise<void>;
+  /** Proves descent from the original PR head; behavioral proof remains separate. */
+  assertReviewIntegrationLineage?(baseSha: string, headSha: string): Promise<void>;
   /** Reconcile a confirmed commit, recreating it from the retained candidate when needed. */
   restoreCommittedReview?(input: {
     commitSha: string;
@@ -134,7 +145,14 @@ export interface ReviewFindingVerifier {
     candidate: ReviewCandidate;
     findingId: string;
     workspace: ReviewWorkspacePort;
-    checks: { command: string; exitCode: number | null; passed: boolean; requiredChecks: "passed" | "failed" | "pending" };
+    checks: {
+      command: string;
+      exitCode: number | null;
+      passed: boolean;
+      requiredChecks: "passed" | "failed" | "pending";
+      verificationBaseSha?: string;
+      verificationHeadSha?: string;
+    };
   }): Promise<ReviewFindingVerificationRecord | undefined>;
 }
 
@@ -192,8 +210,13 @@ export interface ReviewRunRequest {
    */
   candidateId?: string;
   protectedPaths?: readonly string[];
-  reviewScope?: {
-    findingIds: readonly string[];
+  reviewScope?: ReviewScope;
+  fixGroups?: readonly ReviewFixGroup[];
+  ownership?: ReviewOwnershipAuthorization;
+  provenance?: {
+    taskId: string;
+    /** Host-authored owner of the original local PR task. */
+    actor: string;
   };
   followUpBaseSha?: string;
   publish: boolean;
@@ -205,7 +228,7 @@ export async function runReviewAgent(
   deps: ReviewPipelineDependencies,
 ): Promise<ReviewRunReceipt> {
   const runId = deps.runId ?? randomBytes(8).toString("hex");
-  const deliveryMode = request.deliveryMode ?? (request.publish ? "commit" : "patch");
+  const deliveryMode = request.deliveryMode ?? (request.publish ? "follow-up-pr" : "patch");
   const receiptPath = join(
     deps.artifactRoot ?? ".artifacts/shipwright/review-receipts",
     runId,
@@ -216,6 +239,9 @@ export async function runReviewAgent(
     phase: "intake",
     pullRequestUrl: request.pullRequestUrl,
     deliveryMode,
+    lifecycle: "proposed",
+    ...(request.ownership ? { ownership: structuredClone(request.ownership) } : {}),
+    ...(request.reviewScope ? { reviewScope: structuredClone(request.reviewScope) } : {}),
     ...(request.candidateId ? { candidateId: request.candidateId } : {}),
     execution: deps.execution,
     skill: { name: deps.skill.name, sha256: deps.skill.sha256 },
@@ -232,6 +258,8 @@ export async function runReviewAgent(
     await emitProgress();
     const ref = parsePullRequestUrl(request.pullRequestUrl);
     const authorized = await deps.authorize(ref);
+    const baseFreshness = await observeReviewBaseFreshness(authorized);
+    receipt.baseFreshness = baseFreshness;
     deps.signal?.throwIfAborted();
 
     const resumedCandidate = request.candidateId
@@ -263,6 +291,13 @@ export async function runReviewAgent(
         throw new Error(`review scope finding disappeared: ${missing.join(", ")}`);
       }
     }
+    if (resumedCandidate && scopedFindingSet) {
+      const retainedFindingIds = new Set(resumedCandidate.findings.map((finding) => finding.findingId));
+      const missing = [...scopedFindingSet].filter((findingId) => !retainedFindingIds.has(findingId));
+      if (missing.length > 0) {
+        throw new Error(`review scope finding is absent from retained candidate: ${missing.join(", ")}`);
+      }
+    }
     const scopedThreads = scopedFindingSet
       ? allThreads.filter((thread) => scopedFindingSet.has(thread.id))
       : allThreads;
@@ -281,21 +316,46 @@ export async function runReviewAgent(
       : unresolvedCurrentThreads(scopedThreads);
     const expectedThreadIds = threads.map((thread) => thread.id);
     const originalHeadSha = resumedCandidate?.authorizedHeadSha ?? authorized.pullRequest.headSha;
+    assertReviewScope(request.reviewScope, authorized, originalHeadSha, threads);
     const confirmedCommitSha = effects.find(
       (effect) => effect.kind === "commit" && effect.status === "confirmed" && effect.commitSha,
     )?.commitSha;
     const confirmedPushSha = effects.find(
       (effect) => effect.kind === "push" && effect.status === "confirmed" && effect.commitSha,
     )?.commitSha;
+    const confirmedFollowUpCommitSha = effects.find(
+      (effect) =>
+        effect.effectId === `${operationId}:follow-up-commit`
+        && effect.kind === "commit"
+        && effect.status === "confirmed"
+        && effect.commitSha,
+    )?.commitSha;
+    const confirmedFollowUpPullRequestUrl = effects.find(
+      (effect) =>
+        effect.effectId === `${operationId}:follow-up-pr`
+        && effect.kind === "follow-up-pr"
+        && effect.status === "confirmed"
+        && effect.remoteUrl,
+    )?.remoteUrl;
     const currentHeadSha = authorized.pullRequest.headSha;
+    const followUpIntegrationDetected = Boolean(
+      resumedCandidate
+      && deliveryMode === "follow-up-pr"
+      && confirmedFollowUpCommitSha
+      && confirmedFollowUpPullRequestUrl
+      && currentHeadSha !== originalHeadSha,
+    );
     const retainedHeadIsKnown = !resumedCandidate
       || currentHeadSha === originalHeadSha
       || currentHeadSha === confirmedCommitSha
-      || currentHeadSha === confirmedPushSha;
+      || currentHeadSha === confirmedPushSha
+      || followUpIntegrationDetected;
     if (!retainedHeadIsKnown) throw new Error("retained candidate pull request head moved");
-    const cloneHeadSha = resumedCandidate && (currentHeadSha === confirmedPushSha || currentHeadSha === confirmedCommitSha)
+    const cloneHeadSha = followUpIntegrationDetected
       ? currentHeadSha
-      : originalHeadSha;
+      : resumedCandidate && (currentHeadSha === confirmedPushSha || currentHeadSha === confirmedCommitSha)
+        ? currentHeadSha
+        : originalHeadSha;
 
     receipt.authorizedBaseSha = authorized.pullRequest.baseSha;
     receipt.authorizedHeadSha = originalHeadSha;
@@ -381,11 +441,52 @@ export async function runReviewAgent(
     receipt.changedFiles = changes.changedFiles;
     if (changes.changedFiles.length > 0) assertPublishableChange(changes, request.protectedPaths ?? []);
     let retainedCandidate = resumedCandidate;
-    if (retainedCandidate && changes.resultingTreeSha && changes.resultingTreeSha !== retainedCandidate.resultingTreeSha) {
+    if (retainedCandidate && changes.resultingTreeSha && changes.resultingTreeSha !== retainedCandidate.resultingTreeSha && !followUpIntegrationDetected) {
       throw new Error("retained candidate resulting tree does not match");
+    }
+    if (followUpIntegrationDetected) {
+      if (!workspace.assertReviewIntegrationLineage) {
+        throw new Error("follow-up integration lacks lineage proof");
+      }
+      const workspaceChanges = await workspace.inspectChanges(currentHeadSha);
+      if (workspaceChanges.changedFiles.length > 0) {
+        throw new Error("follow-up integration workspace changed during verification");
+      }
+      await workspace.assertReviewIntegrationLineage(originalHeadSha, currentHeadSha);
     }
     if (!retainedCandidate && deps.candidateRoot) {
       const patch = changes.patchData ?? new TextEncoder().encode(changes.patch);
+      const candidateFindings = outcomes.map((outcome) => {
+        const thread = threads.find((item) => item.id === outcome.threadId)!;
+        const sourceComment = thread.comments.find((comment) => !isGeneratedReviewReply(comment, thread.id));
+        return {
+          findingId: outcome.threadId,
+          originalContentDigest: reviewThreadContentDigest(thread),
+          proposedOutcome: outcome.outcome,
+          summary: outcome.summary,
+          evidence: outcome.evidence,
+          reproduction: outcome.followUp ?? "",
+          affectedFiles: [thread.path],
+          source: {
+            reviewer: sourceComment?.author ?? "unknown",
+            commentId: sourceComment?.id ?? thread.id,
+            commentUrl: sourceComment?.url ?? request.pullRequestUrl,
+            reviewIds: thread.reviewIds ?? authorized.reviews.map((review) => review.id),
+          },
+          ...(outcome.repairIdentity ? { repairIdentity: outcome.repairIdentity } : {}),
+        };
+      });
+      const fixGroups = normalizeReviewFixGroups(request.fixGroups, candidateFindings.map((finding) => finding.findingId));
+      const candidateProvenance = {
+        taskId: request.provenance?.taskId ?? `run:${runId}`,
+        runId,
+        actor:
+          request.provenance?.actor
+          ?? (request.ownership?.mode === "explicit-handoff"
+            ? request.ownership.fromOwnerId
+            : request.ownership?.ownerId)
+          ?? UNATTRIBUTED_REVIEW_ACTOR,
+      };
       retainedCandidate = createReviewCandidate({
         candidateId: runId,
         authorizedBaseRef: `refs/heads/${authorized.pullRequest.baseBranch}`,
@@ -395,19 +496,12 @@ export async function runReviewAgent(
         resultingTreeSha: changes.resultingTreeSha ?? "",
         patch,
         changedFiles: changes.changedFiles,
-        findings: outcomes.map((outcome) => {
-          const thread = threads.find((item) => item.id === outcome.threadId)!;
-          return {
-            findingId: outcome.threadId,
-            originalContentDigest: reviewThreadContentDigest(thread),
-            proposedOutcome: outcome.outcome,
-            summary: outcome.summary,
-            evidence: outcome.evidence,
-            reproduction: outcome.followUp ?? "",
-            affectedFiles: [thread.path],
-            ...(outcome.repairIdentity ? { repairIdentity: outcome.repairIdentity } : {}),
-          };
-        }),
+        findings: candidateFindings.map((finding) => ({
+          ...finding,
+          fixGroupId: fixGroups.find((group) => group.findingIds.includes(finding.findingId))!.groupId,
+        })),
+        fixGroups,
+        provenance: candidateProvenance,
         verification: {
           command: request.verifyCommand,
           exitCode: receipt.verification.exitCode,
@@ -434,15 +528,21 @@ export async function runReviewAgent(
       exitCode: receipt.verification.exitCode,
       passed: receipt.verification.passed,
       requiredChecks: receipt.verification.passed ? "passed" as const : "failed" as const,
+      ...(followUpIntegrationDetected ? {
+        verificationBaseSha: originalHeadSha,
+        verificationHeadSha: currentHeadSha,
+      } : {}),
     };
-    const checksDigest = computeReviewChecksDigest(checks);
+    let checksDigest = computeReviewChecksDigest(checks);
     const verificationRecordsByFinding = new Map<string, ReviewFindingVerificationRecord>();
     if (retainedCandidate && deps.candidateRoot && deps.verificationStore && deps.findingVerifier) {
       const tokens = [];
       for (const finding of retainedCandidate.findings) {
         const findingDigest = finding.originalContentDigest;
         if (!findingDigest) continue;
-        const existingToken = retainedCandidate.verificationRecords.find((token) => token.findingId === finding.findingId);
+        const existingToken = retainedCandidate.verificationRecords.find((token) =>
+          token.findingId === finding.findingId && token.checksDigest === checksDigest,
+        );
         let record = existingToken
           ? await deps.verificationStore.lookup({
             recordId: existingToken.recordId,
@@ -501,7 +601,9 @@ export async function runReviewAgent(
     let resolvedOutcomes: ResolvedReviewOutcome[] | undefined;
     if (retainedCandidate && deps.verificationStore) {
       const findings = Object.fromEntries(retainedCandidate.findings.map((finding) => {
-        const token = retainedCandidate.verificationRecords.find((item) => item.findingId === finding.findingId);
+        const token = retainedCandidate.verificationRecords.find((item) =>
+          item.findingId === finding.findingId && item.checksDigest === checksDigest,
+        );
         return [finding.findingId, {
           recordId: token?.recordId ?? "",
           findingId: finding.findingId,
@@ -515,10 +617,10 @@ export async function runReviewAgent(
         store: deps.verificationStore,
       });
     }
-    const resolvedByThread = new Map(
+    let resolvedByThread = new Map(
       resolvedOutcomes?.map((item) => [item.threadId, item]) ?? [],
     );
-    const effectiveOutcomes = new Map(
+    let effectiveOutcomes = new Map(
       outcomes.map((outcome) => {
         const resolved = resolvedByThread.get(outcome.threadId);
         const disposition = resolved?.verified.disposition;
@@ -554,8 +656,11 @@ export async function runReviewAgent(
           ? { disposition: "needs-human" as const, status: "not-required" as const, reason: "model requested human review" }
           : { disposition: "pending" as const, status: "pending" as const, reason: "missing durable host verification" }
       );
+      const finding = retainedCandidate?.findings.find((item) => item.findingId === outcome.threadId);
       return {
         threadId: outcome.threadId,
+        ...(finding?.source ? { source: structuredClone(finding.source) } : {}),
+        ...(finding?.fixGroupId ? { fixGroupId: finding.fixGroupId } : {}),
         outcome: outcome.outcome,
         proposedOutcome: outcome.outcome,
         verifiedDisposition: verified.disposition,
@@ -580,9 +685,38 @@ export async function runReviewAgent(
       await deps.writeReceipt(receiptPath, receipt);
       return receipt;
     }
-
     if (!retainedCandidate || !deps.candidateRoot || !effectJournal) {
       throw new Error("publication requires a durable review candidate and effect journal");
+    }
+    if (deliveryMode === "commit" || deliveryMode === "follow-up-pr") {
+      const retainedCandidateOwnerId =
+        retainedCandidate.provenance?.actor === UNATTRIBUTED_REVIEW_ACTOR
+          ? undefined
+          : retainedCandidate.provenance?.actor;
+      const taskOwnerId =
+        retainedCandidateOwnerId
+        ?? request.provenance?.actor
+        ?? (request.ownership?.mode === "explicit-handoff"
+          ? request.ownership.fromOwnerId
+          : request.ownership?.ownerId)
+        ?? UNATTRIBUTED_REVIEW_ACTOR;
+      assertReviewOwnership(request.ownership, deliveryMode, taskOwnerId);
+    }
+    const selectedFindingIds = new Set(expectedThreadIds);
+    const candidateGroups = retainedCandidate.fixGroups ?? [{
+      groupId: "candidate",
+      findingIds: retainedCandidate.findings.map((finding) => finding.findingId),
+    }];
+    const selectedGroups = candidateGroups.filter((group) =>
+      group.findingIds.some((findingId) => selectedFindingIds.has(findingId)),
+    );
+    if (
+      selectedGroups.length !== 1
+      || selectedGroups.some((group) =>
+        group.findingIds.some((findingId) => !selectedFindingIds.has(findingId)),
+      )
+    ) {
+      throw new Error("independent review fix groups require separately scoped candidates");
     }
     const followUpBaseSha =
       deliveryMode === "follow-up-pr"
@@ -602,6 +736,7 @@ export async function runReviewAgent(
     }
     const deliveryPlan: ReviewAuthorizedDeliveryPlan = {
       candidateDigest: retainedCandidate.candidateDigest,
+      selectedFindingIds: [...selectedFindingIds],
       deliveryMode,
       owner: authorized.pullRequest.owner,
       repo: authorized.pullRequest.repo,
@@ -610,12 +745,28 @@ export async function runReviewAgent(
       baseSha: authorized.pullRequest.baseSha,
       headBranch: authorized.pullRequest.headBranch,
       authorizedHeadSha: originalHeadSha,
-      ...(followUpBaseSha !== undefined ? { followUpBaseSha } : {}),
+      ...(request.ownership ? { ownership: structuredClone(request.ownership) } : {}),
+      ...(deliveryMode === "follow-up-pr"
+        ? {
+            followUpBaseBranch: authorized.pullRequest.headBranch,
+            followUpBaseSha: followUpBaseSha!,
+          }
+        : {}),
     };
     const authorizedDeliveryPlan = await effectJournal.ensureDeliveryPlan(deliveryPlan);
+    if (authorizedDeliveryPlan.selectedFindingIds === undefined) {
+      const retainedFindingIds = new Set(retainedCandidate.findings.map((finding) => finding.findingId));
+      const selectedFindingIds = new Set(expectedThreadIds);
+      if (
+        retainedFindingIds.size !== selectedFindingIds.size
+        || [...retainedFindingIds].some((findingId) => !selectedFindingIds.has(findingId))
+      ) {
+        throw new Error("legacy delivery plan cannot authorize a narrowed finding scope");
+      }
+    }
 
 
-    const publishableOutcomes = outcomes
+    let publishableOutcomes = outcomes
       .map((outcome) => {
         const resolved = resolvedByThread.get(outcome.threadId);
         return resolved?.verified.status === "verified"
@@ -627,7 +778,114 @@ export async function runReviewAgent(
     if (publishableOutcomes.length !== outcomes.length) {
       throw new Error("publication requires host-verified outcomes for every selected finding");
     }
-    if (deliveryMode === "commit") {
+    if (followUpIntegrationDetected) {
+      phase = receipt.phase = "publish";
+      await emitProgress();
+      await revalidateRemoteReviewState(authorized, ref.number, currentHeadSha);
+      if (!confirmedFollowUpCommitSha || !confirmedFollowUpPullRequestUrl) {
+        throw new Error("follow-up integration requires a confirmed delivered candidate");
+      }
+      receipt.commitSha = confirmedFollowUpCommitSha;
+      receipt.followUpPullRequestUrl = confirmedFollowUpPullRequestUrl;
+      receipt.resultingHeadSha = currentHeadSha;
+      receipt.lifecycle = "integrated";
+      const integration = await verifyIntegratedReviewHead({
+        authorized,
+        deps,
+        headSha: currentHeadSha,
+        command: request.verifyCommand,
+        timeoutMs: request.timeoutMinutes * 60_000,
+      });
+      receipt.integrationVerification = {
+        baseSha: originalHeadSha,
+        headSha: currentHeadSha,
+        command: request.verifyCommand,
+        exitCode: integration.exitCode ?? null,
+        passed: integration.exitCode === 0,
+        ...(integration.stdout ? { stdoutTail: redactSecrets(truncateTail(integration.stdout)) } : {}),
+        ...(integration.stderr ? { stderrTail: redactSecrets(truncateTail(integration.stderr)) } : {}),
+      };
+      if (integration.exitCode !== 0) throw new Error("post-integration verification failed");
+      const integrated = await verifyIntegratedReviewFindings({
+        authorized,
+        deps,
+        candidate: retainedCandidate,
+        findingIds: expectedThreadIds,
+        baseSha: originalHeadSha,
+        headSha: currentHeadSha,
+        command: request.verifyCommand,
+        wholeCheck: integration,
+      });
+      checksDigest = integrated.checksDigest;
+      verificationRecordsByFinding.clear();
+      for (const [findingId, record] of integrated.recordsByFinding) {
+        verificationRecordsByFinding.set(findingId, record);
+      }
+      if (deps.verificationStore) {
+        const findings = Object.fromEntries(retainedCandidate.findings.map((finding) => {
+          const token = retainedCandidate.verificationRecords.find((item) =>
+            item.findingId === finding.findingId && item.checksDigest === checksDigest,
+          );
+          return [finding.findingId, {
+            recordId: token?.recordId ?? "",
+            findingId: finding.findingId,
+            findingContentDigest: finding.originalContentDigest ?? "",
+          }];
+        }));
+        resolvedOutcomes = await resolveVerifiedReviewOutcomes(outcomes, {
+          candidateDigest: retainedCandidate.candidateDigest,
+          checksDigest,
+          findings,
+          store: deps.verificationStore,
+        });
+      }
+      resolvedByThread = new Map(
+        resolvedOutcomes?.map((item) => [item.threadId, item]) ?? [],
+      );
+      effectiveOutcomes = new Map(
+        outcomes.map((outcome) => {
+          const resolved = resolvedByThread.get(outcome.threadId);
+          const disposition = resolved?.verified.disposition;
+          if (!resolved || resolved.verified.status === "pending" || disposition === "pending") {
+            return [outcome.threadId, outcome] as const;
+          }
+          const hostFollowUp = verificationRecordsByFinding.get(outcome.threadId)?.followUp?.remoteUrl;
+          return [outcome.threadId, {
+            ...outcome,
+            outcome: disposition,
+            ...(disposition === "deferred" && !outcome.followUp && hostFollowUp
+              ? { followUp: hostFollowUp }
+              : {}),
+          }] as const;
+        }),
+      );
+      publishableOutcomes = outcomes
+        .map((outcome) => {
+          const resolved = resolvedByThread.get(outcome.threadId);
+          return resolved?.verified.status === "verified"
+            || resolved?.verified.status === "not-required"
+            ? effectiveOutcomes.get(outcome.threadId)
+            : undefined;
+        })
+        .filter((outcome): outcome is ReviewOutcome => outcome !== undefined);
+      if (publishableOutcomes.length !== outcomes.length) {
+        throw new Error("integrated review requires host-verified outcomes for every selected finding");
+      }
+      for (const result of receipt.threadResults) {
+        const resolved = resolvedByThread.get(result.threadId);
+        if (resolved) {
+          result.verifiedDisposition = resolved.verified.disposition;
+          result.verificationStatus = resolved.verified.status;
+          result.verificationReason = resolved.verified.reason;
+          result.verificationRecordId = resolved.verified.recordId;
+        }
+      }
+      receipt.lifecycle = "verified";
+      for (const result of receipt.threadResults) {
+        result.fixCommitSha = receipt.commitSha;
+      }
+      await emitProgress();
+    } else if (deliveryMode === "commit") {
       deps.signal?.throwIfAborted();
       await revalidateRemoteReviewState(
         authorized,
@@ -658,7 +916,10 @@ export async function runReviewAgent(
           await effectJournal.ackEffect({ effectId: pushEffectId, commitSha: remoteHead });
         }
       }
-      if (changes.changedFiles.length > 0 && remoteHead === originalHeadSha) {
+      if (
+        changes.changedFiles.length > 0
+        && (remoteHead === originalHeadSha || remoteHead === confirmedCommitSha || remoteHead === confirmedPushSha)
+      ) {
         phase = receipt.phase = "publish";
         await emitProgress();
         const commitEffectId = `${operationId}:commit`;
@@ -708,7 +969,13 @@ export async function runReviewAgent(
             throw error;
           }
         }
-        await revalidateRemoteReviewState(authorized, ref.number, originalHeadSha);
+        await revalidateRemoteReviewState(
+          authorized,
+          ref.number,
+          [originalHeadSha, receipt.commitSha].filter(
+            (head): head is string => Boolean(head),
+          ),
+        );
         const pushEffectId = `${operationId}:push`;
         const priorPushEffect = effects.find((effect) => effect.effectId === pushEffectId);
         const pushIntent = await effectJournal.beginEffect({
@@ -735,6 +1002,108 @@ export async function runReviewAgent(
         }
         const pushedHead = await authorized.repositoryClient.getBranchSha(authorized.pullRequest.headBranch);
         if (pushedHead !== receipt.commitSha) throw new Error("pushed pull request head does not match the generated commit");
+        if (!receipt.commitSha) throw new Error("direct review publication did not produce a commit");
+        if (!workspace.assertCommitIncluded) {
+          throw new Error("direct review publication lacks commit inclusion proof");
+        }
+        await workspace.assertCommitIncluded(receipt.commitSha, pushedHead);
+        receipt.lifecycle = "integrated";
+        const integration = await verifyIntegratedReviewHead({
+          authorized,
+          deps,
+          headSha: pushedHead,
+          command: request.verifyCommand,
+          timeoutMs: request.timeoutMinutes * 60_000,
+        });
+        receipt.integrationVerification = {
+          baseSha: originalHeadSha,
+          headSha: pushedHead,
+          command: request.verifyCommand,
+          exitCode: integration.exitCode ?? null,
+          passed: integration.exitCode === 0,
+          ...(integration.stdout ? { stdoutTail: redactSecrets(truncateTail(integration.stdout)) } : {}),
+          ...(integration.stderr ? { stderrTail: redactSecrets(truncateTail(integration.stderr)) } : {}),
+        };
+        if (integration.exitCode !== 0) throw new Error("post-integration verification failed");
+        const integrated = await verifyIntegratedReviewFindings({
+          authorized,
+          deps,
+          candidate: retainedCandidate,
+          findingIds: expectedThreadIds,
+          baseSha: originalHeadSha,
+          headSha: pushedHead,
+          command: request.verifyCommand,
+          wholeCheck: integration,
+        });
+        checksDigest = integrated.checksDigest;
+        verificationRecordsByFinding.clear();
+        for (const [findingId, record] of integrated.recordsByFinding) {
+          verificationRecordsByFinding.set(findingId, record);
+        }
+        if (deps.verificationStore) {
+          const findings = Object.fromEntries(retainedCandidate.findings.map((finding) => {
+            const token = retainedCandidate.verificationRecords.find((item) =>
+              item.findingId === finding.findingId && item.checksDigest === checksDigest,
+            );
+            return [finding.findingId, {
+              recordId: token?.recordId ?? "",
+              findingId: finding.findingId,
+              findingContentDigest: finding.originalContentDigest ?? "",
+            }];
+          }));
+          resolvedOutcomes = await resolveVerifiedReviewOutcomes(outcomes, {
+            candidateDigest: retainedCandidate.candidateDigest,
+            checksDigest,
+            findings,
+            store: deps.verificationStore,
+          });
+        }
+        resolvedByThread = new Map(
+          resolvedOutcomes?.map((item) => [item.threadId, item]) ?? [],
+        );
+        effectiveOutcomes = new Map(
+          outcomes.map((outcome) => {
+            const resolved = resolvedByThread.get(outcome.threadId);
+            const disposition = resolved?.verified.disposition;
+            if (!resolved || resolved.verified.status === "pending" || disposition === "pending") {
+              return [outcome.threadId, outcome] as const;
+            }
+            const hostFollowUp = verificationRecordsByFinding.get(outcome.threadId)?.followUp?.remoteUrl;
+            return [outcome.threadId, {
+              ...outcome,
+              outcome: disposition,
+              ...(disposition === "deferred" && !outcome.followUp && hostFollowUp
+                ? { followUp: hostFollowUp }
+                : {}),
+            }] as const;
+          }),
+        );
+        publishableOutcomes = outcomes
+          .map((outcome) => {
+            const resolved = resolvedByThread.get(outcome.threadId);
+            return resolved?.verified.status === "verified"
+              || resolved?.verified.status === "not-required"
+              ? effectiveOutcomes.get(outcome.threadId)
+              : undefined;
+          })
+          .filter((outcome): outcome is ReviewOutcome => outcome !== undefined);
+        if (publishableOutcomes.length !== outcomes.length) {
+          throw new Error("integrated review requires host-verified outcomes for every selected finding");
+        }
+        for (const result of receipt.threadResults) {
+          const resolved = resolvedByThread.get(result.threadId);
+          if (resolved) {
+            result.verifiedDisposition = resolved.verified.disposition;
+            result.verificationStatus = resolved.verified.status;
+            if (resolved.verified.reason) result.verificationReason = resolved.verified.reason;
+            if (resolved.verified.recordId) result.verificationRecordId = resolved.verified.recordId;
+          }
+        }
+        receipt.resultingHeadSha = pushedHead;
+        receipt.lifecycle = "verified";
+        for (const result of receipt.threadResults) {
+          result.fixCommitSha = receipt.commitSha;
+        }
         await emitProgress();
       }
     } else if (deliveryMode === "follow-up-pr") {
@@ -880,7 +1249,7 @@ export async function runReviewAgent(
             repo: authorized.pullRequest.repo,
             title: `Follow-up for #${authorized.pullRequest.number}`,
             branch: followUpBranch,
-            baseBranch: authorized.pullRequest.baseBranch,
+            baseBranch: authorized.pullRequest.headBranch,
             commitSha: followUpCommitSha,
             candidateId: retainedCandidate.candidateId,
             candidateDigest: retainedCandidate.candidateDigest,
@@ -912,6 +1281,10 @@ export async function runReviewAgent(
       if (!followUpUrl) throw new Error("follow-up pull request URL is unavailable for reconciliation");
       receipt.commitSha = followUpCommitSha;
       receipt.followUpPullRequestUrl = followUpUrl;
+      receipt.lifecycle = "delivered";
+      for (const result of receipt.threadResults) {
+        result.fixCommitSha = followUpCommitSha;
+      }
       // Follow-up publication never replies to or resolves the original
       // findings. The real follow-up PR is linked by the receipt/effect journal.
       receipt.remainingOpenThreadIds = expectedThreadIds;
@@ -935,8 +1308,7 @@ export async function runReviewAgent(
     }
     for (const outcome of publishableOutcomes) {
       deps.signal?.throwIfAborted();
-      const currentExpectedHead = receipt.commitSha ?? originalHeadSha;
-      await revalidateRemoteReviewState(authorized, ref.number, currentExpectedHead);
+      const currentExpectedHead = receipt.resultingHeadSha ?? receipt.commitSha ?? originalHeadSha;
       const effectThreads = await authorized.repositoryClient.listReviewThreads(ref.number);
       const effectById = new Map(effectThreads.map((thread) => [thread.id, thread]));
       const originalThread = threads.find((thread) => thread.id === outcome.threadId)!;
@@ -965,6 +1337,7 @@ export async function runReviewAgent(
       } else if (replyIntent.status === "confirmed" || replyIntent.status === "ambiguous") {
         throw new Error(`review reply effect requires reconciliation: ${outcome.threadId}`);
       } else {
+        await revalidateRemoteReviewState(authorized, ref.number, currentExpectedHead);
         try {
           reply = await authorized.repositoryClient.replyToReviewThread(
             outcome.threadId,
@@ -1152,8 +1525,8 @@ async function revalidateConfirmedFollowUpPullRequest(
   const marker = `Shipwright-Candidate: ${candidateId} Digest: ${candidateDigest}`;
   if (
     current.state !== "open"
-    || current.baseBranch !== authorized.pullRequest.baseBranch
-    || current.baseSha !== authorized.pullRequest.baseSha
+    || current.baseBranch !== authorized.pullRequest.headBranch
+    || current.baseSha !== authorized.pullRequest.headSha
     || current.headBranch !== followUpBranch
     || current.headSha !== followUpCommitSha
     || current.headOwner.toLowerCase() !== authorized.pullRequest.owner.toLowerCase()
@@ -1206,6 +1579,107 @@ function buildThreadReply(
   ].join("\n\n");
 }
 
+async function verifyIntegratedReviewFindings(input: {
+  authorized: AuthorizedPullRequest;
+  deps: ReviewPipelineDependencies;
+  candidate: ReviewCandidate;
+  findingIds: readonly string[];
+  baseSha: string;
+  headSha: string;
+  command: string;
+  wholeCheck: { exitCode?: number | null };
+}): Promise<{
+  checksDigest: string;
+  recordsByFinding: Map<string, ReviewFindingVerificationRecord>;
+}> {
+  if (!input.deps.candidateRoot || !input.deps.verificationStore || !input.deps.findingVerifier) {
+    throw new Error("integrated review requires durable host finding verification");
+  }
+  const checks = {
+    command: input.command,
+    exitCode: input.wholeCheck.exitCode ?? null,
+    passed: input.wholeCheck.exitCode === 0,
+    requiredChecks: input.wholeCheck.exitCode === 0 ? "passed" as const : "failed" as const,
+    verificationBaseSha: input.baseSha,
+    verificationHeadSha: input.headSha,
+  };
+  const checksDigest = computeReviewChecksDigest(checks);
+  const recordsByFinding = new Map<string, ReviewFindingVerificationRecord>();
+  const integrationWorkspace = await input.deps.createWorkspace();
+  try {
+    await input.authorized.withInstallationToken((token) =>
+      integrationWorkspace.clonePullRequest({
+        owner: input.authorized.pullRequest.owner,
+        repo: input.authorized.pullRequest.repo,
+        headBranch: input.authorized.pullRequest.headBranch,
+        headSha: input.headSha,
+        token,
+      }),
+    );
+    await integrationWorkspace.prepareForAgent();
+    const tokens = input.candidate.verificationRecords.filter((token) => token.checksDigest !== checksDigest);
+    for (const findingId of input.findingIds) {
+      const finding = input.candidate.findings.find((item) => item.findingId === findingId);
+      const findingDigest = finding?.originalContentDigest;
+      if (!finding || !findingDigest) continue;
+      const existingToken = input.candidate.verificationRecords.find((token) =>
+        token.findingId === findingId && token.checksDigest === checksDigest,
+      );
+      let record = existingToken
+        ? await input.deps.verificationStore.lookup({
+          recordId: existingToken.recordId,
+          candidateDigest: input.candidate.candidateDigest,
+          findingId,
+          findingDigest,
+          checksDigest,
+        })
+        : undefined;
+      if (!record) {
+        const proposed = await input.deps.findingVerifier.verify({
+          candidate: input.candidate,
+          findingId,
+          workspace: integrationWorkspace,
+          checks,
+        });
+        if (proposed) {
+          if (
+            proposed.candidateDigest !== input.candidate.candidateDigest
+            || proposed.checksDigest !== checksDigest
+            || (proposed.verificationBaseSha !== undefined && proposed.verificationBaseSha !== input.baseSha)
+            || (proposed.verificationHeadSha !== undefined && proposed.verificationHeadSha !== input.headSha)
+          ) {
+            throw new Error(`integrated host verification record binding mismatch: ${findingId}`);
+          }
+          await input.deps.verificationStore.put(proposed);
+          record = await input.deps.verificationStore.lookup({
+            recordId: proposed.recordId,
+            candidateDigest: input.candidate.candidateDigest,
+            findingId,
+            findingDigest,
+            checksDigest,
+          });
+        }
+      }
+      if (record) {
+        try {
+          tokens.push(createReviewEvidenceToken(record));
+          recordsByFinding.set(findingId, record);
+        } catch {
+          // A malformed or pending host record remains unresolved.
+        }
+      }
+    }
+    input.candidate.verificationRecords = tokens;
+    await writeReviewCandidate(
+      reviewCandidatePath(input.deps.candidateRoot, input.candidate.candidateId),
+      input.candidate,
+    );
+    return { checksDigest, recordsByFinding };
+  } finally {
+    await integrationWorkspace.destroy();
+  }
+}
+
 async function abortable<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return operation;
   signal.throwIfAborted();
@@ -1214,4 +1688,146 @@ async function abortable<T>(operation: Promise<T>, signal?: AbortSignal): Promis
     signal.addEventListener("abort", abort, { once: true });
     operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
   });
+}
+
+function assertReviewScope(
+  scope: ReviewScope | undefined,
+  authorized: AuthorizedPullRequest,
+  originalHeadSha: string,
+  selectedThreads: readonly ReviewThread[],
+): void {
+  if (!scope) return;
+  if (scope.findingIds.length === 0) throw new Error("review scope must select at least one finding");
+  if (new Set(scope.findingIds).size !== scope.findingIds.length) {
+    throw new Error("review scope finding IDs must be unique");
+  }
+  if (scope.mode === "this-review") {
+    if (!scope.reviewId || !authorized.reviews.some((review) => review.id === scope.reviewId)) {
+      throw new Error("review scope review identifier is not authorized");
+    }
+    for (const findingId of scope.findingIds) {
+      const thread = selectedThreads.find((candidate) => candidate.id === findingId);
+      if (!thread) throw new Error(`review scope finding is not selected: ${findingId}`);
+      if (thread.reviewIds === undefined) {
+        throw new Error(`review scope thread review membership is unavailable: ${findingId}`);
+      }
+      if (!thread.reviewIds.includes(scope.reviewId)) {
+        throw new Error(`review scope finding is not from review ${scope.reviewId}: ${findingId}`);
+      }
+    }
+    if (scope.headSha !== undefined) throw new Error("this-review scope cannot include a head SHA");
+  } else if (scope.mode === "all-current-findings") {
+    if (!scope.headSha || !/^[0-9a-f]{40}$/.test(scope.headSha) || scope.headSha !== originalHeadSha) {
+      throw new Error("review scope head SHA is not the authorized current head");
+    }
+    if (scope.reviewId !== undefined) throw new Error("all-current-findings scope cannot include a review identifier");
+  } else {
+    throw new Error("review scope mode is invalid");
+  }
+}
+
+async function observeReviewBaseFreshness(
+  authorized: AuthorizedPullRequest,
+): Promise<ReviewBaseFreshness> {
+  try {
+    const observedBaseSha = await authorized.repositoryClient.getBranchSha(
+      authorized.pullRequest.baseBranch,
+    );
+    if (!/^[0-9a-f]{40}$/.test(observedBaseSha)) {
+      return {
+        baseBranch: authorized.pullRequest.baseBranch,
+        authorizedBaseSha: authorized.pullRequest.baseSha,
+        status: "unavailable",
+        integrationOwner: "original-pr-owner",
+      };
+    }
+    return {
+      baseBranch: authorized.pullRequest.baseBranch,
+      authorizedBaseSha: authorized.pullRequest.baseSha,
+      observedBaseSha,
+      status: observedBaseSha === authorized.pullRequest.baseSha ? "fresh" : "stale",
+      integrationOwner: "original-pr-owner",
+    };
+  } catch {
+    return {
+      baseBranch: authorized.pullRequest.baseBranch,
+      authorizedBaseSha: authorized.pullRequest.baseSha,
+      status: "unavailable",
+      integrationOwner: "original-pr-owner",
+    };
+  }
+}
+
+function normalizeReviewFixGroups(
+  input: readonly ReviewFixGroup[] | undefined,
+  findingIds: readonly string[],
+): ReviewFixGroup[] {
+  if (!input) {
+    return findingIds.map((findingId) => ({
+      groupId: findingId,
+      findingIds: [findingId],
+    }));
+  }
+  const known = new Set(findingIds);
+  const assigned = new Set<string>();
+  const groups = input.map((group) => ({
+    groupId: group.groupId,
+    findingIds: [...group.findingIds],
+  }));
+  for (const group of groups) {
+    if (!group.groupId.trim() || group.findingIds.length === 0) {
+      throw new Error("review fix groups must have bounded non-empty identifiers");
+    }
+    for (const findingId of group.findingIds) {
+      if (!known.has(findingId) || assigned.has(findingId)) {
+        throw new Error(`review fix groups do not partition selected findings: ${findingId}`);
+      }
+      assigned.add(findingId);
+    }
+  }
+  if (assigned.size !== known.size) throw new Error("review fix groups must cover selected findings");
+  return groups;
+}
+
+function assertReviewOwnership(
+  ownership: ReviewOwnershipAuthorization | undefined,
+  deliveryMode: ReviewDeliveryMode,
+  taskOwnerId: string,
+): void {
+  if (!ownership) throw new Error(`${deliveryMode} delivery requires explicit review ownership authorization`);
+  if (deliveryMode === "commit" && ownership.mode !== "explicit-handoff") {
+    throw new Error("direct review commit requires an explicit ownership handoff");
+  }
+  if (ownership.mode === "local-owner") {
+    if (ownership.ownerId.toLowerCase() !== taskOwnerId.toLowerCase()) {
+      throw new Error("review ownership does not match the host task owner");
+    }
+  } else if (ownership.fromOwnerId.toLowerCase() !== taskOwnerId.toLowerCase()) {
+    throw new Error("review handoff source does not match the host task owner");
+  }
+}
+
+async function verifyIntegratedReviewHead(input: {
+  authorized: AuthorizedPullRequest;
+  deps: ReviewPipelineDependencies;
+  headSha: string;
+  command: string;
+  timeoutMs: number;
+}): Promise<{ exitCode?: number | null; stdout?: string; stderr?: string }> {
+  const integrationWorkspace = await input.deps.createWorkspace();
+  try {
+    await input.authorized.withInstallationToken((token) =>
+      integrationWorkspace.clonePullRequest({
+        owner: input.authorized.pullRequest.owner,
+        repo: input.authorized.pullRequest.repo,
+        headBranch: input.authorized.pullRequest.headBranch,
+        headSha: input.headSha,
+        token,
+      }),
+    );
+    await integrationWorkspace.prepareForAgent();
+    return await integrationWorkspace.verify(input.command, input.timeoutMs);
+  } finally {
+    await integrationWorkspace.destroy();
+  }
 }

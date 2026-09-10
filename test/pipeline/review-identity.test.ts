@@ -60,11 +60,17 @@ for (const attack of ["branch", "head"] as const) {
         verify: async () => ({ exitCode: 0 }), quiesce: async () => {}, destroy: async () => {},
         inspectChanges: (sha) => actual.inspectChanges(sha),
         assertRunIdentity: (sha, branch) => actual.assertRunIdentity(sha, branch),
+        assertCommitIncluded: async () => {},
         commit: async (message) => { commits++; return actual.commit(message); },
         push: async (branch) => { pushes++; await git("push", "origin", branch); },
       };
       const failure = await runReviewAgent({ pullRequestUrl: authorized.pullRequest.url,
-        verifyCommand: "fixture-check", publish: true, timeoutMinutes: 1 }, {
+        verifyCommand: "fixture-check", publish: true, deliveryMode: "commit",
+        ownership: {
+          mode: "explicit-handoff", ownerId: "shipwright", fromOwnerId: "acme",
+          handoffId: "handoff-1", authorizedBy: "operator", source: "operator",
+        },
+        timeoutMinutes: 1 }, {
         execution: { runtime: "agentos", software: "pi", provider: "kimi", model: "fixture" },
         skill: { name: "fix-review-findings", content: "fixture", sha256: "abc123" },
         candidateRoot: join(root, "candidates"), authorize: async () => authorized,
@@ -98,3 +104,53 @@ for (const attack of ["branch", "head"] as const) {
     }
   });
 }
+
+test("host Git checks integration lineage without claiming behavioral correctness", async () => {
+  const root = await mkdtemp(join(tmpdir(), "shipwright-candidate-integration-"));
+  const directory = join(root, "repo");
+  const patchPath = join(root, "candidate.diff");
+  const git = async (...args: string[]) => (await exec("git", args, {
+    cwd: directory,
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+  })).stdout.trim();
+  try {
+    await mkdir(directory);
+    await git("init", "-q", "-b", "feature");
+    await writeFile(join(directory, "content.txt"), "baseline\n");
+    await git("add", "content.txt");
+    await git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "baseline");
+    const baseSha = await git("rev-parse", "HEAD");
+    const actual: SandboxWorkspace = Object.assign(Object.create(SandboxWorkspace.prototype), {
+      hostWorkspace: directory,
+      sandboxStopped: true,
+    });
+    await actual.captureAuthorizedRepoConfig();
+
+    await writeFile(join(directory, "content.txt"), "repaired\n");
+    const candidate = await actual.inspectChanges(baseSha);
+    const patch = candidate.patchData!;
+    await actual.commit("candidate");
+
+    await git("reset", "--hard", baseSha);
+    await writeFile(patchPath, patch);
+    await git("apply", "--binary", patchPath);
+    await git("add", "content.txt");
+    await git("-c", "user.name=Owner", "-c", "user.email=owner@example.invalid", "commit", "-qm", "squash integration");
+    const squashHeadSha = await git("rev-parse", "HEAD");
+    await actual.assertReviewIntegrationLineage(baseSha, squashHeadSha);
+
+    await writeFile(join(directory, "owner-change.txt"), "additional owner change\n");
+    await git("add", "owner-change.txt");
+    await git("-c", "user.name=Owner", "-c", "user.email=owner@example.invalid", "commit", "-qm", "owner follow-up");
+    const extendedHeadSha = await git("rev-parse", "HEAD");
+    await actual.assertReviewIntegrationLineage(baseSha, extendedHeadSha);
+
+    await git("reset", "--hard", baseSha);
+    await expect(actual.assertReviewIntegrationLineage(
+      squashHeadSha,
+      baseSha,
+    )).rejects.toThrow("integration head does not contain the generated repair commit");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

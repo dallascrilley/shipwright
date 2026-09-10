@@ -27,6 +27,45 @@ export type ReviewCandidateDeliveryMode =
   | "commit"
   | "follow-up-pr"
   | "evidence-only";
+export type ReviewScopeMode = "this-review" | "all-current-findings";
+
+export interface ReviewScope {
+  mode: ReviewScopeMode;
+  reviewId?: string;
+  headSha?: string;
+  findingIds: string[];
+}
+
+export interface ReviewBaseFreshness {
+  baseBranch: string;
+  authorizedBaseSha: string;
+  observedBaseSha?: string;
+  status: "fresh" | "stale" | "unavailable";
+  integrationOwner: "original-pr-owner";
+}
+
+export type ReviewRepairLifecycle =
+  | "proposed"
+  | "delivered"
+  | "integrated"
+  | "verified";
+
+
+/** Host-authored ownership proof; model output can never mint this object. */
+export type ReviewOwnershipAuthorization =
+  | {
+      mode: "local-owner";
+      ownerId: string;
+      source: "operator" | "linear";
+    }
+  | {
+      mode: "explicit-handoff";
+      ownerId: string;
+      fromOwnerId: string;
+      handoffId: string;
+      authorizedBy: string;
+      source: "operator" | "linear";
+    };
 
 export type ReviewFindingVerification =
   | "fixed"
@@ -36,18 +75,33 @@ export type ReviewFindingVerification =
   | "needs-human"
   | "pending";
 
+/** Host-authored grouping; duplicate findings may share one group. */
+export interface ReviewFixGroup {
+  groupId: string;
+  findingIds: string[];
+}
+
 /** Immutable model proposal copied into a retained candidate; never closure authority. */
 export interface ReviewFindingEvidence {
   findingId: string;
-  /** Digest of the original authorized review-thread content, excluding Shipwright receipt replies. */
+  /** Digest of the original review-thread content, excluding Shipwright receipt replies. */
   originalContentDigest?: string;
   proposedOutcome: ReviewOutcome["outcome"];
   summary: string;
   evidence: string;
   reproduction: string;
   affectedFiles: string[];
+  /** Host-derived source actor and review/thread provenance. */
+  source?: {
+    reviewer: string;
+    commentId: string;
+    commentUrl: string;
+    reviewIds: string[];
+  };
+  fixGroupId?: string;
   repairIdentity?: string;
 }
+
 
 /** Host-owned verification record. A model cannot mint or alter this record. */
 export interface ReviewFindingVerificationRecord {
@@ -61,6 +115,8 @@ export interface ReviewFindingVerificationRecord {
   observedEvidence: string;
   observedReproduction: string;
   observedAffectedFiles: string[];
+  verificationBaseSha?: string;
+  verificationHeadSha?: string;
   requiredChecks: "passed" | "failed" | "pending";
   riskLevel: "standard" | "high";
   independentVerdict: "pass" | "fail" | "disputed" | "pending";
@@ -75,6 +131,7 @@ export interface ReviewFindingVerificationRecord {
   };
   createdAt: string;
 }
+
 /** Opaque reference persisted in a candidate; read authority comes from the host store. */
 export interface ReviewEvidenceToken {
   recordId: string;
@@ -103,6 +160,11 @@ export interface ReviewVerificationPlan {
   findingDigest: string;
   command: string;
   timeoutMs: number;
+  /** Operator-classified, independently reviewed behavioral assertion. */
+  reproduction?: {
+    kind: "behavioral";
+    assertion: string;
+  };
   baseline: ReviewVerificationObservation;
   candidate: ReviewVerificationObservation;
   /** Host adjudication, never copied from the model proposal. */
@@ -141,7 +203,7 @@ export interface ReviewEffectReceipt {
   detail?: string;
 }
 
-/** Explicit host authorization for one candidate's delivery lifecycle. */
+/** Explicit host authorization for one candidate's selected delivery scope. */
 export interface ReviewAuthorizedDeliveryPlan {
   candidateDigest: string;
   deliveryMode: ReviewCandidateDeliveryMode;
@@ -152,8 +214,12 @@ export interface ReviewAuthorizedDeliveryPlan {
   baseSha: string;
   headBranch: string;
   authorizedHeadSha: string;
+  selectedFindingIds?: string[];
+  ownership?: ReviewOwnershipAuthorization;
+  followUpBaseBranch?: string;
   followUpBaseSha?: string;
 }
+
 
 export interface ReviewCandidateVerification {
   command: string;
@@ -178,6 +244,12 @@ export interface ReviewCandidate {
   patchBytes: number;
   changedFiles: string[];
   findings: ReviewFindingEvidence[];
+  fixGroups?: ReviewFixGroup[];
+  provenance?: {
+    taskId: string;
+    runId: string;
+    actor: string;
+  };
   verification: ReviewCandidateVerification;
   /** Historical UI preference only; delivery authority lives in the journal plan. */
   deliveryMode: ReviewCandidateDeliveryMode;
@@ -186,6 +258,7 @@ export interface ReviewCandidate {
   resumeCursor: number;
   createdAt: string;
 }
+
 
 export interface ReviewCandidateInput {
   candidateId: string;
@@ -197,6 +270,8 @@ export interface ReviewCandidateInput {
   patch: Uint8Array;
   changedFiles: readonly string[];
   findings: readonly ReviewFindingEvidence[];
+  fixGroups?: readonly ReviewFixGroup[];
+  provenance?: ReviewCandidate["provenance"];
   verification: ReviewCandidateVerification;
   deliveryMode: ReviewCandidateDeliveryMode;
   createdAt: string;
@@ -243,6 +318,8 @@ function immutableCandidateValue(candidate: ReviewCandidateDigestInput) {
     patchBytes: candidate.patchBytes,
     changedFiles: candidate.changedFiles,
     findings: candidate.findings,
+    fixGroups: candidate.fixGroups,
+    provenance: candidate.provenance,
     verification: candidate.verification,
     createdAt: candidate.createdAt,
   };
@@ -272,7 +349,10 @@ export function computeReviewFindingDigest(finding: ReviewFindingEvidence): stri
 }
 
 export function computeReviewChecksDigest(
-  value: Pick<ReviewCandidateVerification, "command" | "exitCode" | "passed" | "requiredChecks">,
+  value: Pick<ReviewCandidateVerification, "command" | "exitCode" | "passed" | "requiredChecks"> & {
+    verificationBaseSha?: string;
+    verificationHeadSha?: string;
+  },
 ): string {
   return createHash("sha256").update(stableJson(value)).digest("hex");
 }
@@ -298,6 +378,7 @@ export function computeReviewVerificationContextDigest(input: {
   findingDigest: string;
   command: string;
   timeoutMs: number;
+  reproduction?: ReviewVerificationPlan["reproduction"];
   baseline: ReviewVerificationObservation;
   candidate: ReviewVerificationObservation;
   adjudicatedOutcome: ReviewVerificationPlan["adjudicatedOutcome"];
@@ -311,6 +392,7 @@ export function computeReviewVerificationContextDigest(input: {
       findingDigest: input.findingDigest,
       command: input.command,
       timeoutMs: input.timeoutMs,
+      reproduction: input.reproduction,
       baseline: input.baseline,
       candidate: input.candidate,
       adjudicatedOutcome: input.adjudicatedOutcome,
@@ -331,8 +413,17 @@ function assertReviewVerificationPlanShape(plan: ReviewVerificationPlan): void {
   const validId = (value: unknown): value is string =>
     typeof value === "string" &&
     /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(value);
+  if (!isRecord(plan)) {
+    throw new Error("review verification plan is invalid");
+  }
+  const validReproduction =
+    plan.reproduction === undefined ||
+    (isRecord(plan.reproduction) &&
+      plan.reproduction.kind === "behavioral" &&
+      typeof plan.reproduction.assertion === "string" &&
+      Boolean(plan.reproduction.assertion.trim()) &&
+      plan.reproduction.assertion.length <= 4000);
   if (
-    !isRecord(plan) ||
     plan.schema !== "shipwright-review-verification-plan/v1" ||
     !validId(plan.planId) ||
     !validDigest(plan.candidateDigest) ||
@@ -341,6 +432,7 @@ function assertReviewVerificationPlanShape(plan: ReviewVerificationPlan): void {
     !validDigest(plan.findingDigest) ||
     typeof plan.command !== "string" ||
     !plan.command.trim() ||
+    !validReproduction ||
     !Number.isInteger(plan.timeoutMs) ||
     plan.timeoutMs < 1 ||
     plan.timeoutMs > 10 * 60 * 1000 ||
@@ -349,6 +441,13 @@ function assertReviewVerificationPlanShape(plan: ReviewVerificationPlan): void {
     !isRecord(plan.independentReview)
   ) {
     throw new Error("review verification plan is invalid");
+  }
+  // Classification is host authority, not inferred from a model's command.
+  // Static-only commands and no-op shell chains cannot substantiate a behavioral declaration.
+  const commands = plan.command.split(/\s*(?:&&|;|\|\|)\s*/).map((command) => command.trim()).filter(Boolean);
+  const staticOnlyCommand = /^(?:(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?(?:lint|typecheck)(?:\s|$)|(?:tsc|eslint|prettier|biome|stylelint|markdownlint)(?:\s|$)|(?:pwd|false|true|:|echo|printf)(?:\s|$))/i;
+  if (commands.length === 0 || commands.every((command) => staticOnlyCommand.test(command))) {
+    throw new Error("static-only checks cannot verify a behavioral finding");
   }
   if (containsSecretLikeContent(stableJson(plan))) {
     throw new Error("review verification plan contains secret-shaped content");
@@ -420,6 +519,7 @@ function assertReviewVerificationPlanShape(plan: ReviewVerificationPlan): void {
     findingDigest: plan.findingDigest,
     command: plan.command,
     timeoutMs: plan.timeoutMs,
+    reproduction: plan.reproduction,
     baseline: {
       expectedExitCode: plan.baseline.expectedExitCode,
       resultDigest: plan.baseline.resultDigest,
@@ -595,6 +695,8 @@ export function createReviewCandidate(input: ReviewCandidateInput): ReviewCandid
     patchBytes: input.patch.byteLength,
     changedFiles: [...input.changedFiles].sort(),
     findings: input.findings.map((finding) => structuredClone(finding)),
+    ...(input.fixGroups ? { fixGroups: input.fixGroups.map((group) => structuredClone(group)) } : {}),
+    ...(input.provenance ? { provenance: structuredClone(input.provenance) } : {}),
     verification: structuredClone(input.verification),
     deliveryMode: input.deliveryMode,
     createdAt: input.createdAt,
@@ -669,8 +771,17 @@ function assertReviewFindingEvidence(finding: ReviewFindingEvidence): void {
   assertBoundedArray("review finding affected files", finding.affectedFiles);
   for (const file of finding.affectedFiles) assertBoundedText("review finding affected file", file, 512);
   if (finding.originalContentDigest !== undefined && !/^[0-9a-f]{64}$/.test(finding.originalContentDigest)) throw new Error("review finding original content digest is invalid");
+  if (finding.source) {
+    assertBoundedText("review finding reviewer", finding.source.reviewer, 160);
+    assertBoundedText("review finding comment id", finding.source.commentId, 160);
+    assertBoundedText("review finding comment URL", finding.source.commentUrl, 2048);
+    assertBoundedArray("review finding review ids", finding.source.reviewIds, 64);
+    for (const reviewId of finding.source.reviewIds) assertBoundedText("review finding review id", reviewId, 160);
+  }
+  if (finding.fixGroupId !== undefined) assertBoundedText("review finding fix group id", finding.fixGroupId, 160);
   if (finding.repairIdentity !== undefined) assertBoundedText("review finding repair identity", finding.repairIdentity);
 }
+
 
 function assertReviewVerificationRecordBounds(record: ReviewFindingVerificationRecord): void {
   assertBoundedText("verification record id", record.recordId, 160);
@@ -679,6 +790,8 @@ function assertReviewVerificationRecordBounds(record: ReviewFindingVerificationR
   assertBoundedText("verification reproduction", record.observedReproduction);
   assertBoundedArray("verification affected files", record.observedAffectedFiles);
   for (const file of record.observedAffectedFiles) assertBoundedText("verification affected file", file, 512);
+  if (record.verificationBaseSha !== undefined && !isSha(record.verificationBaseSha)) throw new Error("verification base SHA is invalid");
+  if (record.verificationHeadSha !== undefined && !isSha(record.verificationHeadSha)) throw new Error("verification head SHA is invalid");
   if (record.followUp) {
     assertBoundedText("follow-up repository", record.followUp.repository, 256);
     assertBoundedText("follow-up remote id", record.followUp.remoteId, 160);
@@ -686,6 +799,36 @@ function assertReviewVerificationRecordBounds(record: ReviewFindingVerificationR
     assertBoundedText("follow-up idempotency key", record.followUp.idempotencyKey, 256);
   }
 }
+
+function assertReviewFixGroups(
+  groups: readonly ReviewFixGroup[] | undefined,
+  findings: readonly ReviewFindingEvidence[],
+): void {
+  if (groups === undefined) return;
+  assertBoundedArray("review candidate fix groups", groups, findings.length || 1);
+  const findingIds = new Set(findings.map((finding) => finding.findingId));
+  const assigned = new Set<string>();
+  for (const group of groups) {
+    assertBoundedText("review fix group id", group.groupId, 160);
+    assertBoundedArray("review fix group findings", group.findingIds, findings.length || 1);
+    if (group.findingIds.length === 0) throw new Error("review fix group cannot be empty");
+    for (const findingId of group.findingIds) {
+      assertBoundedText("review fix group finding id", findingId, 160);
+      if (!findingIds.has(findingId)) throw new Error(`review fix group references unknown finding ${findingId}`);
+      if (assigned.has(findingId)) throw new Error(`review finding belongs to multiple fix groups: ${findingId}`);
+      assigned.add(findingId);
+    }
+  }
+  if (assigned.size !== findingIds.size) throw new Error("review fix groups must cover every finding");
+}
+
+function assertReviewCandidateProvenance(provenance: ReviewCandidate["provenance"]): void {
+  if (!provenance) return;
+  assertBoundedText("review candidate task id", provenance.taskId, 160);
+  assertBoundedText("review candidate run id", provenance.runId, 160);
+  assertBoundedText("review candidate actor", provenance.actor, 160);
+}
+
 
 export function assertReviewCandidate(candidate: ReviewCandidate): void {
   if (!/^[0-9a-f]{64}$/.test(candidate.candidateDigest)) {
@@ -709,6 +852,9 @@ export function assertReviewCandidate(candidate: ReviewCandidate): void {
   for (const file of candidate.changedFiles) assertBoundedText("review candidate changed file", file, 512);
   assertBoundedArray("review candidate findings", candidate.findings);
   for (const finding of candidate.findings) assertReviewFindingEvidence(finding);
+  assertReviewFixGroups(candidate.fixGroups, candidate.findings);
+  assertReviewCandidateProvenance(candidate.provenance);
+
   assertBoundedText("review candidate verification command", candidate.verification.command);
   if (candidate.verification.stdoutTail !== undefined && candidate.verification.stdoutTail.length > REVIEW_METADATA_TEXT_LIMIT) throw new Error("review candidate stdout tail is too large");
   if (candidate.verification.stderrTail !== undefined && candidate.verification.stderrTail.length > REVIEW_METADATA_TEXT_LIMIT) throw new Error("review candidate stderr tail is too large");
@@ -944,7 +1090,9 @@ function mergeCandidateState(existing: ReviewCandidate, incoming: ReviewCandidat
   }
   const tokens = [...existing.verificationRecords];
   for (const incomingToken of incoming.verificationRecords) {
-    const index = tokens.findIndex((token) => token.findingId === incomingToken.findingId);
+    const index = tokens.findIndex((token) =>
+      token.findingId === incomingToken.findingId && token.checksDigest === incomingToken.checksDigest,
+    );
     if (index < 0) tokens.push(incomingToken);
     else if (stableJson(tokens[index]) !== stableJson(incomingToken)) throw new Error(`review evidence token ${incomingToken.findingId} has conflicting results`);
   }
@@ -974,11 +1122,42 @@ function assertReviewDeliveryPlan(plan: ReviewAuthorizedDeliveryPlan): void {
   assertBoundedText("review delivery plan owner", plan.owner, 120);
   assertBoundedText("review delivery plan repo", plan.repo, 120);
   if (!Number.isInteger(plan.pullRequestNumber) || plan.pullRequestNumber < 1) throw new Error("review delivery plan pull request number is invalid");
+  assertBoundedText("review delivery plan base branch", plan.baseBranch, 512);
   assertBoundedText("review delivery plan base SHA", plan.baseSha, 128);
+  assertBoundedText("review delivery plan head branch", plan.headBranch, 512);
   assertBoundedText("review delivery plan authorized head SHA", plan.authorizedHeadSha, 128);
+  if (plan.selectedFindingIds !== undefined) {
+    assertBoundedArray("review delivery plan selected findings", plan.selectedFindingIds, REVIEW_METADATA_ARRAY_LIMIT);
+    const uniqueFindingIds = new Set<string>();
+    for (const findingId of plan.selectedFindingIds) {
+      assertBoundedText("review delivery plan selected finding", findingId, 160);
+      if (uniqueFindingIds.has(findingId)) throw new Error("review delivery plan selected findings must be unique");
+      uniqueFindingIds.add(findingId);
+    }
+    if (uniqueFindingIds.size === 0) throw new Error("review delivery plan selected findings cannot be empty");
+  }
+  if (plan.ownership) {
+    if (plan.ownership.mode === "local-owner") {
+      assertBoundedText("review ownership owner", plan.ownership.ownerId, 160);
+    } else if (plan.ownership.mode === "explicit-handoff") {
+      assertBoundedText("review handoff owner", plan.ownership.ownerId, 160);
+      assertBoundedText("review handoff source owner", plan.ownership.fromOwnerId, 160);
+      assertBoundedText("review handoff id", plan.ownership.handoffId, 256);
+      assertBoundedText("review handoff authorized by", plan.ownership.authorizedBy, 160);
+    } else {
+      throw new Error("review ownership authorization mode is invalid");
+    }
+    if (plan.ownership.source !== "operator" && plan.ownership.source !== "linear") {
+      throw new Error("review ownership authorization source is invalid");
+    }
+  }
+  if (plan.deliveryMode === "commit" && plan.ownership?.mode !== "explicit-handoff") {
+    throw new Error("direct review commit requires an explicit ownership handoff");
+  }
   if (plan.deliveryMode === "follow-up-pr") {
+    assertBoundedText("review delivery plan follow-up base branch", plan.followUpBaseBranch, 512);
     assertBoundedText("review delivery plan follow-up base SHA", plan.followUpBaseSha, 128);
-  } else if (plan.followUpBaseSha !== undefined) {
+  } else if (plan.followUpBaseSha !== undefined || plan.followUpBaseBranch !== undefined) {
     throw new Error("non-follow-up delivery plan cannot select a follow-up base");
   }
   if (containsSecretLikeContent(stableJson(plan))) throw new Error("review delivery plan contains secret-shaped content");
@@ -1034,6 +1213,20 @@ function parseStoredJournal(
 
 
 }
+function reviewDeliveryPlansMatch(
+  current: ReviewAuthorizedDeliveryPlan,
+  requested: ReviewAuthorizedDeliveryPlan,
+): boolean {
+  if (current.selectedFindingIds === undefined) {
+    const legacy = { ...current };
+    delete legacy.selectedFindingIds;
+    const next = { ...requested };
+    delete next.selectedFindingIds;
+    return stableJson(legacy) === stableJson(next);
+  }
+  return stableJson(current) === stableJson(requested);
+}
+
 /** File-backed journal with durable intent-before-effect and idempotent effect IDs. */
 export class FileReviewEffectJournalStore implements ReviewEffectJournalStore {
   #state: StoredJournal;
@@ -1114,7 +1307,7 @@ export class FileReviewEffectJournalStore implements ReviewEffectJournalStore {
       }
       if (current.deliveryPlan) {
         assertReviewDeliveryPlan(current.deliveryPlan);
-        if (stableJson(current.deliveryPlan) !== stableJson(plan)) {
+        if (!reviewDeliveryPlansMatch(current.deliveryPlan, plan)) {
           throw new Error("review delivery plan changed after authorization");
         }
         return { next: current, result: structuredClone(current.deliveryPlan), persist: false };

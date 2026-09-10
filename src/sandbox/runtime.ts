@@ -468,6 +468,7 @@ export class SandboxWorkspace {
    */
   async verifyReviewPlan(input: {
     baselineSha: string;
+    verificationHeadSha?: string;
     patch: Uint8Array;
     command: string;
     timeoutMs: number;
@@ -477,6 +478,7 @@ export class SandboxWorkspace {
   }> {
     if (
       !/^[0-9a-f]{40}$/.test(input.baselineSha) ||
+      (input.verificationHeadSha !== undefined && !/^[0-9a-f]{40}$/.test(input.verificationHeadSha)) ||
       !input.command.trim() ||
       !Number.isInteger(input.timeoutMs) ||
       input.timeoutMs < 1
@@ -505,10 +507,10 @@ export class SandboxWorkspace {
       });
       await runSandboxCommandOrThrow(planClient, "review plan candidate worktree", {
         command: "git",
-        args: ["worktree", "add", "--detach", candidateDirectory, input.baselineSha],
+        args: ["worktree", "add", "--detach", candidateDirectory, input.verificationHeadSha ?? input.baselineSha],
         cwd: SANDBOX_WORKSPACE,
       });
-      if (input.patch.byteLength > 0) {
+      if (input.patch.byteLength > 0 && input.verificationHeadSha === undefined) {
         await runSandboxCommandOrThrow(planClient, "review plan candidate patch", {
           command: "git",
           args: [
@@ -665,6 +667,29 @@ export class SandboxWorkspace {
       throw new Error("repository Git configuration changed after authorization");
     }
   }
+  async assertCommitIncluded(commitSha: string, headSha: string): Promise<void> {
+    if (!/^[0-9a-f]{40}$/.test(commitSha) || !/^[0-9a-f]{40}$/.test(headSha)) {
+      throw new Error("commit inclusion proof requires valid Git SHAs");
+    }
+    try {
+      await this.hostGit(["merge-base", "--is-ancestor", commitSha, headSha]);
+    } catch {
+      throw new Error("integration head does not contain the generated repair commit");
+    }
+  }
+  /** Lineage is necessary, not sufficient: finding behavior is re-proven at head. */
+  async assertReviewIntegrationLineage(baseSha: string, headSha: string): Promise<void> {
+    if (!/^[0-9a-f]{40}$/.test(baseSha) || !/^[0-9a-f]{40}$/.test(headSha)) {
+      throw new Error("review integration lineage requires valid Git SHAs");
+    }
+    await this.assertAuthorizedRepoConfig();
+    if ((await this.hostGit(["rev-parse", "HEAD"])).trim() !== headSha) {
+      throw new Error("review integration workspace head changed");
+    }
+    await this.assertCommitIncluded(baseSha, headSha);
+  }
+
+
 
   async commit(message: string): Promise<string> {
     await this.hostGit(["-c", "core.hooksPath=/dev/null", "add", "--all"]);

@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
+  FileReviewVerificationPlanStore,
+  assertReviewVerificationPlan,
   computeReviewVerificationContextDigest,
   computeReviewVerificationResultDigest,
   createReviewCandidate,
@@ -80,6 +85,7 @@ function planFor(
     findingDigest,
     command: "node reproduce.mjs",
     timeoutMs: 30_000,
+    reproduction: { kind: "behavioral", assertion: "The reported input produces the expected result." },
     baseline: {
       expectedExitCode: observed.baseline.exitCode!,
       resultDigest: computeReviewVerificationResultDigest(observed.baseline),
@@ -101,6 +107,7 @@ function planFor(
       findingDigest: plan.findingDigest,
       command: plan.command,
       timeoutMs: plan.timeoutMs,
+      reproduction: plan.reproduction,
       baseline: plan.baseline,
       candidate: plan.candidate,
       adjudicatedOutcome: plan.adjudicatedOutcome,
@@ -194,6 +201,23 @@ test("ignores the model proposal and fixes only a trusted matching plan", async 
     findingDigest,
     candidateDigest: value.candidateDigest,
   });
+});
+
+test("rejects integrated proof whose recorded baseline differs from the executed baseline", async () => {
+  const value = candidate();
+  const observed = { baseline: result(1), candidate: result(0) };
+  const verifier = createHostReviewFindingVerifier(store([planFor(value, observed)]));
+  const record = await verifier.verify({
+    candidate: value,
+    findingId: "finding-1",
+    workspace: workspace(async () => observed),
+    checks: {
+      ...checks(),
+      verificationBaseSha: "e".repeat(40),
+      verificationHeadSha: "f".repeat(40),
+    },
+  });
+  expect(record).toBeUndefined();
 });
 
 test("keeps a forged reviewer freshness claim pending", async () => {
@@ -331,4 +355,62 @@ test("keeps a no-code rejection pending when the candidate contains a patch", as
     observedOutcome: "pending",
     independentVerdict: "pending",
   });
+});
+
+test("rejects static-only verification commands for behavioral plans", () => {
+  const value = candidate();
+  const observed = {
+    baseline: result(1, "baseline-failure"),
+    candidate: result(0, "candidate-success"),
+  };
+  const plan = planFor(value, observed);
+  for (const command of ["bun run lint && echo done", "pwd", "false || true"]) {
+    plan.command = command;
+    expect(() => assertReviewVerificationPlan(plan)).toThrow("static-only checks");
+  }
+});
+
+test("accepts legacy v1 verification plans without behavioral assertions", () => {
+  const value = candidate();
+  const observed = {
+    baseline: result(1, "baseline-failure"),
+    candidate: result(0, "candidate-success"),
+  };
+  const plan = planFor(value, observed);
+  delete plan.reproduction;
+  plan.independentReview = {
+    ...plan.independentReview,
+    contextDigest: computeReviewVerificationContextDigest({
+      candidateDigest: plan.candidateDigest,
+      findingId: plan.findingId,
+      findingDigest: plan.findingDigest,
+      command: plan.command,
+      timeoutMs: plan.timeoutMs,
+      baseline: plan.baseline,
+      candidate: plan.candidate,
+      adjudicatedOutcome: plan.adjudicatedOutcome,
+      riskLevel: plan.riskLevel,
+      reviewerId: plan.independentReview.reviewerId,
+    }),
+  };
+  expect(() => assertReviewVerificationPlan(plan)).not.toThrow();
+});
+
+test("rejects malformed persisted verification plans with a validation error", async () => {
+  const root = await mkdtemp(join(tmpdir(), "shipwright-verification-plan-"));
+  const candidateDigest = "a".repeat(64);
+  const findingDigest = "b".repeat(64);
+  const path = join(root, "review-verification-plans", candidateDigest, `${findingDigest}.json`);
+  try {
+    await mkdir(join(root, "review-verification-plans", candidateDigest), { recursive: true });
+    await writeFile(path, "null");
+    const store = new FileReviewVerificationPlanStore(root);
+    await expect(store.lookup({
+      candidateDigest,
+      findingId: "finding-1",
+      findingDigest,
+    })).rejects.toThrow("review verification plan is invalid");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

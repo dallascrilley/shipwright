@@ -181,40 +181,67 @@ criteria in [docs/runbooks/publish-stage-criteria.md](docs/runbooks/publish-stag
 
 ## The rest of the system
 
-**PR review CLI.** The same trust split applied to review feedback. It targets
+**PR review CLI.** The same trust split applies to review feedback. It targets
 one same-repository pull request head, projects an explicitly selected
 `fix-review-findings` skill into the sandbox, treats every review comment as
 untrusted data, verifies changes independently, and requires one explicit
 outcome per unresolved thread. Host verification, not the model's proposal,
-decides whether a finding can be published. The CLI defaults to `patch`;
-`--publish` is the explicit gate required before any remote write. When
-`--publish` is used without an explicit `--delivery-mode`, the CLI selects
-`commit`. `--candidate-id <id>` resumes an existing retained candidate and
-its effect journal instead of starting a new intake. `--delivery-mode` selects
-the delivery:
+decides whether a finding can be published. Review candidates retain the
+host-derived reviewer/comment source, task/run/actor provenance, and fix-group
+assignment, so each repair and resulting commit can be traced without treating
+model-supplied identity as authority.
 
-- `patch` (default) and `evidence-only` retain the candidate and verification
-  evidence locally; neither writes commits, pushes, replies, or resolutions
-  remotely.
-- `commit` with `--publish` commits and pushes changed files to the authorized
-  pull request, then replies to and resolves host-verified findings;
-  `needs-human` findings stay open.
-- `follow-up-pr` with `--publish` commits and pushes the candidate on a
-  separate branch, then opens or reuses a follow-up pull request; it does not
-  reply to or resolve the original threads. The selected base SHA defaults to
-  the retained candidate's immutable authorized head; any supplied base must
-  match it. The follow-up uses the original pull request's base branch without
-  an implicit rebase, and the effect journal binds the exact replay plan.
+The CLI defaults to `patch`; `--publish` is the explicit gate required before
+any remote write. A publish run without `--delivery-mode` selects the safer
+`follow-up-pr` route. Publish also requires ownership authorization. Ownership
+IDs are host-authored task identities, never the GitHub repository owner or a
+reviewer login: `--owner-id <task-owner>` establishes local ownership and routes
+the repair through a follow-up PR; direct `commit` delivery additionally
+requires `--handoff-from-owner <task-owner>`, `--handoff-id`, and
+`--authorized-by`. Missing or conflicting ownership fails closed.
+
+Candidate lifecycle is explicit in receipts: `proposed` → `delivered` for a
+follow-up PR, or `proposed` → `integrated` → `verified` for a direct commit.
+Direct integration is checked on a fresh host workspace at the exact resulting
+PR head before any original finding is replied to or resolved. A failed
+integration check leaves findings open. Follow-up delivery leaves the original
+PR branch and findings unchanged; the follow-up targets that branch as its base,
+replays the immutable selected head SHA without an implicit rebase, and links
+all findings to the delivered candidate commit. On a later owner-integrated
+candidate resume, the host proves the original PR head is an ancestor of the
+resulting head, then re-runs the whole check and each selected finding's
+behavioral proof at that exact head. Squashed or owner-modified repairs are
+accepted when those host proofs pass; textual patch equality is not used.
+Remote base/head movement, stale candidates, changed review content, and
+effect-journal drift stop the run instead of overwriting newer work. Receipts
+also report whether the authorized base branch was fresh or stale and identify
+the original PR owner as the integration owner; Shipwright never refreshes the
+PR's Current base.
+
+Scoped delivery is available from the CLI with repeated `--finding-id` flags
+plus either `--review-id` or a preflight-pinned `--review-head-sha`. Use
+repeated `--fix-group group-id=finding-id[,finding-id]` flags to group duplicate
+findings into one repair; independent groups require separate delivery runs.
 
 ```sh
-bun run review-agent -- https://github.com/OWNER/REPO/pull/123 \
+# Local task owner: safe follow-up delivery
+bun run review-agent -- https://github.com/ORG/REPO/pull/123 \
   --verify "bun test" \
   --skill /absolute/path/to/fix-review-findings/SKILL.md \
-  --publish --delivery-mode commit
+  --publish --owner-id TASK-OWNER
+
+# Explicit handoff: direct delivery to the original PR branch
+bun run review-agent -- https://github.com/ORG/REPO/pull/123 \
+  --verify "bun test" \
+  --skill /absolute/path/to/fix-review-findings/SKILL.md \
+  --publish --delivery-mode commit \
+  --owner-id OPERATOR --handoff-from-owner TASK-OWNER \
+  --handoff-id HANDOFF-123 --authorized-by OPERATOR
 ```
 
-Add `--candidate-id <id>` to that command when resuming or recovering a
-retained candidate.
+Add `--candidate-id <id>` to either command when resuming or recovering a
+retained candidate. `patch` and `evidence-only` never perform remote writes,
+even when `--publish` is set.
 
 **Operator console.** An [agent-native](https://www.npmjs.com/package/@agent-native/core)
 app under [`ui/`](ui/) (see [Provenance](#provenance)). Credentials stay

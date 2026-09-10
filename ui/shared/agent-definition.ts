@@ -577,7 +577,7 @@ export const reviewScopeSchema = z
     mode: z.enum(["this-review", "all-current-findings"]),
     reviewId: safeText(200).optional(),
     headSha: safeText(100).regex(/^[0-9a-f]{40}$/, "Use a full review head SHA.").optional(),
-    findingIds: z.array(safeText(200)).max(500),
+    findingIds: z.array(safeText(200)).min(1).max(500),
   })
   .strict()
   .superRefine((value, context) => {
@@ -588,19 +588,37 @@ export const reviewScopeSchema = z
         message: "Finding IDs must be unique.",
       });
     }
-    if (value.mode === "this-review" && !value.reviewId) {
-      context.addIssue({
-        code: "custom",
-        path: ["reviewId"],
-        message: "This-review scope requires a review identifier.",
-      });
+    if (value.mode === "this-review") {
+      if (!value.reviewId) {
+        context.addIssue({
+          code: "custom",
+          path: ["reviewId"],
+          message: "This-review scope requires a review identifier.",
+        });
+      }
+      if (value.headSha !== undefined) {
+        context.addIssue({
+          code: "custom",
+          path: ["headSha"],
+          message: "This-review scope cannot include a head SHA.",
+        });
+      }
     }
-    if (value.mode === "all-current-findings" && !value.headSha) {
-      context.addIssue({
-        code: "custom",
-        path: ["headSha"],
-        message: "All-current-findings scope requires the authorized head SHA.",
-      });
+    if (value.mode === "all-current-findings") {
+      if (!value.headSha) {
+        context.addIssue({
+          code: "custom",
+          path: ["headSha"],
+          message: "All-current-findings scope requires the authorized head SHA.",
+        });
+      }
+      if (value.reviewId !== undefined) {
+        context.addIssue({
+          code: "custom",
+          path: ["reviewId"],
+          message: "All-current-findings scope cannot include a review identifier.",
+        });
+      }
     }
   });
 
